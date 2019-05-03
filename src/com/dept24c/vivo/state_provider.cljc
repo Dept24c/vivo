@@ -124,32 +124,3 @@
   (let [*sub-id->sub (atom {})
         *state (atom initial-state)]
     (->MemStateProvider *sub-id->sub *state)))
-
-#_
-(defrecord BristleconeStateProvider [capsule-client *sub-id->sub]
-  state/IState
-  (update-state! [this update-map]
-    (let [get-in-state (fn [path]
-                         )
-          set-paths-in-state! (fn [state-updates]
-                                )]
-      (update-state* update-map get-in-state set-paths-in-state!
-                     (vals @*sub-id->sub))))
-
-  (subscribe! [this sub-id sub-map update-fn]
-    (let [get-in-state (fn [path]
-                         )
-          sub (subscribe* sub-map update-fn get-in-state)]
-      (swap! *sub-id->sub assoc sub-id sub)))
-
-  (unsubscribe! [this sub-id]
-    (swap! *sub-id->sub dissoc sub-id)))
-
-#_
-(defn bristlecone-state-provider [schema]
-  (let [*sub-id->sub (atom {})
-        cc-opts {:on-connect yy
-                 :on-disconnect xx}
-        capsule-client (cc/client get-url get-credentials protocol :client
-                                  cc-opts)]
-    (->BristleconeStateProvider capsule-client *sub-id->sub)))
