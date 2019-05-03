@@ -1,0 +1,20 @@
+# Clojure stuff
+*.class
+*.jar
+/.cpcache
+/.lein-*
+/.nrepl-port
+/.rebel_readline_history
+/.repl
+/classes
+/out
+/target
+pom.xml
+
+# CLJS stuff
+.cljs_node_repl
+/node_modules
+package-lock.json
+
+# Project stuff
+/build

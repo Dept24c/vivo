@@ -1,0 +1,10 @@
+#kaocha/v1
+{:tests [{:id :unit
+          :test-paths ["test/com/dept24c/unit"]}
+         {:id :unit-node
+          :type :kaocha.type/cljs
+          :test-paths ["test/com/dept24c/unit"]}
+         {:id :unit-browser
+          :type :kaocha.type/cljs
+          :test-paths ["test/com/dept24c/unit"]
+          :cljs/repl-env cljs.repl.browser/repl-env}]}
