@@ -6,7 +6,7 @@
    #?(:clj [puget.printer :refer [cprint]]))
   #?(:cljs
      (:require-macros
-      [com.dept24c.vivo.utils :refer [ppsyms sym-map]])))
+      [com.dept24c.vivo.utils :refer [sym-map]])))
 
 (defmacro sym-map
   "Builds a map from symbols.
