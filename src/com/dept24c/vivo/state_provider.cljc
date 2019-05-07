@@ -52,7 +52,7 @@
   (let [path->vals (reduce
                     (fn [acc [path upex]]
                       (let [orig-v (get-in-state path)
-                            new-v (upex/execute orig-v upex)]
+                            new-v (upex/eval orig-v upex)]
                         (if (= orig-v new-v)
                           acc
                           (assoc acc path [orig-v new-v]))))

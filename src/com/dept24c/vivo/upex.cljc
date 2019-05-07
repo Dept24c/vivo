@@ -2,12 +2,21 @@
   (:require
    [com.dept24c.vivo.utils :as u]))
 
-(defmulti execute (fn [orig-v upex]
-                    (first upex)))
+(defmulti eval (fn [orig-v upex]
+                 (first upex)))
 
 ;; TODO: State arg count error msgs more clearly.
 
-(defmethod execute :assoc
+(defmethod eval :set
+  [orig-v upex]
+  (when-not (= 2 (count upex))
+    (throw (ex-info (str ":set update expressions must have exactly one "
+                         " argument. Got " (count upex) ".")
+                    (u/sym-map orig-v upex))))
+  (let [[op v] upex]
+    v))
+
+(defmethod eval :assoc
   [orig-v upex]
   (when-not (or (map? orig-v) (nil? orig-v))
     (throw (ex-info (str ":assoc may only be used on a map/record value. Got: "
@@ -16,7 +25,7 @@
   (let [[op & kvs] upex]
     (apply assoc orig-v kvs)))
 
-(defmethod execute :dissoc
+(defmethod eval :dissoc
   [orig-v upex]
   (when-not (map? orig-v)
     (throw (ex-info (str ":dissoc may only be used on a map/record value. Got: "
@@ -25,7 +34,7 @@
   (let [[op & ks] upex]
     (apply dissoc orig-v ks)))
 
-(defmethod execute :append
+(defmethod eval :append
   [orig-v upex]
   (when-not (or (sequential? orig-v) (nil? orig-v))
     (throw (ex-info (str ":append may only be used on a seqential value. Got: "
@@ -38,7 +47,7 @@
   (let [[op v] upex]
     (conj (vec orig-v) v)))
 
-(defmethod execute :prepend
+(defmethod eval :prepend
   [orig-v upex]
   (when-not (or (sequential? orig-v) (nil? orig-v))
     (throw (ex-info (str ":prepend may only be used on a seqential value. Got: "
@@ -51,7 +60,7 @@
   (let [[op v] upex]
     (vec (cons v orig-v))))
 
-(defmethod execute :+
+(defmethod eval :+
   [orig-v upex]
   (when-not (number? orig-v)
     (throw (ex-info (str ":+ may only be used on a numeric value. Got: " orig-v)
