@@ -22,10 +22,6 @@
   #?(:clj (cprint x)
      :cljs (pprint/pprint x)))
 
-(defmacro ppsyms
-  [& syms]
-  (pprint (zipmap (map keyword syms) syms)))
-
 (defn ex-msg [e]
   #?(:clj (.toString ^Exception e)
      :cljs (.-message e)))

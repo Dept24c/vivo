@@ -1,4 +1,5 @@
 (ns com.dept24c.vivo.upex
+  (:refer-clojure :exclude [eval])
   (:require
    [com.dept24c.vivo.utils :as u]))
 
