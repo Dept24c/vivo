@@ -3,10 +3,26 @@
   (:require
    [com.dept24c.vivo.utils :as u]))
 
-(defmulti eval (fn [orig-v upex]
-                 (first upex)))
+(defmulti eval (fn [orig-v [op & args]]
+                 op))
 
-;; TODO: State arg count error msgs more clearly.
+;; upex ops
+;; :put, :remove, :concat :+ :-
+
+;; upex path keys
+;; n, :upex/head :upex/tail
+
+;; (defmethod eval :put
+;;   [orig-v [op new-v]]
+;;   new-v)
+
+;; (defmethod eval :remove
+;;   [orig-v [op]]
+;;   new-v)
+
+
+
+;;;;;;;;;;;;;;;;;;;; old
 
 (defmethod eval :set
   [orig-v upex]

@@ -10,8 +10,8 @@
 (defn relationship-info
   "Given two key sequences, return a vector of [relationship tail].
    Relationsip is one of :sibling, :parent, :child, or :equal.
-   Tail is the keypath between the parent and child. Only defined when
-   relationship is :parent."
+   Tail is the keypath between the parent and child. Tail is only defined
+   when relationship is :parent."
   [ksa ksb]
   (let [va (vec ksa)
         vb (vec ksb)
@@ -40,10 +40,10 @@
                 :equal (reduced true)
                 :child (reduced true)
                 :sibling false
-                :parent (if (not= (get-in orig-v sub-tail)
-                                  (get-in new-v sub-tail))
-                          (reduced true)
-                          false))))
+                :parent (if (= (get-in orig-v sub-tail)
+                               (get-in new-v sub-tail))
+                          false
+                          (reduced true)))))
           false (vals sub-map)))
 
 
