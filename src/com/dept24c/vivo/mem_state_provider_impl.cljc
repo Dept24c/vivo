@@ -4,22 +4,6 @@
    [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.utils :as u]))
 
-(defn throw-state-is-not-map [k path-so-far val]
-  (let [k-type (cond
-                 (keyword? k) "keyword"
-                 (string? k) "string")]
-    (throw
-     (ex-info
-      (str "Bad key in path. Key is a " k-type " (`" k "`), but state "
-           "value at path `" path-so-far "` is not a map. Got: `" val "`.")
-      (u/sym-map k k-type path-so-far val)))))
-
-(defn throw-state-is-not-vec [k path-so-far val]
-  (throw
-   (ex-info
-    (str "Bad key in path. Key is integer (`" k "`), but state value at path `"
-         path-so-far "` is not a vector. Got: `" val "`.")
-    (u/sym-map k val))))
 
 (defn get-in-state
   "Custom get-in fn that checks types and normalizes negative keys.
@@ -27,31 +11,24 @@
   [state path]
   (reduce (fn [{:keys [norm-path val] :as acc} k]
             (let [[k* val*] (cond
-                              (or (keyword? k) (string? k))
-                              (if (or (map? val) (nil? val))
-                                [k (when val
-                                     (val k))]
-                                (throw-state-is-not-map k norm-path val))
-
-                              (nat-int? k)
-                              (if (or (vector? val) (nil? val))
-                                [k (when val
-                                     (val k))]
-                                (throw-state-is-not-vec k norm-path val))
+                              (or (keyword? k) (nat-int? k) (string? k))
+                              [k (when val
+                                   (val k))]
 
                               (and (int? k) (neg? k))
-                              (if (or (vector? val) (nil? val))
-                                (let [norm-k (+ (count val) k)]
-                                  [k (when val
-                                       (val norm-k))])
-                                (throw-state-is-not-vec k path val))
+                              (let [k (when val
+                                        (if (or (vector? val) (nil? val))
+                                          (+ (count val) k)
+                                          k))]
+                                (val k))
 
                               :else
-                              (throw (ex-info
-                                      (str "Illegal key `" k "` in path `" path
-                                           "`. Only integers, and strings are "
-                                           "valid path keys.")
-                                      (u/sym-map k path))))]
+                              (throw
+                               (ex-info
+                                (str "Illegal key `" k "` in path `" path
+                                     "`. Only integers, keywords, and strings "
+                                     "are valid path keys.")
+                                (u/sym-map k path))))]
               (-> acc
                   (update :norm-path conj k*)
                   (assoc :val val*))))

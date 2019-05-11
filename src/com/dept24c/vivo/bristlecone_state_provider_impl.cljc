@@ -100,3 +100,53 @@
                          tx-info-str (assoc :vivo/tx-info-str tx-info-str))]
         (update-fn data-frame)))
     true))
+#_
+(defrecord BristleconeStateProvider [*sub-id->sub]
+  state/IState
+  (update-state! [this update-map]
+    (let [*tx-info-str (atom nil)
+          orig-state @*state
+          new-state (reduce ;; Use reduce, not reduce-kv, to enable ordered seqs
+                     (fn [acc [path upex]]
+                       (if (= :vivo/tx-info-str path)
+                         (do
+                           (reset! *tx-info-str upex)
+                           acc)
+                         (try
+                           (eval-upex acc path upex)
+                           (catch #?(:clj IllegalArgumentException
+                                     :cljs js/Error) e
+                             (if-not (str/includes?
+                                      (u/ex-msg e)
+                                      "No method in multimethod 'eval-upex'")
+                               (throw e)
+                               (throw
+                                (ex-info
+                                 (str "Invalid operator `" (first upex)
+                                      "` in update expression `" upex "`.")
+                                 (u/sym-map path upex update-map))))))))
+                     orig-state update-map)]
+      (reset! *state new-state)
+      (doseq [[sub-id {:keys [sub-map update-fn]}] @*sub-id->sub]
+        (when (reduce
+               (fn [acc sub-path]
+                 (let [orig-v (get-in-state orig-state sub-path)
+                       new-v (get-in-state new-state sub-path)]
+                   (if (= orig-v new-v)
+                     acc
+                     (reduced true))))
+               false (vals sub-map))
+          (update-fn (make-data-frame sub-map new-state *tx-info-str))))))
+
+  (subscribe! [this sub-id sub-map update-fn]
+    (let [state @*state
+          sub (u/sym-map sub-map update-fn)
+          *tx-info-str (atom (u/edn->str :vivo/initial-subscription))
+          data-frame (make-data-frame sub-map state *tx-info-str)]
+      (swap! *sub-id->sub assoc sub-id sub)
+      (update-fn data-frame)
+      nil))
+
+  (unsubscribe! [this sub-id]
+    (swap! *sub-id->sub dissoc sub-id)
+    nil))
