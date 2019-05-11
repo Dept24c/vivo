@@ -1,15 +1,17 @@
 # Vivo
-* [Installation](#installation)
 * [About](#about)
+* [Installation](#installation)
 * [Subscription Maps](#subscription-maps)
 * [Update Maps](#update-maps)
 * [API](#api)
 * [License](#license)
 
-# Installation
 
 # About
 Vivo is a framework for building connected applications.
+***Vivo is in an experimental and rapidly-changing state. Use at your own risk.***
+
+# Installation
 
 # Subscription Maps
 Subscription maps are used to specify a subscription to Vivo state.

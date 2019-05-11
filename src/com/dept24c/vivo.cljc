@@ -3,7 +3,7 @@
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.state-manager-impl :as state-manager-impl]
-   [com.dept24c.vivo.state-provider :as sp])
+   [com.dept24c.vivo.mem-state-provider-impl :as mem-state-provider-impl])
   #?(:cljs
      (:require-macros com.dept24c.vivo)))
 
@@ -19,7 +19,7 @@
   ([]
    (mem-state-provider nil))
   ([initial-state]
-   (sp/mem-state-provider initial-state)))
+   (mem-state-provider-impl/mem-state-provider initial-state)))
 
 (defn update-state!
   "Updates the state using the given update map, which is a map of paths
@@ -47,4 +47,4 @@
    def-subsciber macro, as it provides quoting of the subscription map
    and a simpler interface."
   [sm sub-id sub-map update-fn]
-  (subscribe! sm sub-id sub-map update-fn))
+  (state/subscribe! sm sub-id sub-map update-fn))

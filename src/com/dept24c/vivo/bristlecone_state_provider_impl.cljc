@@ -1,11 +1,28 @@
-(ns com.dept24c.vivo.state-provider
+(ns com.dept24c.vivo.bristlecone-state-provider-impl
   (:require
-   [clojure.set :as set]
    [com.dept24c.vivo.state :as state]
-   [com.dept24c.vivo.upex :as upex]
-   [com.dept24c.vivo.utils :as u]
-   ;;[deercreeklabs.capsule.client :as cc]
-   ))
+   [com.dept24c.vivo.utils :as u]))
+
+(defn update-array-sub? [len sub-i update-i* op]
+  (let [update-i (if (nat-int? sub-i)
+                   (if (nat-int? update-i*)
+                     update-i*
+                     (+ len update-i*))
+                   (if (nat-int? update-i*)
+                     (- update-i* len)
+                     update-i*))]
+    (if (= :set op)
+      (= sub-i update-i)
+      (let [new-i (if (= :insert-after op)
+                    (if (nat-int? update-i)
+                      (inc update-i)
+                      update-i)
+                    (if (nat-int? update-i)
+                      update-i
+                      (dec update-i)))]
+        (if (nat-int? sub-i)
+          (<= new-i sub-i)
+          (>= new-i sub-i))))))
 
 (defn relationship-info
   "Given two key sequences, return a vector of [relationship tail].
@@ -30,7 +47,7 @@
       a-tail? [:child nil]
       b-tail? [:parent (drop divergence-i ksb)]
       :else [:equal nil])))
-
+#_
 (defn update-sub? [sub-map update-path orig-v new-v]
   ;; orig-v and new-v are guaranteed to be different
   (reduce (fn [acc subscription-path]
@@ -46,7 +63,7 @@
                           (reduced true)))))
           false (vals sub-map)))
 
-
+#_
 (defn get-change-info [get-in-state update-map subs]
   ;; TODO: Handle ordered update-map with in-process vals
   (let [path->vals (reduce
@@ -71,12 +88,7 @@
                {:state-updates {}
                 :subs-to-update #{}}
                path->vals)))
-
-(defn make-data-frame [get-in-state sub-map]
-  (reduce-kv (fn [acc df-key path]
-               (assoc acc df-key (get-in-state path)))
-             {} sub-map))
-
+#_
 (defn update-state* [update-map get-in-state set-paths-in-state! subs]
   (let [{:vivo/keys [tx-info-str]} update-map
         update-map* (dissoc update-map :vivo/tx-info-str)
@@ -88,39 +100,3 @@
                          tx-info-str (assoc :vivo/tx-info-str tx-info-str))]
         (update-fn data-frame)))
     true))
-
-(defn subscribe* [sub-map update-fn get-in-state]
-  (let [sub (u/sym-map sub-map update-fn)
-        data-frame (make-data-frame get-in-state sub-map)]
-    (update-fn data-frame)
-    sub))
-
-(defrecord MemStateProvider [*sub-id->sub *state]
-  state/IState
-  (update-state! [this update-map]
-    ;; TODO: Rework to not pass entire state to [:assoc...] when path is []
-    (let [set-paths-in-state! (fn [state-updates]
-                                (swap! *state
-                                       (fn [state]
-                                         (reduce-kv
-                                          (fn [acc path v]
-                                            (if (seq path)
-                                              (assoc-in acc path v)
-                                              (merge acc v)))
-                                          state state-updates))))]
-      (update-state* update-map #(get-in @*state %) set-paths-in-state!
-                     (vals @*sub-id->sub))))
-
-  (subscribe! [this sub-id sub-map update-fn]
-    (let [state @*state
-          get-in-state #(get-in state %)
-          sub (subscribe* sub-map update-fn get-in-state)]
-      (swap! *sub-id->sub assoc sub-id sub)))
-
-  (unsubscribe! [this sub-id]
-    (swap! *sub-id->sub dissoc sub-id)))
-
-(defn mem-state-provider [initial-state]
-  (let [*sub-id->sub (atom {})
-        *state (atom initial-state)]
-    (->MemStateProvider *sub-id->sub *state)))
