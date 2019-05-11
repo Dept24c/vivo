@@ -20,7 +20,7 @@
                                         (if (or (vector? val) (nil? val))
                                           (+ (count val) k)
                                           k))]
-                                (val k))
+                                [k (val k)])
 
                               :else
                               (throw
