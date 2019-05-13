@@ -9,7 +9,9 @@
 
 # About
 Vivo is a framework for building connected applications.
-***Vivo is in an experimental and rapidly-changing state. Use at your own risk.***
+
+***Vivo is in an experimental and rapidly-changing state.
+Use at your own risk.***
 
 # Installation
 

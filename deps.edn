@@ -1,4 +1,8 @@
 {:deps {deercreeklabs/async-utils {:mvn/version "0.1.16"}
+        ;; TODO: Replace this w/ release version when released.
+        deercreeklabs/capsule {:local/root "../../dcl/capsule"}
+        #_ {:git/url "https://github.com/deercreeklabs/capsule.git"
+            :sha "d9a2e08fce8513303bc888be966af6507aba08af"}
         mvxcvi/puget {:mvn/version "1.1.2"}
         org.clojure/clojure {:mvn/version "1.10.0"}
         org.clojure/clojurescript {:mvn/version "1.10.520"}
@@ -15,13 +19,19 @@
  {:cider-clj {:extra-deps {cider/cider-nrepl {:mvn/version "0.21.1"}}
               :main-opts ["-m" "nrepl.cmdline" "--middleware"
                           "[cider.nrepl/cider-middleware]"]}
+
   :cider-cljs {:extra-deps {cider/cider-nrepl {:mvn/version "0.21.1"}
                             cider/piggieback {:mvn/version "0.4.0"}}
                :main-opts
                ["-m" "nrepl.cmdline" "--middleware"
                 "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
+
   :dev {:extra-deps {org.clojure/tools.namespace {:mvn/version "0.2.11"}}
         :extra-paths ["dev"]}
+
+  :run-test-server {:main-opts ["-m" "user"]
+                    :extra-paths ["dev"]}
+
   :test {:extra-paths ["test"]
          :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-389"}
                       lambdaisland/kaocha-cljs {:mvn/version "0.0-21"}

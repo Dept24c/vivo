@@ -3,7 +3,6 @@
    [clojure.core.async :as ca]
    [clojure.test :refer [are deftest is]]
    [com.dept24c.vivo :as vivo]
-   [com.dept24c.vivo.bristlecone-state-provider-impl :as bspi]
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.mem-state-provider-impl :as mspi]
    [com.dept24c.vivo.state-manager-impl :as smi]
@@ -78,8 +77,8 @@
        #"Wrong number of arguments .+ Should have gotten 3 .+ got 1"
        (macro-impl/check-constructor-args "foo" [1] 3))))
 
-(deftest test-relationship
-  (are [ret ks1 ks2] (= ret (bspi/relationship-info ks1 ks2))
+(deftest test-relationship-info
+  (are [ret ks1 ks2] (= ret (u/relationship-info ks1 ks2))
     [:equal nil] [] []
     [:equal nil]  [:a] [:a]
     [:equal nil] [:a :b :c] [:a :b :c]
@@ -152,7 +151,7 @@
                [true 0 0 0 :insert-before]]]
     (doseq [case cases]
       (let [[expected len sub-i update-i op] case
-            ret (bspi/update-array-sub? len sub-i update-i op)]
+            ret (u/update-array-sub? len sub-i update-i op)]
         (is (= case [ret len sub-i update-i op]))))))
 
 (deftest test-simple-insert*
@@ -325,7 +324,6 @@
                      my-tx-info :vivo/tx-info}
            tx-info {:some "info"}]
        (vivo/subscribe! sm "sub123" sub-map update-fn)
-       (is (= {:a 1, :my-tx-info :vivo/initial-subscription} (au/<? ch)))
-       (vivo/update-state! sm [[[:m :a] [:set 2]]
-                               [:vivo/tx-info tx-info]])
+       (is (= {:a 1} (au/<? ch)))
+       (vivo/update-state! sm {[:m :a] [:set 2]} tx-info)
        (is (= {:a 2, :my-tx-info tx-info} (au/<? ch)))))))

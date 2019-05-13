@@ -7,4 +7,13 @@
          {:id :unit-browser
           :type :kaocha.type/cljs
           :test-paths ["test/com/dept24c/unit"]
+          :cljs/repl-env cljs.repl.browser/repl-env}
+         {:id :integration
+          :test-paths ["test/com/dept24c/integration"]}
+         {:id :integration-node
+          :type :kaocha.type/cljs
+          :test-paths ["test/com/dept24c/integration"]}
+         {:id :integration-browser
+          :type :kaocha.type/cljs
+          :test-paths ["test/com/dept24c/integration"]
           :cljs/repl-env cljs.repl.browser/repl-env}]}

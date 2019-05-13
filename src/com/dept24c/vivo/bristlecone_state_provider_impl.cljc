@@ -1,152 +1,123 @@
 (ns com.dept24c.vivo.bristlecone-state-provider-impl
   (:require
+   [clojure.core.async :as ca]
    [com.dept24c.vivo.state :as state]
-   [com.dept24c.vivo.utils :as u]))
+   [com.dept24c.vivo.utils :as u]
+   [deercreeklabs.async-utils :as au]
+   [deercreeklabs.capsule.client :as cc]
+   [deercreeklabs.lancaster :as l]))
 
-(defn update-array-sub? [len sub-i update-i* op]
-  (let [update-i (if (nat-int? sub-i)
-                   (if (nat-int? update-i*)
-                     update-i*
-                     (+ len update-i*))
-                   (if (nat-int? update-i*)
-                     (- update-i* len)
-                     update-i*))]
-    (if (= :set op)
-      (= sub-i update-i)
-      (let [new-i (if (= :insert-after op)
-                    (if (nat-int? update-i)
-                      (inc update-i)
-                      update-i)
-                    (if (nat-int? update-i)
-                      update-i
-                      (dec update-i)))]
-        (if (nat-int? sub-i)
-          (<= new-i sub-i)
-          (>= new-i sub-i))))))
+(def default-bsp-opts
+  {:log-error println
+   :log-info println})
 
-(defn relationship-info
-  "Given two key sequences, return a vector of [relationship tail].
-   Relationsip is one of :sibling, :parent, :child, or :equal.
-   Tail is the keypath between the parent and child. Tail is only defined
-   when relationship is :parent."
-  [ksa ksb]
-  (let [va (vec ksa)
-        vb (vec ksb)
-        len-a (count va)
-        len-b (count vb)
-        len-min (min len-a len-b)
-        divergence-i (loop [i 0]
-                       (if (and (< i len-min)
-                                (= (va i) (vb i)))
-                         (recur (inc i))
-                         i))
-        a-tail? (> len-a divergence-i)
-        b-tail? (> len-b divergence-i)]
-    (cond
-      (and a-tail? b-tail?) [:sibling nil]
-      a-tail? [:child nil]
-      b-tail? [:parent (drop divergence-i ksb)]
-      :else [:equal nil])))
-#_
-(defn update-sub? [sub-map update-path orig-v new-v]
-  ;; orig-v and new-v are guaranteed to be different
-  (reduce (fn [acc subscription-path]
-            (let [[relationship sub-tail] (relationship-info
-                                           update-path subscription-path)]
-              (case relationship
-                :equal (reduced true)
-                :child (reduced true)
-                :sibling false
-                :parent (if (= (get-in orig-v sub-tail)
-                               (get-in new-v sub-tail))
-                          false
-                          (reduced true)))))
-          false (vals sub-map)))
+(defprotocol IBSPInternals
+  (<handle-notify-subscriber [this arg metadata])
+  (handle-request-pcf [this arg metadata])
+  (shutdown [this]))
 
-#_
-(defn get-change-info [get-in-state update-map subs]
-  ;; TODO: Handle ordered update-map with in-process vals
-  (let [path->vals (reduce
-                    (fn [acc [path upex]]
-                      (let [orig-v (get-in-state path)
-                            new-v (upex/eval orig-v upex)]
-                        (if (= orig-v new-v)
-                          acc
-                          (assoc acc path [orig-v new-v]))))
-                    {} update-map)
-        subs-to-update (fn [subs path orig-v new-v]
-                         (reduce (fn [acc {:keys [sub-map] :as sub}]
-                                   (if (update-sub? sub-map path orig-v new-v)
-                                     (conj acc sub)
-                                     acc))
-                                 #{} subs))]
-    (reduce-kv (fn [acc path [orig-v new-v]]
-                 (-> acc
-                     (update :state-updates #(assoc % path new-v))
-                     (update :subs-to-update set/union
-                             (subs-to-update subs path orig-v new-v))))
-               {:state-updates {}
-                :subs-to-update #{}}
-               path->vals)))
-#_
-(defn update-state* [update-map get-in-state set-paths-in-state! subs]
-  (let [{:vivo/keys [tx-info-str]} update-map
-        update-map* (dissoc update-map :vivo/tx-info-str)
-        {:keys [state-updates subs-to-update]} (get-change-info
-                                                get-in-state update-map* subs)]
-    (set-paths-in-state! state-updates)
-    (doseq [{:keys [update-fn sub-map]} subs-to-update]
-      (let [data-frame (cond-> (make-data-frame get-in-state sub-map)
-                         tx-info-str (assoc :vivo/tx-info-str tx-info-str))]
-        (update-fn data-frame)))
-    true))
-#_
-(defrecord BristleconeStateProvider [*sub-id->sub]
+(defrecord BristleconeStateProvider
+    [capsule-client state-schema log-error log-info *sub-id->sub *fp->pcf]
+
   state/IState
-  (update-state! [this update-map]
-    (let [*tx-info-str (atom nil)
-          orig-state @*state
-          new-state (reduce ;; Use reduce, not reduce-kv, to enable ordered seqs
-                     (fn [acc [path upex]]
-                       (if (= :vivo/tx-info-str path)
-                         (do
-                           (reset! *tx-info-str upex)
-                           acc)
-                         (try
-                           (eval-upex acc path upex)
-                           (catch #?(:clj IllegalArgumentException
-                                     :cljs js/Error) e
-                             (if-not (str/includes?
-                                      (u/ex-msg e)
-                                      "No method in multimethod 'eval-upex'")
-                               (throw e)
-                               (throw
-                                (ex-info
-                                 (str "Invalid operator `" (first upex)
-                                      "` in update expression `" upex "`.")
-                                 (u/sym-map path upex update-map))))))))
-                     orig-state update-map)]
-      (reset! *state new-state)
-      (doseq [[sub-id {:keys [sub-map update-fn]}] @*sub-id->sub]
-        (when (reduce
-               (fn [acc sub-path]
-                 (let [orig-v (get-in-state orig-state sub-path)
-                       new-v (get-in-state new-state sub-path)]
-                   (if (= orig-v new-v)
-                     acc
-                     (reduced true))))
-               false (vals sub-map))
-          (update-fn (make-data-frame sub-map new-state *tx-info-str))))))
+  (update-state! [this update-map tx-info cb]
+    (let [tx-info-str (u/edn->str tx-info)
+          update-commands (reduce
+                           (fn [acc [path [op arg]]]
+                             (let [spath (u/path->spath path)
+                                   arg* (u/edn->svalue state-schema path arg)]
+                               (conj acc #:update-command{:path spath
+                                                          :op op
+                                                          :arg arg*})))
+                           [] update-map)
+          arg #:update-state-arg{:tx-info-str tx-info-str
+                                 :update-commands update-commands}
+          success-cb (fn [ret]
+                       (cb true))
+          failure-cb (fn [e]
+                       (cb false))]
+      (cc/send-msg capsule-client :update-state arg success-cb failure-cb)
+      nil))
 
   (subscribe! [this sub-id sub-map update-fn]
-    (let [state @*state
-          sub (u/sym-map sub-map update-fn)
-          *tx-info-str (atom (u/edn->str :vivo/initial-subscription))
-          data-frame (make-data-frame sub-map state *tx-info-str)]
+    (let [info (reduce-kv
+                (fn [acc k path]
+                  (-> acc
+                      (assoc-in [:sub-map* (name k)] (u/path->spath path))
+                      (assoc-in [:k->path k] path)))
+                {:sub-map* {}
+                 :k->path {}} sub-map)
+          {:keys [sub-map* k->path]} info
+          arg #:subscribe-arg{:sub-id sub-id
+                              :sub-map sub-map*}
+          sub (u/sym-map update-fn k->path)
+          success-cb #(log-info (str "Subscribe success: " % "..."))
+          failure-cb #(log-error (str "Subscribe failure: " %))]
       (swap! *sub-id->sub assoc sub-id sub)
-      (update-fn data-frame)
+      (cc/send-msg capsule-client :subscribe arg success-cb failure-cb)
       nil))
 
   (unsubscribe! [this sub-id]
-    (swap! *sub-id->sub dissoc sub-id)
-    nil))
+    (let [success-cb #(log-info (str "Unsubscribe success: " %))
+          failure-cb #(log-error (str "Unsubscribe failure: " %))]
+      (swap! *sub-id->sub dissoc sub-id)
+      (cc/send-msg capsule-client :unsubscribe sub-id success-cb failure-cb))
+    nil)
+
+  IBSPInternals
+  (<handle-notify-subscriber [this arg metadata]
+    (ca/go
+      (try
+        (let [{:notify-subscriber-arg/keys [sub-id data-frame tx-info-str]} arg
+              {:keys [update-fn k->path]} (@*sub-id->sub sub-id)
+              <sender (partial cc/<send-msg capsule-client)
+              <fp->wschema (u/make-<fp->wschema <sender *fp->pcf)
+              <xf-df #(->> %
+                           (mapv (fn [[s svalue]]
+                                   (au/go
+                                     (let [k (keyword s)
+                                           path (k->path k)
+                                           v (au/<? (u/<svalue->edn
+                                                     <fp->wschema
+                                                     state-schema path svalue))]
+                                       {k v}))))
+                           (ca/merge)
+                           (ca/reduce (fn [acc ret]
+                                        (if (instance? #?(:cljs js/Error
+                                                          :clj Throwable) ret)
+                                          (reduced ret)
+                                          (merge acc ret)))
+                                      {}))]
+          (when update-fn
+            (let [data-frame* (au/<? (<xf-df data-frame))
+                  tx-info (when tx-info-str
+                            (u/str->edn tx-info-str))]
+              (update-fn data-frame* tx-info))))
+        (catch #?(:clj Exception :cljs js/Error) e
+          (log-error (str "Error in <handle-notify-subscriber: "
+                          (u/ex-msg-and-stacktrace e)))))))
+
+  (handle-request-pcf [this fp metadata]
+    (@*fp->pcf fp))
+
+  (shutdown [this]
+    (cc/shutdown capsule-client)))
+
+(defn bristlecone-state-provider
+  [get-server-url state-schema opts]
+  (let [*sub-id->sub (atom {})
+        *fp->pcf (atom (reduce (fn [acc sch]
+                                 (assoc acc (l/fingerprint64 sch) (l/pcf sch)))
+                               {} (l/sub-schemas state-schema)))
+        {:keys [log-error log-info]} (merge default-bsp-opts opts)
+        get-credentials (constantly {:subject-id "bristlecone-state-provider"
+                                     :subject-secret ""})
+        capsule-client (cc/client get-server-url get-credentials
+                                  u/bsp-bs-protocol :state-provider)
+        bsp (->BristleconeStateProvider capsule-client state-schema log-error
+                                        log-info *sub-id->sub *fp->pcf)]
+    (cc/set-handler capsule-client :notify-subscriber
+                    (partial <handle-notify-subscriber bsp))
+    (cc/set-handler capsule-client :request-pcf
+                    (partial handle-request-pcf bsp))
+    bsp))

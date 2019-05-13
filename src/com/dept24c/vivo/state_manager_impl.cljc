@@ -14,7 +14,7 @@
   (try
     (let [g (reduce-kv (fn [acc sym v]
                          (if (= :vivo/tx-info v)
-                           acc  ;; tx-info has no dependencies
+                           acc
                            (if-let [deps (filter symbol? v)]
                              (reduce (fn [acc* dep]
                                        (dep/depend acc* sym dep))
@@ -44,18 +44,17 @@
           %)
        path))
 
-(defn update-data-frame! [*data-frame df-updates df-key->info *different?]
+(defn update-data-frame!
+  [*data-frame tx-info df-updates df-key->info *different?]
   (let [old-df @*data-frame
         already-different? @*different?
         info (reduce-kv
               (fn [acc df-key new-v]
-                (if (= :vivo/tx-info df-key)
-                  (assoc-in acc [:new-df (df-key->info df-key)] new-v)
-                  (let [old-v (old-df df-key)
-                        diff? (and (not (:different? acc))
-                                   (not= old-v new-v))]
-                    (cond-> (assoc-in acc [:new-df df-key] new-v)
-                      diff? (assoc :different? true)))))
+                (let [old-v (old-df df-key)
+                      diff? (and (not (:different? acc))
+                                 (not= old-v new-v))]
+                  (cond-> (assoc-in acc [:new-df df-key] new-v)
+                    diff? (assoc :different? true))))
               {:new-df old-df
                :different? already-different?}
               df-updates)
@@ -63,14 +62,16 @@
     (when (and (not already-different?)
                different?)
       (reset! *different? true))
-    (reset! *data-frame new-df)))
+    (reset! *data-frame (cond-> new-df
+                          tx-info (assoc (df-key->info :vivo/tx-info)
+                                         tx-info)))))
 
-(defn handle-updates! [sub df-updates]
+(defn handle-updates! [sub df-updates tx-info]
   (let [{:keys [sub-id sp-update-fn update-fn root-df-keys
                 df-key->info *data-frame *prior-data-frame
                 *different? *df-keys-needing-update]} sub
-        data-frame (update-data-frame! *data-frame df-updates df-key->info
-                                       *different?)
+        data-frame (update-data-frame! *data-frame tx-info df-updates
+                                       df-key->info *different?)
         update-ks (set (keys df-updates))
         dependent-ks (reduce (fn [acc df-key]
                                (set/union acc (-> (df-key->info df-key)
@@ -95,12 +96,6 @@
       (doseq [[sp sub-map] sp->sub-map]
         (state/subscribe! sp sub-id sub-map sp-update-fn)))))
 
-(defn xf-vivo-keys [data-frame]
-  (let [{:vivo/keys [tx-info-str]} data-frame]
-    (cond-> data-frame
-      tx-info-str (assoc :vivo/tx-info (u/str->edn tx-info-str))
-      tx-info-str (dissoc :vivo/tx-info-str))))
-
 (defn throw-invalid-root [path]
   (let [[path-root & rest-path] path]
     (throw (ex-info (str "No state provider exists for root `" path-root
@@ -109,6 +104,36 @@
 
 (defrecord StateManager [root->sp *sub-id->sub]
   state/IState
+  (update-state! [this update-map tx-info cb]
+    (when-not (seqable? update-map)
+      (throw (ex-info "The update-map parameter must be a seqable"
+                      (u/sym-map update-map))))
+    (let [;;  Use reduce, not reduce-kv, to enable ordered seqs
+          sp->um (cond-> (reduce
+                          (fn [acc [path upex]]
+                            (when-not (sequential? path)
+                              (throw
+                               (ex-info (str "Invalid path in update-map."
+                                             " Must be a sequence.")
+                                        {:path path})))
+                            (let [[path-root & rest-path] path
+                                  sp (root->sp path-root)]
+                              (when-not sp
+                                (throw-invalid-root path))
+                              (assoc-in acc [sp (or rest-path [])] upex)))
+                          {} update-map))
+          *sps-left (atom (count sp->um))
+          check-tx-done (fn [ret]
+                          (when (and cb (zero? (swap! *sps-left
+                                                      (fn [sps-left]
+                                                        (when sps-left
+                                                          (if-not ret
+                                                            nil
+                                                            (dec sps-left)))))))
+                            (cb true)))]
+      (doseq [[sp sp-update-map] sp->um]
+        (state/update-state! sp sp-update-map tx-info check-tx-done))))
+
   (subscribe! [this sub-id sub-map update-fn]
     (when-not (string? sub-id)
       (throw (ex-info "The sub-id parameter must be a string."
@@ -135,9 +160,9 @@
                                      (u/sym-map sp abstract-path dependents
                                                 dependencies)))))
                         {} sub-map)
-          sp-update-fn (fn [df-updates]
+          sp-update-fn (fn [df-updates tx-info]
                          (when-let [sub (@*sub-id->sub sub-id)]
-                           (handle-updates! sub (xf-vivo-keys df-updates))))
+                           (handle-updates! sub df-updates tx-info)))
           root? #(-> (df-key->info %)
                      (:dependencies)
                      (empty?))
@@ -155,50 +180,13 @@
                          df-key->info *data-frame *prior-data-frame
                          *different? *df-keys-needing-update)]
       (swap! *sub-id->sub assoc sub-id sub)
-      (handle-updates! sub {}))
-    true)
+      (handle-updates! sub {} nil)))
 
   (unsubscribe! [this sub-id]
     (when-not (string? sub-id)
       (throw (ex-info "The sub-id parameter must be a string."
                       (u/sym-map sub-id))))
-    (swap! *sub-id->sub dissoc sub-id))
-
-  (update-state! [this update-map]
-    (when-not (seqable? update-map)
-      (throw (ex-info "The update-map parameter must be a seqable"
-                      (u/sym-map update-map))))
-    (let [*tx-info-str (atom nil)
-          update-tx-info-str (fn [sp->um]
-                               (let [tx-info-str @*tx-info-str]
-                                 (reduce-kv
-                                  (fn [acc sp sp-update-map]
-                                    (assoc acc sp (assoc sp-update-map
-                                                         :vivo/tx-info-str
-                                                         tx-info-str)))
-                                  {} sp->um)))
-          ;;  Use reduce, not reduce-kv, to enable ordered seqs
-          sp->um (cond-> (reduce
-                          (fn [acc [path upex]]
-                            (if (= :vivo/tx-info path)
-                              (do
-                                (reset! *tx-info-str (u/edn->str upex))
-                                acc)
-                              (do
-                                (when-not (sequential? path)
-                                  (throw (ex-info (str "Invalid path in update-map."
-                                                       " Must be a sequence.")
-                                                  {:path path})))
-                                (let [[path-root & rest-path] path
-                                      sp (root->sp path-root)]
-                                  (when-not sp
-                                    (throw-invalid-root path))
-                                  (assoc-in acc [sp (or rest-path [])] upex)))))
-                          {} update-map)
-                   @*tx-info-str (update-tx-info-str))]
-      (doseq [[sp sp-update-map] sp->um]
-        (state/update-state! sp sp-update-map))
-      nil)))
+    (swap! *sub-id->sub dissoc sub-id)))
 
 (defn check-root->sp [root->sp]
   (when-not (map? root->sp)
