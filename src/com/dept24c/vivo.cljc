@@ -1,5 +1,6 @@
 (ns com.dept24c.vivo
   (:require
+   [clojure.core.async :as ca]
    [com.dept24c.vivo.bristlecone-state-provider-impl :as bspi]
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.mem-state-provider-impl :as mspi]
@@ -43,13 +44,25 @@
    (bspi/bristlecone-state-provider get-server-url state-schema opts)))
 
 (defn update-state!
-  "Updates the state using the given update map, which is a map of paths
-   to update expressions. If order is important, the update map can be
-   replaced with a sequence of [path update-expresqsion] pairs."
-  ([sm update-map]
-   (update-state! sm update-map nil))
-  ([sm update-map tx-info]
-   (state/update-state! sm update-map tx-info nil)))
+  "Updates the state using the given update commands, which is a sequence of
+  [path update-expression] pairs. Executes asynchronously; immediately
+  returns nil."
+  ([sm update-commands]
+   (update-state! sm update-commands nil))
+  ([sm update-commands tx-info]
+   (state/update-state! sm update-commands tx-info nil)))
+
+(defn <update-state!
+  "Updates the state using the given update commands, which is a sequence of
+  [path update-expression] pairs. Returns a channel which will yield the
+  return value of the operation."
+  ([sm update-commands]
+   (<update-state! sm update-commands nil))
+  ([sm update-commands tx-info]
+   (let [ch (ca/chan)
+         cb #(ca/put! ch %)]
+     (state/update-state! sm update-commands tx-info cb)
+     ch)))
 
 (defn subscribe!
   "Adds a Vivo subscription to the state manager. Generally, prefer the

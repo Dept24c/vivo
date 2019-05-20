@@ -104,24 +104,25 @@
 
 (defrecord StateManager [root->sp *sub-id->sub]
   state/IState
-  (update-state! [this update-map tx-info cb]
-    (when-not (seqable? update-map)
-      (throw (ex-info "The update-map parameter must be a seqable"
-                      (u/sym-map update-map))))
+  (update-state! [this update-commands tx-info cb]
+    (when-not (seqable? update-commands)
+      (throw (ex-info "The update-commands parameter must be a seqable"
+                      (u/sym-map update-commands))))
     (let [;;  Use reduce, not reduce-kv, to enable ordered seqs
           sp->um (cond-> (reduce
                           (fn [acc [path upex]]
                             (when-not (sequential? path)
                               (throw
-                               (ex-info (str "Invalid path in update-map."
+                               (ex-info (str "Invalid path in update-commands."
                                              " Must be a sequence.")
                                         {:path path})))
                             (let [[path-root & rest-path] path
                                   sp (root->sp path-root)]
                               (when-not sp
                                 (throw-invalid-root path))
-                              (assoc-in acc [sp (or rest-path [])] upex)))
-                          {} update-map))
+                              (update acc sp #(conj (or % [])
+                                                    [rest-path upex]))))
+                          {} update-commands))
           *sps-left (atom (count sp->um))
           check-tx-done (fn [ret]
                           (when (and cb (zero? (swap! *sps-left
@@ -131,8 +132,8 @@
                                                             nil
                                                             (dec sps-left)))))))
                             (cb true)))]
-      (doseq [[sp sp-update-map] sp->um]
-        (state/update-state! sp sp-update-map tx-info check-tx-done))))
+      (doseq [[sp sp-update-commands] sp->um]
+        (state/update-state! sp sp-update-commands tx-info check-tx-done))))
 
   (subscribe! [this sub-id sub-map update-fn]
     (when-not (string? sub-id)

@@ -16,44 +16,50 @@
    :log-error println}) ;; TODO: use stderr
 
 (defn <handle-update-state
-  [ep state-schema *state *sub-id->sub *fp->pcf arg metadata]
-  (au/go
-    (let [{:update-state-arg/keys [tx-info-str update-commands]} arg
-          <sender (partial ep/<send-msg ep (:conn-id metadata))
-          <fp->wschema (u/make-<fp->wschema <sender *fp->pcf)
-          orig-state @*state
-          cmds (->> update-commands
-                    (mapv (fn [{:update-command/keys [path op arg]}]
-                            (au/go
-                              (let [path* (u/spath->path path)
-                                    arg* (au/<? (u/<svalue->edn
-                                                 <fp->wschema state-schema
-                                                 path* arg))
-                                    upex (if (= :remove op)
-                                           [op]
-                                           [op arg*])]
-                                [path* upex]))))
-                    (ca/merge)
-                    (ca/reduce (fn [acc ret]
-                                 (if (instance? Throwable ret)
-                                   (reduced ret)
-                                   (conj acc ret)))
-                               [])
-                    (au/<?))
-          new-state (reduce (fn [acc [path upex]]
-                              (mspi/eval-upex acc path upex))
-                            orig-state cmds)]
-      (reset! *state new-state)
-      (doseq [[sub-id {:keys [sub-map update-fn]}] @*sub-id->sub]
-        (when (reduce (fn [acc sub-path]
-                        (let [orig-v (u/get-in-state orig-state sub-path)
-                              new-v (u/get-in-state new-state sub-path)]
-                          (if (= orig-v new-v)
-                            acc
-                            (reduced true))))
-                      false (vals sub-map))
-          (update-fn (u/make-data-frame sub-map new-state) tx-info-str)))
-      true)))
+  [ep state-schema *state *sub-id->sub *fp->pcf us-arg metadata]
+  (let [sub-id->sub @*sub-id->sub]
+    (au/go
+      (let [{:update-state-arg/keys [tx-info-str update-commands]} us-arg
+            <sender (partial ep/<send-msg ep (:conn-id metadata))
+            <fp->wschema (u/make-<fp->wschema <sender *fp->pcf)
+            orig-state @*state
+            cmds (->> update-commands
+                      (map-indexed (fn [i {:update-command/keys [path op arg]}]
+                                     (au/go
+                                       (let [path* (u/spath->path path)
+                                             arg* (au/<? (u/<svalue->edn
+                                                          <fp->wschema
+                                                          state-schema
+                                                          path* arg))
+                                             upex (if (= :remove op)
+                                                    [op]
+                                                    [op arg*])]
+                                         [i path* upex]))))
+                      (ca/merge)
+                      (ca/reduce (fn [acc ret]
+                                   (if (instance? Throwable ret)
+                                     (reduced ret)
+                                     (let [[i p u] ret]
+                                       (assoc acc i [p u]))))
+                                 (sorted-map))
+                      (au/<?)
+                      (reduce (fn [acc [i cmd]]
+                                (conj acc cmd))
+                              []))
+            new-state (reduce (fn [acc [path upex]]
+                                (mspi/eval-upex acc path upex))
+                              orig-state cmds)]
+        (reset! *state new-state)
+        (doseq [[sub-id {:keys [sub-map update-fn]}] sub-id->sub]
+          (when (reduce (fn [acc sub-path]
+                          (let [orig-v (u/get-in-state orig-state sub-path)
+                                new-v (u/get-in-state new-state sub-path)]
+                            (if (= orig-v new-v)
+                              acc
+                              (reduced true))))
+                        false (vals sub-map))
+            (update-fn (u/make-data-frame sub-map new-state) tx-info-str)))
+        true))))
 
 (defn data-frame->sdata-frame [k->path state-schema data-frame]
   (reduce-kv (fn [acc k v]
@@ -85,8 +91,7 @@
                                                        data-frame)
                           arg #:notify-subscriber-arg{:sub-id sub-id
                                                       :data-frame sdf
-                                                      :tx-info-str tx-info-str}
-                          ep-name (.getName (class ep))]
+                                                      :tx-info-str tx-info-str}]
                       (if sdf
                         (ep/send-msg ep conn-id :notify-subscriber arg)
                         (do

@@ -196,6 +196,17 @@
       b-tail? [:parent (drop divergence-i ksb)]
       :else [:equal nil])))
 
+(defn normalize-neg-k
+  "Return the normalized key and the associated value or nil if key does not
+   exist in value."
+  [k v]
+  (if (map? v)
+    [k (v k)]
+    (let [len (count v)
+          norm-k (+ len k)]
+      [norm-k (when (and (pos? len) (nat-int? norm-k) (< norm-k len))
+                (v norm-k))])))
+
 (defn get-in-state
   "Custom get-in fn that checks types and normalizes negative keys.
    Returns a map with :norm-path and :val keys."
@@ -207,12 +218,7 @@
                                    (val k))]
 
                               (and (int? k) (neg? k))
-                              (let [k (when val
-                                        (if (or (vector? val) (nil? val))
-                                          (+ (count val) k)
-                                          k))]
-                                [k (when val
-                                     (val k))])
+                              (normalize-neg-k k val)
 
                               :else
                               (throw

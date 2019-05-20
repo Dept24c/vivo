@@ -18,7 +18,7 @@
   [state path upex]
   (let [[op new-v] upex
         _ (check-one-param path op upex)
-        {:keys [norm-path val]} (u/get-in-state state path)]
+        {:keys [norm-path]} (u/get-in-state state path)]
     (assoc-in state norm-path new-v)))
 
 (defmethod eval-upex :remove
@@ -119,7 +119,7 @@
 
 (defrecord MemStateProvider [*sub-id->sub *state]
   state/IState
-  (update-state! [this update-map tx-info cb]
+  (update-state! [this update-commands tx-info cb]
     (let [orig-state @*state
           new-state (reduce ;; Use reduce, not reduce-kv, to enable ordered seqs
                      (fn [acc [path upex]]
@@ -135,8 +135,8 @@
                               (ex-info
                                (str "Invalid operator `" (first upex)
                                     "` in update expression `" upex "`.")
-                               (u/sym-map path upex update-map)))))))
-                     orig-state update-map)]
+                               (u/sym-map path upex update-commands)))))))
+                     orig-state update-commands)]
       (reset! *state new-state)
       (doseq [[sub-id {:keys [sub-map update-fn]}] @*sub-id->sub]
         (when (reduce (fn [acc sub-path]

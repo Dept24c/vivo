@@ -20,18 +20,18 @@
     [capsule-client state-schema log-error log-info *sub-id->sub *fp->pcf]
 
   state/IState
-  (update-state! [this update-map tx-info cb]
+  (update-state! [this update-commands tx-info cb]
     (let [tx-info-str (u/edn->str tx-info)
-          update-commands (reduce
-                           (fn [acc [path [op arg]]]
-                             (let [spath (u/path->spath path)
-                                   arg* (u/edn->svalue state-schema path arg)]
-                               (conj acc #:update-command{:path spath
-                                                          :op op
-                                                          :arg arg*})))
-                           [] update-map)
+          update-commands* (reduce
+                            (fn [acc [path [op arg]]]
+                              (let [spath (u/path->spath path)
+                                    arg* (u/edn->svalue state-schema path arg)]
+                                (conj acc #:update-command{:path spath
+                                                           :op op
+                                                           :arg arg*})))
+                            [] update-commands)
           arg #:update-state-arg{:tx-info-str tx-info-str
-                                 :update-commands update-commands}
+                                 :update-commands update-commands*}
           success-cb (fn [ret]
                        (cb true))
           failure-cb (fn [e]
@@ -50,11 +50,9 @@
           {:keys [sub-map* k->path]} info
           arg #:subscribe-arg{:sub-id sub-id
                               :sub-map sub-map*}
-          sub (u/sym-map update-fn k->path)
-          success-cb #(log-info (str "Subscribe success: " % "..."))
-          failure-cb #(log-error (str "Subscribe failure: " %))]
+          sub (u/sym-map update-fn k->path)]
       (swap! *sub-id->sub assoc sub-id sub)
-      (cc/send-msg capsule-client :subscribe arg success-cb failure-cb)
+      (cc/send-msg capsule-client :subscribe arg)
       nil))
 
   (unsubscribe! [this sub-id]
