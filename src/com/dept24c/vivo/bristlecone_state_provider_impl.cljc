@@ -22,16 +22,16 @@
   state/IState
   (update-state! [this update-commands tx-info cb]
     (let [tx-info-str (u/edn->str tx-info)
-          update-commands* (reduce
-                            (fn [acc [path [op arg]]]
-                              (let [spath (u/path->spath path)
-                                    arg* (u/edn->svalue state-schema path arg)]
-                                (conj acc #:update-command{:path spath
-                                                           :op op
-                                                           :arg arg*})))
-                            [] update-commands)
+          cmds (reduce
+                (fn [acc [path [op arg]]]
+                  (let [spath (u/path->spath path)
+                        arg* (u/edn->value-rec state-schema path arg)]
+                    (conj acc #:update-command{:path spath
+                                               :op op
+                                               :arg arg*})))
+                [] update-commands)
           arg #:update-state-arg{:tx-info-str tx-info-str
-                                 :update-commands update-commands*}
+                                 :update-commands cmds}
           success-cb (fn [ret]
                        (cb true))
           failure-cb (fn [e]
@@ -67,27 +67,15 @@
     (ca/go
       (try
         (let [{:notify-subscriber-arg/keys [sub-id data-frame tx-info-str]} arg
-              {:keys [update-fn k->path]} (@*sub-id->sub sub-id)
-              <sender (partial cc/<send-msg capsule-client)
-              <fp->wschema (u/make-<fp->wschema <sender *fp->pcf)
-              <xf-df #(->> %
-                           (mapv (fn [[s svalue]]
-                                   (au/go
-                                     (let [k (keyword s)
-                                           path (k->path k)
-                                           v (au/<? (u/<svalue->edn
-                                                     <fp->wschema
-                                                     state-schema path svalue))]
-                                       {k v}))))
-                           (ca/merge)
-                           (ca/reduce (fn [acc ret]
-                                        (if (instance? #?(:cljs js/Error
-                                                          :clj Throwable) ret)
-                                          (reduced ret)
-                                          (merge acc ret)))
-                                      {}))]
+              {:keys [update-fn k->path]} (@*sub-id->sub sub-id)]
           (when update-fn
-            (let [data-frame* (au/<? (<xf-df data-frame))
+            (let [data-frame* (reduce-kv
+                               (fn [acc k* v]
+                                 (let [k (keyword k*)
+                                       path (k->path k)]
+                                   (assoc acc k (u/value-rec->edn
+                                                 state-schema path v))))
+                               {} data-frame)
                   tx-info (when tx-info-str
                             (u/str->edn tx-info-str))]
               (update-fn data-frame* tx-info))))
@@ -110,8 +98,9 @@
         {:keys [log-error log-info]} (merge default-bsp-opts opts)
         get-credentials (constantly {:subject-id "bristlecone-state-provider"
                                      :subject-secret ""})
+        protocol (u/make-bsp-bs-protocol state-schema)
         capsule-client (cc/client get-server-url get-credentials
-                                  u/bsp-bs-protocol :state-provider)
+                                  protocol :state-provider)
         bsp (->BristleconeStateProvider capsule-client state-schema log-error
                                         log-info *sub-id->sub *fp->pcf)]
     (cc/set-handler capsule-client :notify-subscriber

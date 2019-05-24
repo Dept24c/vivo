@@ -8,28 +8,35 @@
 
 (def default-server-port 12345)
 
-(def *system (atom nil))
+(def stop-server nil)
 
 (defn configure-logging []
   (logging/add-log-reporter! :println logging/println-reporter)
   (logging/set-log-level! :debug))
 
 (defn stop []
-  (when-let [stopper @*system]
-    (println "Stopping server...")
-    (stopper)))
+  (if stop-server
+    (do
+      (println "Stopping server...")
+      (stop-server))
+    (println "Server is not running.")))
 
 (defn start
   ([]
    (start default-server-port))
   ([port]
    (configure-logging)
-   (reset! *system (bs/bristlecone-server port ss/state-schema))))
+   (alter-var-root #'stop-server
+                   (constantly (bs/bristlecone-server port ss/state-schema)))))
 
+;; Note: This has problems due to not having socket address reuse
 (defn restart []
   (stop)
   (refresh :after 'user/start))
 
 (defn -main [& args]
-  (let [[port] args]
-    (start (or port default-server-port))))
+  (let [[port-str] args
+        port (if port-str
+               (Integer/parseInt port-str)
+               default-server-port)]
+    (start port)))

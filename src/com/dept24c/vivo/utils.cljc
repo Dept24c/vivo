@@ -6,6 +6,7 @@
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
+   [deercreeklabs.stockroom :as sr]
    #?(:clj [puget.printer :refer [cprint]]))
   #?(:cljs
      (:require-macros
@@ -73,27 +74,47 @@
   [:sub-id sub-id-schema]
   [:sub-map (l/map-schema spath-schema)])
 
-(l/def-record-schema svalue-schema
-  [:encoded-v l/bytes-schema]
-  [:fp l/long-schema])
+(defn long->non-neg-str [l]
+  #?(:cljs (if (.isNegative l)
+             (str "1" (.toString (.negate l)))
+             (str "0" (.toString l)))
+     :clj (if (neg? l)
+            (str "1" (Long/toString (* -1 l) 10))
+            (str "0" (Long/toString l 10)))))
 
-(l/def-record-schema update-command-schema
-  [:path spath-schema]
-  [:op op-schema]
-  [:arg (l/maybe svalue-schema)])
+(defn schema->value-rec-name [value-schema]
+  (str "v-" (long->non-neg-str (l/fingerprint64 value-schema))))
 
-(l/def-record-schema update-state-arg-schema
-  [:tx-info-str (l/maybe l/string-schema)]
-  [:update-commands (l/array-schema update-command-schema)])
+(defn make-value-rec-schema [value-schema]
+  (l/record-schema (keyword "com.dept24c.vivo.utils"
+                            (schema->value-rec-name value-schema))
+                   [[:v value-schema]]))
 
-(l/def-record-schema notify-subscriber-arg-schema
-  [:sub-id sub-id-schema]
-  [:data-frame (l/map-schema svalue-schema)]
-  [:tx-info-str (l/maybe l/string-schema)])
+(defn make-values-union-schema [state-schema]
+  (l/union-schema (map make-value-rec-schema (l/sub-schemas state-schema))))
 
-(def bsp-bs-protocol
+(defn make-update-command-schema [state-schema]
+  (l/record-schema :com.dept24c.vivo.utils/update-command
+                   [[:path spath-schema]
+                    [:op op-schema]
+                    [:arg (l/maybe (make-values-union-schema state-schema))]]))
+
+(defn make-update-state-arg-schema [state-schema]
+  (let [update-cmd-schema (make-update-command-schema state-schema)]
+    (l/record-schema :com.dept24c.vivo.utils/update-state-arg
+                     [[:tx-info-str (l/maybe l/string-schema)]
+                      [:update-commands (l/array-schema update-cmd-schema)]])))
+
+(defn make-notify-subscriber-arg-schema [state-schema]
+  (let [values-union-schema (make-values-union-schema state-schema)]
+    (l/record-schema :com.dept24c.vivo.utils/notify-subscriber-arg
+                     [[:sub-id sub-id-schema]
+                      [:data-frame (l/map-schema values-union-schema)]
+                      [:tx-info-str (l/maybe l/string-schema)]])))
+
+(defn make-bsp-bs-protocol [state-schema]
   {:roles [:state-provider :server]
-   :msgs {:update-state {:arg update-state-arg-schema
+   :msgs {:update-state {:arg (make-update-state-arg-schema state-schema)
                          :ret l/boolean-schema
                          :sender :state-provider}
           :subscribe {:arg subscribe-arg-schema
@@ -102,32 +123,25 @@
           :unsubscribe {:arg sub-id-schema
                         :ret l/boolean-schema
                         :sender :state-provider}
-          :notify-subscriber {:arg notify-subscriber-arg-schema
+          :notify-subscriber {:arg (make-notify-subscriber-arg-schema
+                                    state-schema)
                               :sender :server}
           :request-pcf {:arg fp-schema
                         :ret pcf-schema
                         :sender :either}}})
 
-(defn edn->svalue [state-schema path v]
-  (let [schema (l/schema-at-path state-schema path)]
-    #:svalue{:encoded-v (l/serialize schema v)
-             :fp (l/fingerprint64 schema)}))
+(defn value-rec-key* [state-schema path]
+  (let [value-schema (l/schema-at-path state-schema path)
+        rec-name (schema->value-rec-name value-schema)]
+    (keyword rec-name "v")))
 
-(defn make-<fp->wschema [<sender *fp->pcf]
-  (fn [fp]
-    (au/go
-      (let [pcf (or (@*fp->pcf fp)
-                    (let [pcf* (au/<? (<sender :request-pcf fp))]
-                      (swap! *fp->pcf assoc fp pcf*)
-                      pcf*))]
-        (l/json->schema pcf)))))
+(def value-rec-key (sr/memoize-sr value-rec-key* 100))
 
-(defn <svalue->edn [<fp->wschema state-schema path svalue]
-  (au/go
-    (let [rschema (l/schema-at-path state-schema path)
-          {:svalue/keys [encoded-v fp]} svalue
-          wschema (au/<? (<fp->wschema fp))]
-      (l/deserialize wschema rschema encoded-v))))
+(defn edn->value-rec [state-schema path v]
+  {(value-rec-key state-schema path) v})
+
+(defn value-rec->edn [state-schema path value-rec]
+  (get value-rec (value-rec-key state-schema path)))
 
 (defn kw->skeyword [kw]
   #:skeyword{:ns (namespace kw)

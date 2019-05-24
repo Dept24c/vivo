@@ -20,32 +20,16 @@
   (let [sub-id->sub @*sub-id->sub]
     (au/go
       (let [{:update-state-arg/keys [tx-info-str update-commands]} us-arg
-            <sender (partial ep/<send-msg ep (:conn-id metadata))
-            <fp->wschema (u/make-<fp->wschema <sender *fp->pcf)
             orig-state @*state
-            cmds (->> update-commands
-                      (map-indexed (fn [i {:update-command/keys [path op arg]}]
-                                     (au/go
-                                       (let [path* (u/spath->path path)
-                                             arg* (au/<? (u/<svalue->edn
-                                                          <fp->wschema
-                                                          state-schema
-                                                          path* arg))
-                                             upex (if (= :remove op)
-                                                    [op]
-                                                    [op arg*])]
-                                         [i path* upex]))))
-                      (ca/merge)
-                      (ca/reduce (fn [acc ret]
-                                   (if (instance? Throwable ret)
-                                     (reduced ret)
-                                     (let [[i p u] ret]
-                                       (assoc acc i [p u]))))
-                                 (sorted-map))
-                      (au/<?)
-                      (reduce (fn [acc [i cmd]]
-                                (conj acc cmd))
-                              []))
+            ;; TODO: Combine these two reduces when commands are maps
+            cmds (reduce
+                  (fn [acc {:update-command/keys [path op arg]}]
+                    (let [path* (u/spath->path path)]
+                      (conj acc [path* (if (= :remove op)
+                                         [op]
+                                         [op (u/value-rec->edn
+                                              state-schema path* arg)])])))
+                  [] update-commands)
             new-state (reduce (fn [acc [path upex]]
                                 (mspi/eval-upex acc path upex))
                               orig-state cmds)]
@@ -65,8 +49,8 @@
   (reduce-kv (fn [acc k v]
                (try
                  (let [path (k->path k)
-                       svalue (u/edn->svalue state-schema path v)]
-                   (assoc acc k svalue))
+                       value-rec (u/edn->value-rec state-schema path v)]
+                   (assoc acc k value-rec))
                  (catch ExceptionInfo e
                    (if (str/includes? (u/ex-msg e)
                                       "Data `nil` (type: nil) is not a valid")
@@ -104,6 +88,7 @@
         state @*state]
     (swap! *sub-id->sub assoc sub-id sub)
     (swap! *conn-id->sub-ids update conn-id conj sub-id)
+    ;; TODO: Run this on a separate thread, but log any errors
     (update-fn (u/make-data-frame sub-map* state) nil)
     true))
 
@@ -131,7 +116,8 @@
                                 (let [sub-ids (@*conn-id->sub-ids conn-id)]
                                   (swap! *sub-id->sub #(apply dissoc % sub-ids))
                                   (swap! *conn-id->sub-ids dissoc conn-id)))
-         ep (ep/endpoint "bsp" (constantly true) u/bsp-bs-protocol :server
+         protocol (u/make-bsp-bs-protocol state-schema)
+         ep (ep/endpoint "bsp" (constantly true) protocol :server
                          {:on-disconnect on-client-disconnect})
          capsule-server (cs/server [ep] port {})]
      (ep/set-handler ep :update-state

@@ -124,14 +124,19 @@
                                                     [rest-path upex]))))
                           {} update-commands))
           *sps-left (atom (count sp->um))
+          ;; TODO: Review. Potentially calls (cb false) more than once.
           check-tx-done (fn [ret]
-                          (when (and cb (zero? (swap! *sps-left
-                                                      (fn [sps-left]
-                                                        (when sps-left
-                                                          (if-not ret
-                                                            nil
-                                                            (dec sps-left)))))))
-                            (cb true)))]
+                          (when cb
+                            (let [left (swap! *sps-left
+                                              (fn [sps-left]
+                                                (when sps-left
+                                                  (if-not ret
+                                                    nil
+                                                    (dec sps-left)))))]
+                              (if-not left
+                                (cb false)
+                                (when (zero? left)
+                                  (cb true))))))]
       (doseq [[sp sp-update-commands] sp->um]
         (state/update-state! sp sp-update-commands tx-info check-tx-done))))
 

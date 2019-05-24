@@ -1,8 +1,8 @@
 {:deps {deercreeklabs/async-utils {:mvn/version "0.1.16"}
         ;; TODO: Replace this w/ release version when released.
-        deercreeklabs/capsule {:local/root "../../dcl/capsule"}
-        #_ {:git/url "https://github.com/deercreeklabs/capsule.git"
-            :sha "d9a2e08fce8513303bc888be966af6507aba08af"}
+        deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
+                               :sha "1012588d89fd80874f1d43e0a242a27a0326b8ff"}
+        deercreeklabs/stockroom {:mvn/version "0.2.0"}
         mvxcvi/puget {:mvn/version "1.1.2"}
         org.clojure/clojure {:mvn/version "1.10.0"}
         org.clojure/clojurescript {:mvn/version "1.10.520"}
@@ -33,6 +33,6 @@
                     :extra-paths ["dev"]}
 
   :test {:extra-paths ["test"]
-         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-389"}
-                      lambdaisland/kaocha-cljs {:mvn/version "0.0-21"}
+         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-418"}
+                      lambdaisland/kaocha-cljs {:mvn/version "0.0-32"}
                       lambdaisland/kaocha-cloverage {:mvn/version "0.0-32"}}}}}
