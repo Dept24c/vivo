@@ -19,7 +19,9 @@
   (let [[op new-v] upex
         _ (check-one-param path op upex)
         {:keys [norm-path]} (u/get-in-state state path)]
-    (assoc-in state norm-path new-v)))
+    (if (seq norm-path)
+      (assoc-in state norm-path new-v)
+      new-v)))
 
 (defmethod eval-upex :remove
   [state path upex]

@@ -130,15 +130,20 @@
                         :ret pcf-schema
                         :sender :either}}})
 
-(defn value-rec-key* [state-schema path]
-  (let [value-schema (l/schema-at-path state-schema path)
+(def schema-at-path (sr/memoize-sr l/schema-at-path 100))
+
+(defn value-rec-key [state-schema path]
+  (let [value-schema (schema-at-path state-schema path)
         rec-name (schema->value-rec-name value-schema)]
     (keyword rec-name "v")))
 
-(def value-rec-key (sr/memoize-sr value-rec-key* 100))
-
+;; TODO: DRY this up w/ above
 (defn edn->value-rec [state-schema path v]
-  {(value-rec-key state-schema path) v})
+  (let [value-schema (schema-at-path state-schema path)
+        rec-name (schema->value-rec-name value-schema)
+        k (keyword rec-name "v")]
+    (l/serialize value-schema v) ;; Check if legit value
+    {k v}))
 
 (defn value-rec->edn [state-schema path value-rec]
   (get value-rec (value-rec-key state-schema path)))

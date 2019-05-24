@@ -1,7 +1,7 @@
 {:deps {deercreeklabs/async-utils {:mvn/version "0.1.16"}
         ;; TODO: Replace this w/ release version when released.
         deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
-                               :sha "1012588d89fd80874f1d43e0a242a27a0326b8ff"}
+                               :sha "f17aaf883b8fc25e518ec96c6179a9fe64677fa7"}
         deercreeklabs/stockroom {:mvn/version "0.2.0"}
         mvxcvi/puget {:mvn/version "1.1.2"}
         org.clojure/clojure {:mvn/version "1.10.0"}

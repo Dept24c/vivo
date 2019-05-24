@@ -39,6 +39,7 @@
       (cc/send-msg capsule-client :update-state arg success-cb failure-cb)
       nil))
 
+  ;; TODO: Detect bad paths in sub-map (paths that don't match state-schema)
   (subscribe! [this sub-id sub-map update-fn]
     (let [info (reduce-kv
                 (fn [acc k path]

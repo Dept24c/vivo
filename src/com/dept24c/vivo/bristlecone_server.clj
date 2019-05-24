@@ -81,7 +81,7 @@
                         (do
                           ;; TODO: Log a warning here that update will not be
                           ;; sent since something is nil that can't be
-                          ))))
+                          (println "Skipping update due to missing data")))))
         sub {:conn-id conn-id
              :sub-map sub-map*
              :update-fn update-fn}
@@ -105,8 +105,8 @@
   ([port state-schema]
    (bristlecone-server port state-schema {}))
   ([port state-schema opts]
-   (let [{:keys [log-info log-error]} (merge default-opts opts)
-         *state (atom nil)
+   (let [{:keys [log-info log-error initial-state]} (merge default-opts opts)
+         *state (atom initial-state)
          *sub-id->sub (atom {})
          *conn-id->sub-ids (atom {})
          *fp->pcf (atom (reduce (fn [acc sch]

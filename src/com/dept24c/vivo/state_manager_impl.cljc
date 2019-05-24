@@ -66,6 +66,7 @@
                           tx-info (assoc (df-key->info :vivo/tx-info)
                                          tx-info)))))
 
+;; TODO: Unsubscribe old subscriptions
 (defn handle-updates! [sub df-updates tx-info]
   (let [{:keys [sub-id sp-update-fn update-fn root-df-keys
                 df-key->info *data-frame *prior-data-frame
@@ -94,7 +95,9 @@
         (reset! *prior-data-frame data-frame)
         (update-fn data-frame))
       (doseq [[sp sub-map] sp->sub-map]
-        (state/subscribe! sp sub-id sub-map sp-update-fn)))))
+        ;; TODO: fix sub-id
+        (state/subscribe! sp (str sub-id (rand-int 1e6))
+                          sub-map sp-update-fn)))))
 
 (defn throw-invalid-root [path]
   (let [[path-root & rest-path] path]
@@ -166,17 +169,14 @@
                                      (u/sym-map sp abstract-path dependents
                                                 dependencies)))))
                         {} sub-map)
+          df-keys (keys  df-key->info)
           sp-update-fn (fn [df-updates tx-info]
                          (when-let [sub (@*sub-id->sub sub-id)]
                            (handle-updates! sub df-updates tx-info)))
           root? #(-> (df-key->info %)
                      (:dependencies)
                      (empty?))
-          df-keys (reduce-kv (fn [acc df-key v]
-                               (if (= :vivo/tx-info v)
-                                 acc
-                                 (conj acc (keyword df-key))))
-                             [] sub-map)
+
           root-df-keys (set (filter root? df-keys))
           *data-frame (atom {})
           *prior-data-frame (atom {})
