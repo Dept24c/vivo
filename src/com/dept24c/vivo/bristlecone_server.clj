@@ -11,8 +11,19 @@
   (:import
    (clojure.lang ExceptionInfo)))
 
+(defn default-health-http-handler [req]
+  (if (= "/health" (:uri req))
+    {:status 200
+     :headers {"content-type" "text/plain"
+               "Access-Control-Allow-Origin" "*"}
+     :body "I am healthy"}
+    {:status 404
+     :body "I still haven't found what you're looking for..."}))
+
 (def default-opts
-  {:log-info println
+  {:handle-http default-health-http-handler
+   :http-timeout-ms 60000
+   :log-info println
    :log-error println}) ;; TODO: use stderr
 
 (defn <handle-update-state
@@ -105,7 +116,8 @@
   ([port state-schema]
    (bristlecone-server port state-schema {}))
   ([port state-schema opts]
-   (let [{:keys [log-info log-error initial-state]} (merge default-opts opts)
+   (let [{:keys [log-info log-error initial-state
+                 handle-http http-timeout-ms]} (merge default-opts opts)
          *state (atom initial-state)
          *sub-id->sub (atom {})
          *conn-id->sub-ids (atom {})
@@ -119,7 +131,8 @@
          protocol (u/make-bsp-bs-protocol state-schema)
          ep (ep/endpoint "bsp" (constantly true) protocol :server
                          {:on-disconnect on-client-disconnect})
-         capsule-server (cs/server [ep] port {})]
+         cs-opts (u/sym-map handle-http http-timeout-ms)
+         capsule-server (cs/server [ep] port cs-opts)]
      (ep/set-handler ep :update-state
                      (partial <handle-update-state ep state-schema
                               *state *sub-id->sub *fp->pcf))
