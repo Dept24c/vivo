@@ -129,7 +129,21 @@
        (vivo/subscribe! sm "test-1" sub-map update-fn)
        (is (= expected (au/<? ch)))))))
 
-;; TODO: Test single-entry sub-map
+(deftest ^:this test-subscribe!-single-entry
+  (au/test-async
+   1000
+   (ca/go
+     (let [sm (vivo/state-manager)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch (:id %))
+           name "Alice"
+           user-id "123"
+           sub-map '{id [:local :user-id]}]
+       (au/<? (vivo/<update-state! sm [{:path [:local :user-id]
+                                        :op :set
+                                        :arg user-id}]))
+       (vivo/subscribe! sm "test-1" sub-map update-fn)
+       (is (= user-id (au/<? ch)))))))
 
 (deftest test-simple-insert*
   (let [state [:a :b]
@@ -329,37 +343,22 @@
                                 :arg {:title orig-title}}])
        (is (= orig-title (au/<? ch)))))))
 
-;; (vivo/def-subscriber last-msg-title-subscriber
-;;   {title [:m :msgs -1 :title]}
-;;   [sm ch]
-;;   (ca/put! ch title))
-
-;; (deftest test-end-relative-sub-map
-;;   (au/test-async
-;;    1000
-;;    (ca/go
-;;      (let [orig-title "Foo"
-;;            sm (vivo/state-manager {:m (vivo/mem-state-provider
-;;                                        {:msgs [{:title orig-title}]})})
-;;            ch (ca/chan 1)
-;;            sub (last-msg-title-subscriber sm ch)
-;;            new-title "Bar"]
-;;        (is (= orig-title (au/<? ch)))
-;;        (vivo/update-state!
-;;         sm {[:m :msgs -1] [:insert-after {:title new-title}]})
-;;        (is (= new-title (au/<? ch)))))))
-
-;; (deftest test-tx-info
-;;   (au/test-async
-;;    1000
-;;    (ca/go
-;;      (let [sm (vivo/state-manager {:m (vivo/mem-state-provider {:a 1})})
-;;            ch (ca/chan 1)
-;;            update-fn #(ca/put! ch %)
-;;            sub-map '{a [:m :a]
-;;                      my-tx-info :vivo/tx-info}
-;;            tx-info {:some "info"}]
-;;        (vivo/subscribe! sm "sub123" sub-map update-fn)
-;;        (is (= {:a 1} (au/<? ch)))
-;;        (vivo/update-state! sm {[:m :a] [:set 2]} tx-info)
-;;        (is (= {:a 2, :my-tx-info tx-info} (au/<? ch)))))))
+(deftest test-end-relative-sub-map
+  (au/test-async
+   10000
+   (ca/go
+     (let [orig-title "Foo"
+           sm (vivo/state-manager)
+           ch (ca/chan 1)
+           sub-map '{title [:local :msgs -1 :title]}
+           update-fn #(ca/put! ch (:title %))
+           new-title "Bar"]
+       (au/<? (vivo/<update-state! sm [{:path [:local]
+                                        :op :set
+                                        :arg {:msgs [{:title orig-title}]}}]))
+       (vivo/subscribe! sm "test-1" sub-map update-fn)
+       (is (= orig-title (au/<? ch)))
+       (vivo/update-state! sm [{:path [:local :msgs -1]
+                                :op :insert-after
+                                :arg {:title new-title}}])
+       (is (= new-title (au/<? ch)))))))
