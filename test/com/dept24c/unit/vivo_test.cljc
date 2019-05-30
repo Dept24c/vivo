@@ -75,9 +75,39 @@
     [7 :v :x "str"]
     {"s" 1 :s 2}))
 
-;; TODO: Test bad sub-map arg to subscribe!
+(deftest test-empty-sub-map
+  (let [sm (vivo/state-manager)
+        bad-sub-map {}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"The sub-map parameter must contain at least one entry"
+         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
 
-(deftest test-subscribe!
+(deftest test-nil-sub-map
+  (let [sm (vivo/state-manager)
+        bad-sub-map nil]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"The sub-map parameter must be a map"
+         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+
+(deftest test-non-sym-key-in-sub-map
+  (let [sm (vivo/state-manager)
+        bad-sub-map {:not-a-symbol [:local :user-id]}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"All keys in sub-map must be symbols. Got `:not-a-symbol`"
+         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+
+(deftest test-bad-path-in-sub-map
+  (let [sm (vivo/state-manager)
+        bad-sub-map '{user-id [:local nil]}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"Only integers, keywords, symbols, and strings are valid path keys"
+         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+
+(deftest ^:this test-subscribe!
   (au/test-async
    1000
    (ca/go
@@ -98,6 +128,8 @@
                                         :arg user-id}]))
        (vivo/subscribe! sm "test-1" sub-map update-fn)
        (is (= expected (au/<? ch)))))))
+
+;; TODO: Test single-entry sub-map
 
 (deftest test-simple-insert*
   (let [state [:a :b]
@@ -208,88 +240,94 @@
          #"Paths must begin with either :local or :sys. Got `:not-a-valid-root`"
          (vivo/subscribe! sm "sub123" sub-map (constantly nil))))))
 
-;; (deftest test-bad-insert*-on-map
-;;   (is (thrown-with-msg?
-;;        #?(:clj ExceptionInfo :cljs js/Error)
-;;        #"does not point to a vector"
-;;        (mspi/insert* {} [0] [:insert-before :new]))))
+(deftest test-bad-insert*-on-map
+  (is (thrown-with-msg?
+       #?(:clj ExceptionInfo :cljs js/Error)
+       #"does not point to a vector"
+       (state/insert* {} [0] :insert-before :new))))
 
-;; (deftest test-bad-insert*-path
-;;   (is (thrown-with-msg?
-;;        #?(:clj ExceptionInfo :cljs js/Error)
-;;        #"the last element of the path must be an integer"
-;;        (mspi/insert* [] [] [:insert-before :new]))))
+(deftest test-bad-insert*-path
+  (is (thrown-with-msg?
+       #?(:clj ExceptionInfo :cljs js/Error)
+       #"the last element of the path must be an integer"
+       (state/insert* [] [] :insert-before :new))))
 
-;; (deftest test-bad-upex-op
-;;   (let [sm (vivo/state-manager {:m (vivo/mem-state-provider)})]
-;;     (is (thrown-with-msg?
-;;          #?(:clj ExceptionInfo :cljs js/Error)
-;;          #"Invalid operator `:not-an-op`"
-;;          (vivo/update-state!
-;;           sm {[:m :x] [:not-an-op 1]})))))
+(deftest test-bad-command-op
+  (let [sm (vivo/state-manager)]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"is not a valid op. Got: `:not-an-op`."
+         (vivo/update-state! sm [{:path [:local :x]
+                                  :op :not-an-op
+                                  :arg 1}])))))
 
-;; (deftest test-remove
-;;   (let [state {:x [:a :b :c]}
-;;         cases [[{:w 1} {:w 1 :z 2} [:z]]
-;;                [{:w 1 :z {:b 2}} {:w 1 :z {:a 1 :b 2}} [:z :a]]
-;;                [{:x [:b :c]} state [:x 0]]
-;;                [{:x [:a :c]} state [:x 1]]
-;;                [{:x [:a :b]} state [:x 2]]
-;;                [{:x [:a :b]} state [:x -1]]
-;;                [{:x [:a :c]} state [:x -2]]
-;;                [{:x [:a :b :c]} state [:x 10]]
-;;                [{:x [:a :b :c]} state [:x -10]]]]
-;;     (doseq [case cases]
-;;       (let [[expected state* path] case
-;;             ret (mspi/eval-upex state* path [:remove])]
-;;         (is (= case [ret state* path]))))))
+(deftest test-remove
+  (let [state {:x [:a :b :c]}
+        cases [[{:w 1} {:w 1 :z 2} [:z]]
+               [{:w 1 :z {:b 2}} {:w 1 :z {:a 1 :b 2}} [:z :a]]
+               [{:x [:b :c]} state [:x 0]]
+               [{:x [:a :c]} state [:x 1]]
+               [{:x [:a :b]} state [:x 2]]
+               [{:x [:a :b]} state [:x -1]]
+               [{:x [:a :c]} state [:x -2]]
+               [{:x [:a :b :c]} state [:x 10]]
+               [{:x [:a :b :c]} state [:x -10]]]]
+    (doseq [case cases]
+      (let [[expected state* path] case
+            ret (state/eval-cmd state* {:path path :op :remove})]
+        (is (= case [ret state* path]))))))
 
-;; (deftest test-math
-;;   (let [state0 {:a 10}
-;;         state1 {:x {:a 10}}
-;;         state2 {:x [{:a 10} {:a 20}]}
-;;         cases [[{:a 11} state0 [:a] [:+ 1]]
-;;                [{:a 9} state0 [:a] [:- 1]]
-;;                [{:a 20} state0 [:a] [:* 2]]
-;;                [{:a 5} state0 [:a] [:/ 2]]
-;;                [{:a 1} state0 [:a] [:mod 3]]
-;;                [{:x {:a 11}} state1 [:x :a] [:+ 1]]
-;;                [{:x {:a 9}} state1 [:x :a] [:- 1]]
-;;                [{:x {:a 30}} state1 [:x :a] [:* 3]]
-;;                [{:x {:a (/ 10 3)}} state1 [:x :a] [:/ 3]]
-;;                [{:x {:a 1}} state1 [:x :a] [:mod 3]]
-;;                [{:x [{:a 10} {:a 21}]} state2 [:x 1 :a] [:+ 1]]
-;;                [{:x [{:a 10} {:a 19}]} state2 [:x 1 :a] [:- 1]]]]
-;;     (doseq [case cases]
-;;       (let [[expected state* path upex] case
-;;             ret (mspi/eval-upex state* path upex)]
-;;         (is (= case [ret state* path upex]))))))
+(deftest test-math
+  (let [state0 {:a 10}
+        state1 {:x {:a 10}}
+        state2 {:x [{:a 10} {:a 20}]}
+        cases [[{:a 11} state0 {:path [:a] :op :+ :arg 1}]
+               [{:a 9} state0 {:path [:a] :op :- :arg 1}]
+               [{:a 20} state0 {:path [:a] :op :* :arg 2}]
+               [{:a 5} state0 {:path [:a] :op :/ :arg 2}]
+               [{:a 1} state0 {:path [:a] :op :mod :arg 3}]
+               [{:x {:a 11}} state1 {:path [:x :a] :op :+ :arg 1}]
+               [{:x {:a 9}} state1 {:path [:x :a] :op :- :arg 1}]
+               [{:x {:a 30}} state1 {:path [:x :a] :op :* :arg 3}]
+               [{:x {:a (/ 10 3)}} state1 {:path [:x :a] :op :/ :arg 3}]
+               [{:x {:a 1}} state1 {:path [:x :a] :op :mod :arg 3}]
+               [{:x [{:a 10} {:a 21}]} state2 {:path [:x 1 :a] :op :+ :arg 1}]
+               [{:x [{:a 10} {:a 19}]} state2 {:path [:x 1 :a] :op :- :arg 1}]]]
+    (doseq [case cases]
+      (let [[expected state* cmd] case
+            ret (state/eval-cmd state* cmd)]
+        (is (= case [ret state* cmd]))))))
 
-;; (vivo/def-subscriber first-msg-title-subscriber
-;;   {title [:m :msgs 0 :title]}
-;;   [sm ch]
-;;   (ca/put! ch title))
-
-;; (deftest test-ordered-update-maps
-;;   (au/test-async
-;;    1000
-;;    (ca/go
-;;      (let [orig-title "Plato"
-;;            sm (vivo/state-manager {:m (vivo/mem-state-provider
-;;                                        {:msgs [{:title orig-title}]})})
-;;            ch (ca/chan 1)
-;;            sub (first-msg-title-subscriber sm ch)
-;;            new-title "Socrates"]
-;;        (is (= orig-title (au/<? ch)))
-;;        (vivo/update-state!
-;;         sm [[[:m :msgs 0] [:insert-before {:title orig-title}]]
-;;             [[:m :msgs 0 :title] [:set new-title]]])
-
-;;        (is (= new-title (au/<? ch)))
-;;        (vivo/update-state!
-;;         sm [[[:m :msgs 0 :title] [:set new-title]]
-;;             [[:m :msgs 0] [:insert-before {:title orig-title}]]])
-;;        (is (= orig-title (au/<? ch)))))))
+(deftest test-ordered-update-maps
+  (au/test-async
+   1000
+   (ca/go
+     (let [sm (vivo/state-manager)
+           sub-map '{title [:local :msgs 0 :title]}
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch (:title %))
+           orig-title "Plato"
+           new-title "Socrates"]
+       (au/<? (vivo/<update-state! sm [{:path [:local]
+                                        :op :set
+                                        :arg {:msgs [{:title orig-title}]}}]))
+       (vivo/subscribe! sm "test-1" sub-map update-fn)
+       (is (= orig-title (au/<? ch)))
+       (vivo/update-state! sm
+                           [{:path [:local :msgs 0]
+                             :op :insert-before
+                             :arg {:title orig-title}}
+                            {:path [:local :msgs 0 :title]
+                             :op :set
+                             :arg new-title}])
+       (is (= new-title (au/<? ch)))
+       (vivo/update-state! sm [{:path [:local :msgs 0 :title]
+                                :op :set
+                                :arg new-title}
+                               {:path [:local :msgs 0]
+                                :op :insert-before
+                                :arg {:title orig-title}}])
+       (is (= orig-title (au/<? ch)))))))
 
 ;; (vivo/def-subscriber last-msg-title-subscriber
 ;;   {title [:m :msgs -1 :title]}

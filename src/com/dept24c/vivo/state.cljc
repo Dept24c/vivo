@@ -34,6 +34,13 @@
                          head "` in path `" path "`.")
                     (u/sym-map path head)))))
 
+(defn throw-bad-path-key [path k]
+  (let [disp-k (or k "nil")]
+    (throw (ex-info
+            (str "Illegal key `" disp-k "` in path `" path "`. Only integers, "
+                 "keywords, symbols, and strings are valid path keys.")
+            (u/sym-map k path)))))
+
 (defn split-updates [update-cmds]
   (reduce (fn [acc cmd]
             (let [{:keys [path op]} cmd
@@ -83,12 +90,7 @@
                               (normalize-neg-k k val)
 
                               :else
-                              (throw
-                               (ex-info
-                                (str "Illegal key `" k "` in path `" path
-                                     "`. Only integers, keywords, "
-                                     "and strings are valid path keys.")
-                                (u/sym-map k path))))]
+                              (throw-bad-path-key path k))]
               (-> acc
                   (update :norm-path conj k*)
                   (assoc :val val*))))
@@ -237,7 +239,8 @@
           (reset! *last-df new-df)
           (update-fn new-df)))
       (catch #?(:clj Exception :cljs js/Error) e
-        (log-error (str "Exception in <notify-sub:" e))))))
+        (log-error (str "Exception in <notify-sub: "
+                        (u/ex-msg-and-stacktrace e)))))))
 
 (defn <do-sys-updates
   [capsule-client log-info tx-info sys-state-schema sys-cmds]
@@ -263,14 +266,26 @@
                            update-state-timeout-ms " ms."))
             nil))))))
 
+(defn check-path [path]
+  (reduce (fn [acc k]
+            (if (or (keyword? k) (int? k) (string? k) (symbol? k))
+              (conj acc k)
+              (throw-bad-path-key path k)))
+          [] path))
+
 (defn make-sub-info [sub-map]
   (let [info (reduce-kv
               (fn [acc sym v]
+                (when-not (symbol? sym)
+                  (throw (ex-info
+                          (str "All keys in sub-map must be symbols. Got `"
+                               sym "`.")
+                          (u/sym-map sym sub-map))))
                 (let [kw (keyword sym)]
                   (if (= :vivo/tx-info v)
                     (assoc acc :tx-info-kw kw)
                     (let [path v
-                          [head & tail] path
+                          [head & tail] (check-path path)
                           deps (filter symbol? path)]
                       (when-not (#{:local :sys} head)
                         (throw-bad-path-root path))
@@ -284,8 +299,7 @@
               sub-map)
         {:keys [tx-info-kw g kw->path]} info
         ordered-dep-ks (dep/topo-sort g)
-        no-dep-ks (set/difference (set (keys (dissoc sub-map
-                                                     (symbol tx-info-kw))))
+        no-dep-ks (set/difference (set (map symbol (keys kw->path)))
                                   (set ordered-dep-ks))]
     {:ordered-kps (reduce (fn [acc sym]
                             (let [kw (keyword sym)
@@ -333,9 +347,11 @@
             (doseq [sub (vals @*sub-id->sub)]
               (<notify-sub local-state store-id tx-info log-error
                            (partial <get-in-sys-state this) sub))
-            (cb true))
+            (when cb
+              (cb true)))
           (catch #?(:clj Exception :cljs js/Error) e
-            (log-error (str "Exception in update-state!:" e))
+            (log-error (str "Exception in update-state!: "
+                            (u/ex-msg-and-stacktrace e)))
             (when cb
               (cb e))))))
     nil)
@@ -373,7 +389,8 @@
             (when df
               (update-fn df)))
           (catch #?(:clj Exception :cljs js/Error) e
-            (log-error (str "Exception in subscribe!:" e))))))
+            (log-error (str "Exception in subscribe!: "
+                            (u/ex-msg-and-stacktrace e)))))))
     nil)
 
   (unsubscribe! [this sub-id]
