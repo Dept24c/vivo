@@ -3,7 +3,6 @@
    [clojure.core.async :as ca]
    [clojure.test :refer [deftest is]]
    [com.dept24c.vivo :as vivo]
-   [com.dept24c.vivo.bristlecone-state-provider-impl :as bspi]
    [com.dept24c.vivo.state-schema :as ss]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
@@ -33,8 +32,7 @@
   (au/test-async
    10000
    (ca/go
-     (let [bsp (vivo/bristlecone-state-provider get-server-url ss/state-schema)
-           sm (vivo/state-manager {:sys bsp})
+     (let [sm (vivo/state-manager)
            msg #:msg{:user user-bo
                      :text "A msg"}
            msg2 (assoc msg :msg/text "This is great")

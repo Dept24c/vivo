@@ -50,9 +50,13 @@
 
 ;;;;;;;;;;;;;;;;;;;; Schemas ;;;;;;;;;;;;;;;;;;;;
 
-(def fp-schema l/long-schema)
-(def pcf-schema l/string-schema)
-(def sub-id-schema l/string-schema)
+(def valid-ops
+  #{:set :remove :insert-before :insert-after
+    :plus :minus :multiply :divide :mod})
+
+(def op-schema (l/enum-schema :com.dept24c.vivo.utils/op
+                              {:key-ns-type :none} (seq valid-ops)))
+(def store-id-schema l/string-schema)
 
 (l/def-record-schema skeyword-schema
   [:ns (l/maybe l/string-schema)]
@@ -65,14 +69,6 @@
 
 (l/def-array-schema spath-schema
   spath-item-schema)
-
-(l/def-enum-schema op-schema
-  {:key-ns-type :none}
-  :set :remove :insert-before :insert-after :plus :minus :multiply :divide :mod)
-
-(l/def-record-schema subscribe-arg-schema
-  [:sub-id sub-id-schema]
-  [:sub-map (l/map-schema spath-schema)])
 
 (defn long->non-neg-str [l]
   #?(:cljs (if (.isNegative l)
@@ -93,42 +89,54 @@
 (defn make-values-union-schema [state-schema]
   (l/union-schema (map make-value-rec-schema (l/sub-schemas state-schema))))
 
-(defn make-update-command-schema [state-schema]
-  (l/record-schema :com.dept24c.vivo.utils/update-command
+(defn make-update-cmd-schema [state-schema]
+  (l/record-schema ::update-cmd
                    [[:path spath-schema]
                     [:op op-schema]
                     [:arg (l/maybe (make-values-union-schema state-schema))]]))
 
 (defn make-update-state-arg-schema [state-schema]
-  (let [update-cmd-schema (make-update-command-schema state-schema)]
-    (l/record-schema :com.dept24c.vivo.utils/update-state-arg
+  (let [update-cmd-schema (make-update-cmd-schema state-schema)]
+    (l/record-schema ::update-state-arg
                      [[:tx-info-str (l/maybe l/string-schema)]
-                      [:update-commands (l/array-schema update-cmd-schema)]])))
+                      [:update-cmds (l/array-schema update-cmd-schema)]])))
 
-(defn make-notify-subscriber-arg-schema [state-schema]
-  (let [values-union-schema (make-values-union-schema state-schema)]
-    (l/record-schema :com.dept24c.vivo.utils/notify-subscriber-arg
-                     [[:sub-id sub-id-schema]
-                      [:data-frame (l/map-schema values-union-schema)]
-                      [:tx-info-str (l/maybe l/string-schema)]])))
+(l/def-record-schema get-state-arg-schema
+  [:store-id (l/maybe store-id-schema)]
+  [:path spath-schema])
 
-(defn make-bsp-bs-protocol [state-schema]
-  {:roles [:state-provider :server]
-   :msgs {:update-state {:arg (make-update-state-arg-schema state-schema)
-                         :ret l/boolean-schema
-                         :sender :state-provider}
-          :subscribe {:arg subscribe-arg-schema
-                      :ret l/boolean-schema
-                      :sender :state-provider}
-          :unsubscribe {:arg sub-id-schema
-                        :ret l/boolean-schema
-                        :sender :state-provider}
-          :notify-subscriber {:arg (make-notify-subscriber-arg-schema
-                                    state-schema)
-                              :sender :server}
-          :request-pcf {:arg fp-schema
-                        :ret pcf-schema
-                        :sender :either}}})
+(l/def-record-schema store-change-schema
+  [:store-id store-id-schema]
+  [:tx-info-str l/string-schema])
+
+(l/def-record-schema connect-store-arg-schema
+  [:branch l/string-schema]
+  [:schema-pcf l/string-schema])
+
+(l/def-record-schema login-subject-arg-schema
+  [:id l/string-schema]
+  [:secret l/string-schema])
+
+(defn make-sm-server-protocol [state-schema]
+  (let [values-union-schema (make-values-union-schema state-schema)
+        get-state-ret-schema (l/record-schema ::get-state-ret-schema
+                                              [[:store-id store-id-schema]
+                                               [:value values-union-schema]])]
+    {:roles [:state-manager :server]
+     :msgs {:update-state {:arg (make-update-state-arg-schema state-schema)
+                           :ret (l/maybe store-change-schema)
+                           :sender :state-manager}
+            :get-state {:arg get-state-arg-schema
+                        :ret get-state-ret-schema
+                        :sender :state-manager}
+            :connect-store {:arg connect-store-arg-schema
+                            :ret l/boolean-schema
+                            :sender :state-manager}
+            :login-subject {:arg login-subject-arg-schema
+                            :ret l/boolean-schema
+                            :sender :state-manager}
+            :store-changed {:arg store-change-schema
+                            :sender :server}}}))
 
 (def schema-at-path (sr/memoize-sr l/schema-at-path 100))
 
@@ -137,12 +145,8 @@
         rec-name (schema->value-rec-name value-schema)]
     (keyword rec-name "v")))
 
-;; TODO: DRY this up w/ above
 (defn edn->value-rec [state-schema path v]
-  (let [value-schema (schema-at-path state-schema path)
-        rec-name (schema->value-rec-name value-schema)
-        k (keyword rec-name "v")]
-    (l/serialize value-schema v) ;; Check if legit value
+  (let [k (value-rec-key state-schema path)]
     {k v}))
 
 (defn value-rec->edn [state-schema path value-rec]
@@ -170,147 +174,6 @@
                         k)))
           [] spath))
 
-(defn update-array-sub? [len sub-i update-i* op]
-  (let [update-i (if (nat-int? sub-i)
-                   (if (nat-int? update-i*)
-                     update-i*
-                     (+ len update-i*))
-                   (if (nat-int? update-i*)
-                     (- update-i* len)
-                     update-i*))]
-    (if (= :set op)
-      (= sub-i update-i)
-      (let [new-i (if (= :insert-after op)
-                    (if (nat-int? update-i)
-                      (inc update-i)
-                      update-i)
-                    (if (nat-int? update-i)
-                      update-i
-                      (dec update-i)))]
-        (if (nat-int? sub-i)
-          (<= new-i sub-i)
-          (>= new-i sub-i))))))
-
-(defn relationship-info
-  "Given two key sequences, return a vector of [relationship tail].
-   Relationsip is one of :sibling, :parent, :child, or :equal.
-   Tail is the keypath between the parent and child. Tail is only defined
-   when relationship is :parent."
-  [ksa ksb]
-  (let [va (vec ksa)
-        vb (vec ksb)
-        len-a (count va)
-        len-b (count vb)
-        len-min (min len-a len-b)
-        divergence-i (loop [i 0]
-                       (if (and (< i len-min)
-                                (= (va i) (vb i)))
-                         (recur (inc i))
-                         i))
-        a-tail? (> len-a divergence-i)
-        b-tail? (> len-b divergence-i)]
-    (cond
-      (and a-tail? b-tail?) [:sibling nil]
-      a-tail? [:child nil]
-      b-tail? [:parent (drop divergence-i ksb)]
-      :else [:equal nil])))
-
-(defn normalize-neg-k
-  "Return the normalized key and the associated value or nil if key does not
-   exist in value."
-  [k v]
-  (if (map? v)
-    [k (v k)]
-    (let [len (count v)
-          norm-k (+ len k)]
-      [norm-k (when (and (pos? len) (nat-int? norm-k) (< norm-k len))
-                (v norm-k))])))
-
-(defn get-in-state
-  "Custom get-in fn that checks types and normalizes negative keys.
-   Returns a map with :norm-path and :val keys."
-  [state path]
-  (reduce (fn [{:keys [norm-path val] :as acc} k]
-            (let [[k* val*] (cond
-                              (or (keyword? k) (nat-int? k) (string? k))
-                              [k (when val
-                                   (val k))]
-
-                              (and (int? k) (neg? k))
-                              (normalize-neg-k k val)
-
-                              :else
-                              (throw
-                               (ex-info
-                                (str "Illegal key `" k "` in path `" path
-                                     "`. Only integers, keywords, "
-                                     "and strings are valid path keys.")
-                                (sym-map k path))))]
-              (-> acc
-                  (update :norm-path conj k*)
-                  (assoc :val val*))))
-          {:norm-path []
-           :val state}
-          path))
-
-(defn make-data-frame [sub-map state]
-  (reduce-kv (fn [acc df-key path]
-               (let [{:keys [val]} (get-in-state state path)]
-                 (assoc acc df-key val)))
-             {} sub-map))
-#_
-(defn update-sub? [sub-map update-path orig-v new-v]
-  ;; orig-v and new-v are guaranteed to be different
-  (reduce (fn [acc subscription-path]
-            (let [[relationship sub-tail] (relationship-info
-                                           update-path subscription-path)]
-              (case relationship
-                :equal (reduced true)
-                :child (reduced true)
-                :sibling false
-                :parent (if (= (get-in orig-v sub-tail)
-                               (get-in new-v sub-tail))
-                          false
-                          (reduced true)))))
-          false (vals sub-map)))
-
-#_
-(defn get-change-info [get-in-state update-map subs]
-  ;; TODO: Handle ordered update-map with in-process vals
-  (let [path->vals (reduce
-                    (fn [acc [path upex]]
-                      (let [orig-v (get-in-state path)
-                            new-v (upex/eval orig-v upex)]
-                        (if (= orig-v new-v)
-                          acc
-                          (assoc acc path [orig-v new-v]))))
-                    {} update-map)
-        subs-to-update (fn [subs path orig-v new-v]
-                         (reduce (fn [acc {:keys [sub-map] :as sub}]
-                                   (if (update-sub? sub-map path orig-v new-v)
-                                     (conj acc sub)
-                                     acc))
-                                 #{} subs))]
-    (reduce-kv (fn [acc path [orig-v new-v]]
-                 (-> acc
-                     (update :state-updates #(assoc % path new-v))
-                     (update :subs-to-update set/union
-                             (subs-to-update subs path orig-v new-v))))
-               {:state-updates {}
-                :subs-to-update #{}}
-               path->vals)))
-#_
-(defn update-state* [update-map get-in-state set-paths-in-state! subs]
-  (let [{:vivo/keys [tx-info-str]} update-map
-        update-map* (dissoc update-map :vivo/tx-info-str)
-        {:keys [state-updates subs-to-update]} (get-change-info
-                                                get-in-state update-map* subs)]
-    (set-paths-in-state! state-updates)
-    (doseq [{:keys [update-fn sub-map]} subs-to-update]
-      (let [data-frame (cond-> (make-data-frame get-in-state sub-map)
-                         tx-info-str (assoc :vivo/tx-info-str tx-info-str))]
-        (update-fn data-frame)))
-    true))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

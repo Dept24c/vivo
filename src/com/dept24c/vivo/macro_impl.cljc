@@ -136,14 +136,3 @@
          (check-constructor-args ~cname cargs# ~num-args-defined)
          (let [[~@arglist] cargs#]
            ~@body)))))
-
-(defn build-subscriber [subscriber-name args]
-  (let [[sub-map arglist & body] args
-        sub-syms (keys sub-map)]
-    (check-subscription-args subscriber-name "subscriber"
-                             sub-map arglist)
-    `(defn ~subscriber-name ~arglist
-       (let [sub-id# (str '~subscriber-name "-" (rand-int 1e9))
-             f# (fn [{:keys [~@sub-syms]}]
-                  ~@body)]
-         (state/subscribe! ~(first arglist) sub-id# '~sub-map f#)))))

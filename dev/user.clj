@@ -1,7 +1,7 @@
 (ns user
   (:require
    [clojure.tools.namespace.repl :refer [refresh refresh-all]]
-   [com.dept24c.vivo.bristlecone-server :as bs]
+   [com.dept24c.vivo.server :as server]
    [com.dept24c.vivo.state-schema :as ss]
    [deercreeklabs.capsule.logging :as logging]
    [puget.printer :refer [cprint]]))
@@ -27,7 +27,7 @@
   ([port]
    (configure-logging)
    (alter-var-root #'stop-server
-                   (constantly (bs/bristlecone-server port ss/state-schema)))))
+                   (constantly (server/vivo-server port ss/state-schema)))))
 
 ;; Note: This has problems due to not having socket address reuse
 (defn restart []
