@@ -29,9 +29,10 @@
   (<get-in-sys-state [this store-id path]))
 
 (defn throw-bad-path-root [path]
-  (let [[head & tail] path]
+  (let [[head & tail] path
+        disp-head (or head "nil")]
     (throw (ex-info (str "Paths must begin with either :local or :sys. Got `"
-                         head "` in path `" path "`.")
+                         disp-head "` in path `" path "`.")
                     (u/sym-map path head)))))
 
 (defn throw-bad-path-key [path k]
@@ -40,6 +41,11 @@
             (str "Illegal key `" disp-k "` in path `" path "`. Only integers, "
                  "keywords, symbols, and strings are valid path keys.")
             (u/sym-map k path)))))
+
+(defn throw-bad-path-symbol [path sym sub-map]
+  )
+
+
 
 (defn split-updates [update-cmds]
   (reduce (fn [acc cmd]
@@ -198,18 +204,19 @@
   (eval-math-cmd state cmd mod))
 
 (defn <make-df
-  [local-state store-id ordered-kps tx-info-kw tx-info <get-in-sys-state]
+  [local-state store-id ordered-sym-path-pairs tx-info-sym tx-info
+   <get-in-sys-state]
   (au/go
     (try
-      (let [last-i (dec (count ordered-kps))]
-        (loop [df (if tx-info-kw
-                    {tx-info-kw tx-info}
+      (let [last-i (dec (count ordered-sym-path-pairs))]
+        (loop [df (if tx-info-sym
+                    {tx-info-sym tx-info}
                     {})
                i 0]
-          (let [[kw path] (nth ordered-kps i)
+          (let [[sym path] (nth ordered-sym-path-pairs i)
                 [head & tail] (mapv #(if-not (symbol? %)
                                        %
-                                       (or (df (keyword %))
+                                       (or (df %)
                                            (throw
                                             (ex-info "Path value not found."
                                                      {:v %
@@ -218,7 +225,7 @@
                 v (case head
                     :local (:val (get-in-state local-state tail))
                     :sys (au/<? (<get-in-sys-state store-id tail)))
-                new-df (assoc df kw v)]
+                new-df (assoc df sym v)]
             (if (= last-i i)
               new-df
               (recur new-df (inc i))))))
@@ -232,9 +239,9 @@
 (defn <notify-sub [local-state store-id tx-info log-error <get-in-sys-state sub]
   (ca/go
     (try
-      (let [{:keys [update-fn ordered-kps tx-info-kw *last-df]} sub
-            new-df (au/<? (<make-df local-state store-id ordered-kps
-                                    tx-info-kw tx-info <get-in-sys-state))]
+      (let [{:keys [update-fn ordered-sym-path-pairs tx-info-sym *last-df]} sub
+            new-df (au/<? (<make-df local-state store-id ordered-sym-path-pairs
+                                    tx-info-sym tx-info <get-in-sys-state))]
         (when (and new-df (not= @*last-df new-df))
           (reset! *last-df new-df)
           (update-fn new-df)))
@@ -266,47 +273,53 @@
                            update-state-timeout-ms " ms."))
             nil))))))
 
-(defn check-path [path]
+(defn check-path [path sub-syms sub-map]
   (reduce (fn [acc k]
-            (if (or (keyword? k) (int? k) (string? k) (symbol? k))
-              (conj acc k)
-              (throw-bad-path-key path k)))
+            (when (and (symbol? k) (not (sub-syms k)))
+              (throw (ex-info
+                      (str "Path symbol `" k "` in path `" path
+                           "` is not defined as a key in the subscription map.")
+                      (u/sym-map path k sub-map))))
+            (if-not (or (keyword? k) (int? k) (string? k) (symbol? k))
+              (throw-bad-path-key path k)
+              (conj acc k)))
           [] path))
 
 (defn make-sub-info [sub-map]
-  (let [info (reduce-kv
+  (let [sub-syms (set (keys sub-map))
+        info (reduce-kv
               (fn [acc sym v]
                 (when-not (symbol? sym)
                   (throw (ex-info
                           (str "All keys in sub-map must be symbols. Got `"
                                sym "`.")
                           (u/sym-map sym sub-map))))
-                (let [kw (keyword sym)]
-                  (if (= :vivo/tx-info v)
-                    (assoc acc :tx-info-kw kw)
-                    (let [path v
-                          [head & tail] (check-path path)
-                          deps (filter symbol? path)]
-                      (when-not (#{:local :sys} head)
-                        (throw-bad-path-root path))
-                      (cond-> (update acc :kw->path assoc kw path)
-                        (seq deps) (update :g #(reduce (fn [g dep]
-                                                         (dep/depend g sym dep))
-                                                       % deps)))))))
-              {:tx-info-kw nil
+                (if (= :vivo/tx-info v)
+                  (assoc acc :tx-info-sym sym)
+                  (let [path v
+                        [head & tail] (check-path path sub-syms sub-map)
+                        deps (filter symbol? path)]
+                    (when-not (#{:local :sys} head)
+                      (throw-bad-path-root path))
+                    (cond-> (update acc :sym->path assoc sym path)
+                      (seq deps) (update :g #(reduce (fn [g dep]
+                                                       (dep/depend g sym dep))
+                                                     % deps))))))
+              {:tx-info-sym nil
                :g (dep/graph)
-               :kw->path {}}
+               :sym->path {}}
               sub-map)
-        {:keys [tx-info-kw g kw->path]} info
-        ordered-dep-ks (dep/topo-sort g)
-        no-dep-ks (set/difference (set (map symbol (keys kw->path)))
-                                  (set ordered-dep-ks))]
-    {:ordered-kps (reduce (fn [acc sym]
-                            (let [kw (keyword sym)
-                                  path (kw->path kw)]
-                              (conj acc [kw path])))
-                          [] (concat (seq no-dep-ks) ordered-dep-ks))
-     :tx-info-kw tx-info-kw}))
+        {:keys [tx-info-sym g sym->path]} info
+        ordered-dep-syms (dep/topo-sort g)
+        no-dep-syms (set/difference (set (keys sym->path))
+                                    (set ordered-dep-syms))]
+    {:ordered-sym-path-pairs (reduce (fn [acc sym]
+                                       (let [path (sym->path sym)]
+                                         (conj acc [sym path])))
+                                     []
+                                     (concat (seq no-dep-syms)
+                                             ordered-dep-syms))
+     :tx-info-sym tx-info-sym}))
 
 (defn no-server-exception []
   (ex-info (str "Can't update :sys state because the `get-server-url` option "
@@ -377,14 +390,16 @@
     (when-not (ifn? update-fn)
       (throw (ex-info "The update-fn parameter must be a function."
                       (u/sym-map update-fn))))
-    (let [{:keys [ordered-kps tx-info-kw]} (make-sub-info sub-map)]
+    (let [{:keys [ordered-sym-path-pairs tx-info-sym]} (make-sub-info sub-map)]
       (ca/go
         (try
           (let [tx-info :initial-subscription
-                df (au/<? (<make-df @*local-state nil ordered-kps tx-info-kw
-                                    tx-info (partial <get-in-sys-state this)))
+                df (au/<? (<make-df @*local-state nil ordered-sym-path-pairs
+                                    tx-info-sym tx-info
+                                    (partial <get-in-sys-state this)))
                 *last-df (atom df)
-                sub (u/sym-map update-fn ordered-kps tx-info-kw *last-df)]
+                sub (u/sym-map update-fn ordered-sym-path-pairs
+                               tx-info-sym *last-df)]
             (swap! *sub-id->sub assoc sub-id sub)
             (when df
               (update-fn df)))

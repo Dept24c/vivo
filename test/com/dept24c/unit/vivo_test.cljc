@@ -107,7 +107,15 @@
          #"Only integers, keywords, symbols, and strings are valid path keys"
          (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
 
-(deftest ^:this test-subscribe!
+(deftest test-bad-symbol-in-sub-map
+  (let [sm (vivo/state-manager)
+        bad-sub-map '{user-id [:local a-symbol-which-is-not-defined]}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"is not defined as a key in the subscription map"
+         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+
+(deftest test-subscribe!
   (au/test-async
    1000
    (ca/go
@@ -119,7 +127,9 @@
            sub-map '{id [:local :user-id]
                      name [:local :users id :name]
                      tx-info :vivo/tx-info}
-           expected {:id "123", :name "Alice", :tx-info :initial-subscription}]
+           expected '{id "123"
+                      name "Alice"
+                      tx-info :initial-subscription}]
        (au/<? (vivo/<update-state! sm [{:path [:local :users]
                                         :op :set
                                         :arg {user-id {:name name}}}
@@ -129,13 +139,13 @@
        (vivo/subscribe! sm "test-1" sub-map update-fn)
        (is (= expected (au/<? ch)))))))
 
-(deftest ^:this test-subscribe!-single-entry
+(deftest test-subscribe!-single-entry
   (au/test-async
    1000
    (ca/go
      (let [sm (vivo/state-manager)
            ch (ca/chan 1)
-           update-fn #(ca/put! ch (:id %))
+           update-fn #(ca/put! ch (% 'id))
            name "Alice"
            user-id "123"
            sub-map '{id [:local :user-id]}]
@@ -319,7 +329,7 @@
      (let [sm (vivo/state-manager)
            sub-map '{title [:local :msgs 0 :title]}
            ch (ca/chan 1)
-           update-fn #(ca/put! ch (:title %))
+           update-fn #(ca/put! ch (% 'title))
            orig-title "Plato"
            new-title "Socrates"]
        (au/<? (vivo/<update-state! sm [{:path [:local]
@@ -351,7 +361,7 @@
            sm (vivo/state-manager)
            ch (ca/chan 1)
            sub-map '{title [:local :msgs -1 :title]}
-           update-fn #(ca/put! ch (:title %))
+           update-fn #(ca/put! ch (% 'title))
            new-title "Bar"]
        (au/<? (vivo/<update-state! sm [{:path [:local]
                                         :op :set

@@ -12,7 +12,7 @@
       (clojure.lang ExceptionInfo))))
 
 (defn get-server-url []
-  "ws://localhost:12345/bsp")
+  "ws://localhost:12345/state-manager")
 
 (def user-bo #:user{:name "Bo Johnson"
                     :nickname "Bo"})
@@ -22,11 +22,6 @@
   (logging/set-log-level! :debug))
 
 (configure-logging)
-
-(vivo/def-subscriber last-msg-subscriber
-  {last-msg [:sys :state/msgs -1]}
-  [sm ch]
-  (ca/put! ch last-msg))
 
 (deftest test-subscriptions
   (au/test-async

@@ -101,7 +101,7 @@
                (check-constructor-args component-name args num-args-defined)
                (merge cstate (u/sym-map component-name state-manager sub-id
                                         *data-frame))))
-     ;; The StateManager only requests an update when something has changed
+     ;; The state manager only requests an update when something has changed
      ;; so we can just return true here
      :should-update (constantly true)
      :will-mount (fn [cstate]
@@ -129,7 +129,7 @@
          ~'< (subscribed-mixin ~cname ~num-args-defined '~sub-map)
          [& cargs#]
          (let [[cstate# ~@arglist] cargs#
-               {:keys [~@sub-syms]} (deref (:*data-frame cstate#))]
+               {:syms [~@sub-syms]} (deref (:*data-frame cstate#))]
            ~@body))
       `(rum/defc ~component-name ~'< rum/static
          [& cargs#]
