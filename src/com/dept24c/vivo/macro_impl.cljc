@@ -1,8 +1,10 @@
 (ns com.dept24c.vivo.macro-impl
   (:require
+   [clojure.core.async :as ca]
    [clojure.set :as set]
    [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.utils :as u]
+   [deercreeklabs.async-utils :as au]
    [rum.core :as rum])
   #?(:clj
      (:import
@@ -93,7 +95,7 @@
 
 (defn subscribed-mixin
   [component-name num-args-defined sub-map]
-  (let [*data-frame (atom {})]
+  (let [*data-frame (atom nil)]
     {:init (fn [cstate props]
              (let [{:rum/keys [args]} cstate
                    state-manager (first args)
@@ -106,13 +108,17 @@
      :should-update (constantly true)
      :will-mount (fn [cstate]
                    (let [{:keys [state-manager sub-id]} cstate
+                         updated-ch (ca/promise-chan)
                          update-fn (fn [data-frame]
                                      (reset! *data-frame data-frame)
+                                     #?(:clj (ca/put! updated-ch true))
                                      #?(:cljs
                                         (rum/request-render
                                          (:rum/react-component cstate))))]
                      (state/subscribe! state-manager sub-id sub-map
                                        update-fn)
+                     ;; For SSR, wait for update-fn to be called.
+                     #?(:clj (au/<?? updated-ch))
                      cstate))
      :will-unmount (fn [cstate]
                      (let [{:keys [state-manager sub-id]} cstate]
@@ -129,8 +135,9 @@
          ~'< (subscribed-mixin ~cname ~num-args-defined '~sub-map)
          [& cargs#]
          (let [[cstate# ~@arglist] cargs#
-               {:syms [~@sub-syms]} (deref (:*data-frame cstate#))]
-           ~@body))
+               {:syms [~@sub-syms] :as df#} (deref (:*data-frame cstate#))]
+           (when df# ;; Don't render anything until df is filled in
+             ~@body)))
       `(rum/defc ~component-name ~'< rum/static
          [& cargs#]
          (check-constructor-args ~cname cargs# ~num-args-defined)
