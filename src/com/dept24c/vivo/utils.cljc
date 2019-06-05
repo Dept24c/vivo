@@ -48,6 +48,44 @@
   #?(:clj (edn/read-string s)
      :cljs (reader/read-string s)))
 
+;;;;;;;;;;;;;;;;;;;; Protocols ;;;;;;;;;;;;;;;;;;;;
+
+(defprotocol IBristleconeClient
+  (<commit!
+    [this branch db-id]
+    [this branch db-id msg])
+  (<create-branch [this source-branch target-branch])
+  (<delete-branch [this branch])
+  (<get [this db-id path])
+  (<get-branches [this])
+  (<get-head [this branch])
+  (<get-key-count [this db-id path])
+  (<get-keys
+    [this db-id path]
+    [this db-id path limit]
+    [this db-id path limit offset])
+  (<get-log-count [this branch])
+  (<get-log
+    [this branch]
+    [this branch limit]
+    [this branch limit offset])
+  (<merge [this source-branch target-branch])
+  (<transact!
+    [this branch update-commands]
+    [this branch update-commands msg])
+  (<update! [this db-id update-commands]))
+
+(defprotocol IBristleconeClientInternals
+  (<fp-bytes->schema [this fp-bytes])
+  (<read-block* [this block-num])
+  (<schema->fp-bytes [this sch])
+  (<write-block* [this block-num data]))
+
+(defprotocol IBristleconeStorage
+  (<allocate-block-num [this])
+  (<read-block [this block-id])
+  (<write-block [this block-id data]))
+
 ;;;;;;;;;;;;;;;;;;;; Schemas ;;;;;;;;;;;;;;;;;;;;
 
 (def valid-ops
@@ -56,7 +94,7 @@
 
 (def op-schema (l/enum-schema :com.dept24c.vivo.utils/op
                               {:key-ns-type :none} (seq valid-ops)))
-(def store-id-schema l/string-schema)
+(def db-id-schema l/string-schema)
 
 (l/def-record-schema skeyword-schema
   [:ns (l/maybe l/string-schema)]
@@ -102,14 +140,15 @@
                       [:update-cmds (l/array-schema update-cmd-schema)]])))
 
 (l/def-record-schema get-state-arg-schema
-  [:store-id (l/maybe store-id-schema)]
+  [:db-id (l/maybe db-id-schema)]
   [:path spath-schema])
 
 (l/def-record-schema store-change-schema
-  [:store-id store-id-schema]
+  [:db-id db-id-schema]
   [:tx-info-str l/string-schema])
 
 (l/def-record-schema connect-store-arg-schema
+  [:store l/string-schema]
   [:branch l/string-schema]
   [:schema-pcf l/string-schema])
 
@@ -120,7 +159,7 @@
 (defn make-sm-server-protocol [state-schema]
   (let [values-union-schema (make-values-union-schema state-schema)
         get-state-ret-schema (l/record-schema ::get-state-ret-schema
-                                              [[:store-id store-id-schema]
+                                              [[:db-id db-id-schema]
                                                [:value values-union-schema]])]
     {:roles [:state-manager :server]
      :msgs {:update-state {:arg (make-update-state-arg-schema state-schema)
@@ -174,6 +213,22 @@
                         k)))
           [] spath))
 
+;; (def b62alphabet
+;;   [\A \B \C \D \E \F \G \H \I \J \K \L \M \N \O \P \Q \R \S \T \U \V \W \X \Y \Z
+;;    \a \b \c \d \e \f \g \h \i \j \k \l \m \n \o \p \q \r \s \t \u \v \w \x \y \z
+;;    \0 \1 \2 \3 \4 \5 \6 \7 \8 \9])
+
+;; (defn long->b62 [l]
+;;   (loop [i 0
+;;          n l
+;;          s ""]
+;;     (let [c (b62alphabet (mod n 62))
+;;           new-i (inc i)
+;;           new-n (quot n 62)
+;;           new-s (str s c)]
+;;       (if (= 10 new-i)
+;;         new-s
+;;         (recur new-i new-n new-s)))))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

@@ -1,13 +1,13 @@
 (ns com.dept24c.vivo.state-schema
   (:require
-   [deercreeklabs.lancaster :as l]))
+   [deercreeklabs.lancaster :as l]
+   [deercreeklabs.lancaster.bilt :as bilt]))
 
 (l/def-record-schema user-schema
   [:name l/string-schema]
   [:nickname l/string-schema])
 
-(l/def-int-map-schema users-schema
-  user-schema)
+(def users-schema (bilt/int-map-schema user-schema))
 
 (l/def-record-schema msg-schema
   [:user user-schema]

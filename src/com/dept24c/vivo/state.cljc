@@ -26,7 +26,7 @@
   (subscribe! [this sub-id sub-map update-fn])
   (unsubscribe! [this sub-id])
   (handle-store-changed [this arg])
-  (<get-in-sys-state [this store-id path]))
+  (<get-in-sys-state [this db-id path]))
 
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
@@ -204,7 +204,7 @@
   (eval-math-cmd state cmd mod))
 
 (defn <make-df
-  [local-state store-id ordered-sym-path-pairs tx-info-sym tx-info
+  [local-state db-id ordered-sym-path-pairs tx-info-sym tx-info
    <get-in-sys-state]
   (au/go
     (try
@@ -224,7 +224,7 @@
                                     path)
                 v (case head
                     :local (:val (get-in-state local-state tail))
-                    :sys (au/<? (<get-in-sys-state store-id tail)))
+                    :sys (au/<? (<get-in-sys-state db-id tail)))
                 new-df (assoc df sym v)]
             (if (= last-i i)
               new-df
@@ -236,11 +236,11 @@
           false
           (throw e))))))
 
-(defn <notify-sub [local-state store-id tx-info log-error <get-in-sys-state sub]
+(defn <notify-sub [local-state db-id tx-info log-error <get-in-sys-state sub]
   (ca/go
     (try
       (let [{:keys [update-fn ordered-sym-path-pairs tx-info-sym *last-df]} sub
-            new-df (au/<? (<make-df local-state store-id ordered-sym-path-pairs
+            new-df (au/<? (<make-df local-state db-id ordered-sym-path-pairs
                                     tx-info-sym tx-info <get-in-sys-state))]
         (when (and new-df (not= @*last-df new-df))
           (reset! *last-df new-df)
@@ -264,7 +264,7 @@
                     :update-cmds update-cmds}
             ret (au/<? (cc/<send-msg capsule-client :update-state us-arg
                                      update-state-timeout-ms))]
-        (:store-id ret))
+        (:db-id ret))
       (catch #?(:clj Exception :cljs js/Error) e
         (if-not (str/includes? (u/ex-msg e) "timed out")
           (throw e)
@@ -329,15 +329,15 @@
 (defrecord StateManager [capsule-client sys-state-schema log-info log-error
                          sys-state-cache *local-state *sub-id->sub]
   IState
-  (<get-in-sys-state [this store-id* path]
+  (<get-in-sys-state [this db-id* path]
     (au/go
-      (or (and store-id* (sr/get sys-state-cache [store-id* path]))
-          (let [arg {:store-id store-id*
+      (or (and db-id* (sr/get sys-state-cache [db-id* path]))
+          (let [arg {:db-id db-id*
                      :path (u/path->spath path)}
                 ret (cc/<send-msg capsule-client :get-state arg)
-                {:keys [store-id value]} ret
+                {:keys [db-id value]} ret
                 v (u/value-rec->edn sys-state-schema path value)]
-            (sr/put sys-state-cache [store-id path] v)
+            (sr/put sys-state-cache [db-id path] v)
             v))))
 
   (update-state! [this update-cmds tx-info cb]
@@ -347,18 +347,18 @@
     (let [{:keys [local-cmds sys-cmds]} (split-updates update-cmds)]
       (ca/go
         (try
-          ;; store-id will be nil when there are no updates or if
+          ;; db-id will be nil when there are no updates or if
           ;; timeout <do-sys-updates times out
-          (let [store-id (when (seq sys-cmds)
-                           (au/<? (<do-sys-updates
-                                   capsule-client log-info tx-info
-                                   sys-state-schema sys-cmds)))
+          (let [db-id (when (seq sys-cmds)
+                        (au/<? (<do-sys-updates
+                                capsule-client log-info tx-info
+                                sys-state-schema sys-cmds)))
                 local-state (if (seq local-cmds)
                               (swap! *local-state
                                      #(reduce eval-cmd % local-cmds))
                               @*local-state)]
             (doseq [sub (vals @*sub-id->sub)]
-              (<notify-sub local-state store-id tx-info log-error
+              (<notify-sub local-state db-id tx-info log-error
                            (partial <get-in-sys-state this) sub))
             (when cb
               (cb true)))
@@ -370,11 +370,11 @@
     nil)
 
   (handle-store-changed [this arg]
-    (let [{:keys [store-id tx-info-str]} arg
+    (let [{:keys [db-id tx-info-str]} arg
           local-state @*local-state
           tx-info (u/str->edn tx-info-str)]
       (doseq [sub (vals @*sub-id->sub)]
-        (<notify-sub local-state store-id tx-info log-error
+        (<notify-sub local-state db-id tx-info log-error
                      (partial <get-in-sys-state this) sub))))
 
   (subscribe! [this sub-id sub-map update-fn]
