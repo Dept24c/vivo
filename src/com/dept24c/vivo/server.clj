@@ -52,7 +52,7 @@
       (u/sym-map db-id value))))
 
 (defn <handle-update-state
-  [state-schema *conn-id->info *db-id->state *db-id-num arg metadata]
+  [ep state-schema *conn-id->info *db-id->state *db-id-num arg metadata]
   (au/go
     (let [{:keys [tx-info-str]} arg
           {:keys [conn-id]} metadata
@@ -67,9 +67,11 @@
           old-db-id (u/long->b62 @*db-id-num)
           db-id (u/long->b62 (swap! *db-id-num inc))
           old-state (@*db-id->state old-db-id)
-          new-state (reduce state/eval-cmd old-state update-cmds)]
+          new-state (reduce state/eval-cmd old-state update-cmds)
+          change-info (u/sym-map db-id tx-info-str)]
       (swap! *db-id->state assoc db-id new-state)
-      (u/sym-map db-id tx-info-str))))
+      (ep/send-msg-to-all-conns ep :store-changed change-info)
+      change-info)))
 
 (defn handle-connect-store [state-schema *conn-id->info arg metadata]
   (let [{:keys [conn-id]} metadata
@@ -112,7 +114,7 @@
      (ep/set-handler ep :login-subject
                      (partial handle-login-subject *conn-id->info))
      (ep/set-handler ep :update-state
-                     (partial <handle-update-state state-schema *conn-id->info
+                     (partial <handle-update-state ep state-schema *conn-id->info
                               *db-id->state *db-id-num))
      (cs/start capsule-server)
      (log-info (str "Vivo server started on port " port "."))
