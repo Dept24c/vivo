@@ -42,11 +42,6 @@
                  "keywords, symbols, and strings are valid path keys.")
             (u/sym-map k path)))))
 
-(defn throw-bad-path-symbol [path sym sub-map]
-  )
-
-
-
 (defn split-updates [update-cmds]
   (reduce (fn [acc cmd]
             (let [{:keys [path op]} cmd
@@ -255,7 +250,7 @@
     (try
       (let [update-cmds (reduce
                          (fn [acc {:keys [path op arg]}]
-                           (conj acc {:path (u/path->spath path)
+                           (conj acc {:path path
                                       :op op
                                       :arg (u/edn->value-rec sys-state-schema
                                                              path arg)}))
@@ -333,8 +328,8 @@
     (au/go
       (or (and db-id* (sr/get sys-state-cache [db-id* path]))
           (let [arg {:db-id db-id*
-                     :path (u/path->spath path)}
-                ret (cc/<send-msg capsule-client :get-state arg)
+                     :path path}
+                ret (au/<? (cc/<send-msg capsule-client :get-state arg))
                 {:keys [db-id value]} ret
                 v (u/value-rec->edn sys-state-schema path value)]
             (sr/put sys-state-cache [db-id path] v)
@@ -347,8 +342,8 @@
     (let [{:keys [local-cmds sys-cmds]} (split-updates update-cmds)]
       (ca/go
         (try
-          ;; db-id will be nil when there are no updates or if
-          ;; timeout <do-sys-updates times out
+          ;; db-id will be nil when there are no sys updates or if
+          ;; <do-sys-updates times out
           (let [db-id (when (seq sys-cmds)
                         (au/<? (<do-sys-updates
                                 capsule-client log-info tx-info
@@ -416,7 +411,7 @@
     nil))
 
 (defn make-capsule-client
-  [get-server-url sys-state-schema sys-state-store-branch]
+  [get-server-url sys-state-schema sys-state-store-name sys-state-store-branch]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in state-manager "
                          "constructor.")
@@ -430,17 +425,18 @@
                                      :subject-secret ""})
         client (cc/client get-server-url get-credentials
                           protocol :state-manager)]
-    (cc/send-msg client :connect-store {:branch sys-state-store-branch
-                                        :schema-pcf (l/pcf sys-state-schema)})
+    (cc/send-msg client :connect-store {:store-name sys-state-store-name
+                                        :branch sys-state-store-branch})
     client))
 
 (defn state-manager [opts]
   (let [opts* (merge default-sm-opts opts)
-        {:keys [initial-local-state get-server-url
-                log-error log-info sys-state-cache-size
-                sys-state-schema sys-state-store-branch]} opts*
+        {:keys [initial-local-state get-server-url log-error
+                log-info sys-state-cache-size sys-state-schema
+                sys-state-store-name sys-state-store-branch]} opts*
         capsule-client (when get-server-url
                          (make-capsule-client get-server-url sys-state-schema
+                                              sys-state-store-name
                                               sys-state-store-branch))
         *local-state (atom initial-local-state)
         *sub-id->sub (atom {})

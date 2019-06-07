@@ -6,8 +6,9 @@
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
+   [deercreeklabs.lancaster.bilt :as bilt]
    [deercreeklabs.stockroom :as sr]
-   #?(:clj [puget.printer :refer [cprint]]))
+   #?(:clj [puget.printer :refer [cprint cprint-str]]))
   #?(:cljs
      (:require-macros
       [com.dept24c.vivo.utils :refer [sym-map]])))
@@ -23,8 +24,12 @@
   (zipmap (map keyword syms) syms))
 
 (defn pprint [x]
-  #?(:clj (cprint x)
+  #?(:clj (.write *out* (cprint-str x))
      :cljs (pprint/pprint x)))
+
+(defn pprint-str [x]
+  #?(:clj (cprint-str x)
+     :cljs (with-out-str (pprint/pprint x))))
 
 (defn ex-msg [e]
   #?(:clj (.toString ^Exception e)
@@ -96,17 +101,13 @@
                               {:key-ns-type :none} (seq valid-ops)))
 (def db-id-schema l/string-schema)
 
-(l/def-record-schema skeyword-schema
-  [:ns (l/maybe l/string-schema)]
-  [:name l/string-schema])
-
-(l/def-union-schema spath-item-schema
-  skeyword-schema
+(l/def-union-schema path-item-schema
+  bilt/keyword-schema
   l/string-schema
   l/int-schema)
 
-(l/def-array-schema spath-schema
-  spath-item-schema)
+(l/def-array-schema path-schema
+  path-item-schema)
 
 (defn long->non-neg-str [l]
   #?(:cljs (if (.isNegative l)
@@ -122,60 +123,66 @@
 (defn make-value-rec-schema [value-schema]
   (l/record-schema (keyword "com.dept24c.vivo.utils"
                             (schema->value-rec-name value-schema))
-                   [[:v value-schema]]))
+                   [[:v (l/maybe value-schema)]]))
 
 (defn make-values-union-schema [state-schema]
   (l/union-schema (map make-value-rec-schema (l/sub-schemas state-schema))))
 
 (defn make-update-cmd-schema [state-schema]
   (l/record-schema ::update-cmd
-                   [[:path spath-schema]
+                   {:key-ns-type :none}
+                   [[:path path-schema]
                     [:op op-schema]
                     [:arg (l/maybe (make-values-union-schema state-schema))]]))
 
 (defn make-update-state-arg-schema [state-schema]
   (let [update-cmd-schema (make-update-cmd-schema state-schema)]
     (l/record-schema ::update-state-arg
+                     {:key-ns-type :none}
                      [[:tx-info-str (l/maybe l/string-schema)]
                       [:update-cmds (l/array-schema update-cmd-schema)]])))
 
 (l/def-record-schema get-state-arg-schema
+  {:key-ns-type :none}
   [:db-id (l/maybe db-id-schema)]
-  [:path spath-schema])
+  [:path path-schema])
 
 (l/def-record-schema store-change-schema
+  {:key-ns-type :none}
   [:db-id db-id-schema]
   [:tx-info-str l/string-schema])
 
 (l/def-record-schema connect-store-arg-schema
-  [:store l/string-schema]
-  [:branch l/string-schema]
-  [:schema-pcf l/string-schema])
+  {:key-ns-type :none}
+  [:store-name l/string-schema]
+  [:branch l/string-schema])
 
 (l/def-record-schema login-subject-arg-schema
-  [:id l/string-schema]
+  {:key-ns-type :none}
+  [:subject-id l/string-schema]
   [:secret l/string-schema])
 
 (defn make-sm-server-protocol [state-schema]
   (let [values-union-schema (make-values-union-schema state-schema)
         get-state-ret-schema (l/record-schema ::get-state-ret-schema
+                                              {:key-ns-type :none}
                                               [[:db-id db-id-schema]
                                                [:value values-union-schema]])]
     {:roles [:state-manager :server]
-     :msgs {:update-state {:arg (make-update-state-arg-schema state-schema)
-                           :ret (l/maybe store-change-schema)
-                           :sender :state-manager}
+     :msgs {:connect-store {:arg connect-store-arg-schema
+                            :ret l/boolean-schema
+                            :sender :state-manager}
             :get-state {:arg get-state-arg-schema
                         :ret get-state-ret-schema
                         :sender :state-manager}
-            :connect-store {:arg connect-store-arg-schema
-                            :ret l/boolean-schema
-                            :sender :state-manager}
             :login-subject {:arg login-subject-arg-schema
                             :ret l/boolean-schema
                             :sender :state-manager}
             :store-changed {:arg store-change-schema
-                            :sender :server}}}))
+                            :sender :server}
+            :update-state {:arg (make-update-state-arg-schema state-schema)
+                           :ret (l/maybe store-change-schema)
+                           :sender :state-manager}}}))
 
 (def schema-at-path (sr/memoize-sr l/schema-at-path 100))
 
@@ -191,44 +198,22 @@
 (defn value-rec->edn [state-schema path value-rec]
   (get value-rec (value-rec-key state-schema path)))
 
-(defn kw->skeyword [kw]
-  #:skeyword{:ns (namespace kw)
-             :name (name kw)})
+(def b62alphabet
+  [\A \B \C \D \E \F \G \H \I \J \K \L \M \N \O \P \Q \R \S \T \U \V \W \X \Y \Z
+   \a \b \c \d \e \f \g \h \i \j \k \l \m \n \o \p \q \r \s \t \u \v \w \x \y \z
+   \0 \1 \2 \3 \4 \5 \6 \7 \8 \9])
 
-(defn skeyword->kw [skw]
-  (let [{:skeyword/keys [ns name]} skw]
-    (keyword ns name)))
-
-(defn path->spath [path]
-  (reduce (fn [acc k]
-            (conj acc (if (keyword? k)
-                        (kw->skeyword k)
-                        k)))
-          [] path))
-
-(defn spath->path [spath]
-  (reduce (fn [acc k]
-            (conj acc (if (map? k)
-                        (skeyword->kw k)
-                        k)))
-          [] spath))
-
-;; (def b62alphabet
-;;   [\A \B \C \D \E \F \G \H \I \J \K \L \M \N \O \P \Q \R \S \T \U \V \W \X \Y \Z
-;;    \a \b \c \d \e \f \g \h \i \j \k \l \m \n \o \p \q \r \s \t \u \v \w \x \y \z
-;;    \0 \1 \2 \3 \4 \5 \6 \7 \8 \9])
-
-;; (defn long->b62 [l]
-;;   (loop [i 0
-;;          n l
-;;          s ""]
-;;     (let [c (b62alphabet (mod n 62))
-;;           new-i (inc i)
-;;           new-n (quot n 62)
-;;           new-s (str s c)]
-;;       (if (= 10 new-i)
-;;         new-s
-;;         (recur new-i new-n new-s)))))
+(defn long->b62 [l]
+  (loop [i 0
+         n l
+         s ""]
+    (let [c (b62alphabet (mod n 62))
+          new-i (inc i)
+          new-n (quot n 62)
+          new-s (str s c)]
+      (if (= 10 new-i)
+        new-s
+        (recur new-i new-n new-s)))))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

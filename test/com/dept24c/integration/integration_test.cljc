@@ -16,6 +16,7 @@
 
 (def sm-opts {:get-server-url get-server-url
               :sys-state-schema ss/state-schema
+              :sys-state-store-name "vivo-test"
               :sys-state-store-branch "integration-test"})
 
 (def user-bo #:user{:name "Bo Johnson"
@@ -48,14 +49,21 @@
                     :op :insert-after
                     :arg msg2}]))
        (vivo/subscribe! sm "test-sub-all-msgs" '{msgs [:sys :state/msgs]}
-                        #(ca/put! all-msgs-ch (% 'msgs)))
+                        (fn [df]
+                          (if-let [msgs (df 'msgs)]
+                            (ca/put! all-msgs-ch msgs)
+                            (ca/close! all-msgs-ch))))
        (vivo/subscribe! sm "test-sub-last-msg" '{last-msg [:sys :state/msgs -1]}
-                        #(ca/put! last-msg-ch (% 'last-msg)))
+                        (fn [df]
+                          (if-let [last-msg (df 'last-msg)]
+                            (ca/put! last-msg-ch last-msg)
+                            (ca/close! last-msg-ch))))
        (is (= msg2 (au/<? last-msg-ch)))
        (is (= 2 (count (au/<? all-msgs-ch))))
-       (vivo/update-state! sm [{:path [:sys :state/msgs -1]
-                                :op :remove
-                                :arg msg}])
+       (au/<? (vivo/update-state! sm [{:path [:sys :state/msgs -1]
+                                       :op :remove
+                                       :arg msg}]))
        (is (= msg (au/<? last-msg-ch)))
        (is (= 1 (count (au/<? all-msgs-ch))))
-       (bspi/shutdown bsp)))))
+       (vivo/unsubscribe! sm "test-sub-all-msgs")
+       (vivo/unsubscribe! sm "test-sub-last-msg")))))
