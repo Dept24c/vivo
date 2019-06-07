@@ -15,4 +15,5 @@
 
 (l/def-record-schema state-schema
   [:msgs (l/array-schema msg-schema)]
-  [:users users-schema])
+  [:users users-schema]
+  [:app-name l/string-schema])

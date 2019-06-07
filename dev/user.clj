@@ -10,6 +10,11 @@
 
 (def stop-server nil)
 
+(def test-initial-sys-state
+  #:state{:msgs []
+          :users {}
+          :app-name "test-app"})
+
 (defn configure-logging []
   (logging/add-log-reporter! :println logging/println-reporter)
   (logging/set-log-level! :debug))
@@ -27,7 +32,9 @@
   ([port]
    (configure-logging)
    (alter-var-root #'stop-server
-                   (constantly (server/vivo-server port ss/state-schema)))))
+                   (constantly (server/vivo-server port ss/state-schema
+                                                   {:initial-sys-state
+                                                    test-initial-sys-state})))))
 
 ;; Note: This has problems due to not having socket address reuse
 (defn restart []

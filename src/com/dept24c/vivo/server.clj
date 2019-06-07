@@ -64,8 +64,9 @@
           update-cmds (map xf-cmd (:update-cmds arg))
           ;; TODO: Get the latest db-id from the selected branch
           ;; Handle CAS
+          old-db-id (u/long->b62 @*db-id-num)
           db-id (u/long->b62 (swap! *db-id-num inc))
-          old-state (@*db-id->state db-id)
+          old-state (@*db-id->state old-db-id)
           new-state (reduce state/eval-cmd old-state update-cmds)]
       (swap! *db-id->state assoc db-id new-state)
       (u/sym-map db-id tx-info-str))))
@@ -89,7 +90,7 @@
   ([port state-schema]
    (vivo-server port state-schema {}))
   ([port state-schema opts]
-   (let [{:keys [log-info log-error
+   (let [{:keys [log-info log-error initial-sys-state
                  handle-http http-timeout-ms]} (merge default-opts opts)
          protocol (u/make-sm-server-protocol state-schema)
          authenticator (constantly true)
@@ -99,8 +100,10 @@
          *conn-id->info (atom {})
 
          ;; TODO: Remove these when bristlecone v1 is implemented
-         *db-id->state (atom {})
-         *db-id-num (atom -1)]
+         initial-db-id-num 0
+         *db-id-num (atom initial-db-id-num)
+         db-id (u/long->b62 initial-db-id-num)
+         *db-id->state (atom {db-id initial-sys-state})]
      (ep/set-handler ep :connect-store
                      (partial handle-connect-store state-schema *conn-id->info))
      (ep/set-handler ep :get-state

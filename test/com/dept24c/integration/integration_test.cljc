@@ -37,7 +37,8 @@
                      :text "A msg"}
            msg2 (assoc msg :msg/text "This is great")
            last-msg-ch (ca/chan 1)
-           all-msgs-ch (ca/chan 1)]
+           all-msgs-ch (ca/chan 1)
+           app-name-ch (ca/chan 1)]
        (au/<? (vivo/<update-state!
                sm [{:path [:sys :state/msgs]
                     :op :set
@@ -48,6 +49,12 @@
                    {:path [:sys :state/msgs -1]
                     :op :insert-after
                     :arg msg2}]))
+       (vivo/subscribe! sm "test-sub-app-name"
+                        '{app-name [:sys :state/app-name]}
+                        (fn [df]
+                          (if-let [app-name (df 'app-name)]
+                            (ca/put! app-name-ch app-name)
+                            (ca/close! all-msgs-ch))))
        (vivo/subscribe! sm "test-sub-all-msgs" '{msgs [:sys :state/msgs]}
                         (fn [df]
                           (if-let [msgs (df 'msgs)]
@@ -58,6 +65,7 @@
                           (if-let [last-msg (df 'last-msg)]
                             (ca/put! last-msg-ch last-msg)
                             (ca/close! last-msg-ch))))
+       (is (= "test-app" (au/<? app-name-ch)))
        (is (= msg2 (au/<? last-msg-ch)))
        (is (= 2 (count (au/<? all-msgs-ch))))
        (au/<? (vivo/update-state! sm [{:path [:sys :state/msgs -1]
