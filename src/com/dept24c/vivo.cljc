@@ -43,3 +43,29 @@
          cb #(ca/put! ch %)]
      (state/update-state! sm update-commands tx-info cb)
      ch)))
+
+(defn log-in!
+  ([sm identifier secret]
+   (state/log-in! sm identifier secret nil))
+  ([sm identifier secret cb]
+   (state/log-in! sm identifier secret cb)))
+
+(defn <log-in!
+  [sm identifier secret]
+  (let [ch (ca/chan)
+        cb #(ca/put! ch %)]
+    (state/log-in! sm identifier secret cb)
+    ch))
+
+(defn log-out!
+  ([sm]
+   (state/log-out! sm nil))
+  ([sm cb]
+   (state/log-out! sm cb)))
+
+(defn <log-out!
+  [sm]
+  (let [ch (ca/chan)
+        cb #(ca/put! ch %)]
+    (state/log-out! sm cb)
+    ch))

@@ -93,13 +93,14 @@
 
 ;;;;;;;;;;;;;;;;;;;; Schemas ;;;;;;;;;;;;;;;;;;;;
 
+(def db-id-schema l/string-schema)
+(def subject-id-schema l/string-schema)
 (def valid-ops
   #{:set :remove :insert-before :insert-after
     :plus :minus :multiply :divide :mod})
 
 (def op-schema (l/enum-schema :com.dept24c.vivo.utils/op
                               {:key-ns-type :none} (seq valid-ops)))
-(def db-id-schema l/string-schema)
 
 (l/def-union-schema path-item-schema
   bilt/keyword-schema
@@ -157,7 +158,7 @@
   [:store-name l/string-schema]
   [:branch l/string-schema])
 
-(l/def-record-schema authenticate-arg-schema
+(l/def-record-schema log-in-arg-schema
   {:key-ns-type :none}
   [:identifier l/string-schema]
   [:secret l/string-schema])
@@ -171,17 +172,22 @@
                                [:is-unauthorized (l/maybe l/boolean-schema)]
                                [:value (l/maybe values-union-schema)]])]
     {:roles [:state-manager :server]
-     :msgs {:authenticate {:arg authenticate-arg-schema
-                           :ret l/boolean-schema
-                           :sender :state-manager}
-            :connect-store {:arg connect-store-arg-schema
+     :msgs {:connect-store {:arg connect-store-arg-schema
                             :ret l/boolean-schema
                             :sender :state-manager}
             :get-state {:arg get-state-arg-schema
                         :ret get-state-ret-schema
                         :sender :state-manager}
+            :log-in {:arg log-in-arg-schema
+                     :ret l/boolean-schema
+                     :sender :state-manager}
+            :log-out {:arg l/null-schema
+                      :ret l/boolean-schema
+                      :sender :state-manager}
             :store-changed {:arg store-change-schema
                             :sender :server}
+            :subject-id-changed {:arg (l/maybe subject-id-schema)
+                                 :sender :server}
             :update-state {:arg (make-update-state-arg-schema state-schema)
                            :ret l/boolean-schema
                            :sender :state-manager}}}))
@@ -216,6 +222,43 @@
       (if (= 10 new-i)
         new-s
         (recur new-i new-n new-s)))))
+
+(defn get-undefined-syms [sub-map]
+  (let [defined-syms (set (keys sub-map))]
+    (vec (reduce-kv (fn [acc sym v]
+                      (if (sequential? v)
+                        (reduce (fn [acc* k]
+                                  (if-not (symbol? k)
+                                    acc*
+                                    (if (defined-syms k)
+                                      acc*
+                                      (conj acc* k))))
+                                acc v)
+                        (if (#{:vivo/tx-info :vivo/subject-id} v)
+                          acc
+                          (throw (ex-info
+                                  (str "Bad path. Must be a sequence or "
+                                       "one of the special vivo keywords ("
+                                       ":vivo/tx-info or :vivo/subject-id).")
+                                  (sym-map sym v sub-map))))))
+                    #{} sub-map))))
+
+(defn check-sub-map
+  [subscriber-name subscriber-type sub-map]
+  (when-not (map? sub-map)
+    (throw (ex-info "The sub-map parameter must be a map."
+                    (sym-map sub-map))))
+  (when-not (pos? (count sub-map))
+    (throw (ex-info "The sub-map parameter must contain at least one entry."
+                    (sym-map sub-map))))
+  (let [undefined-syms (get-undefined-syms sub-map)]
+    (when (seq undefined-syms)
+      (throw
+       (ex-info
+        (str "Undefined symbol(s) in subscription map for " subscriber-type
+             " " subscriber-name "`. These symbols are used in subscription "
+             "keypaths, but are not defined: " undefined-syms)
+        (sym-map undefined-syms sub-map))))))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

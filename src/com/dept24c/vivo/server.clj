@@ -25,7 +25,7 @@
   {:authentication-fn (fn [identifier secret]
                         nil) ;; return subject-id or nil
    :authorization-fn (fn [subject-id path]
-                       true) ;; return true or false
+                       false) ;; return true or false
    :handle-http default-health-http-handler
    :http-timeout-ms 60000
    :log-info println
@@ -58,7 +58,7 @@
         (throw-no-store-connected conn-id :get-state))
       (if-not (authorization-fn subject-id path)
         {:db-id db-id
-         :is-forbidden true}
+         :is-unauthorized true}
         (let [db-id* (or db-id
                          ;; TODO: Get the latest db-id from the selected branch
                          (u/long->b62 @*db-id-num))
@@ -98,14 +98,23 @@
           (ep/send-msg-to-all-conns ep :store-changed change-info)
           true)))))
 
-(defn <handle-authenticate [authentication-fn *conn-id->info arg metadata]
+(defn <handle-log-in [ep authentication-fn *conn-id->info arg metadata]
   (au/go
     (let [{:keys [identifier secret]} arg
           {:keys [conn-id]} metadata
           subject-id (authentication-fn identifier secret)]
       (when subject-id
-        (swap! *conn-id->info update conn-id assoc :subject-id subject-id))
+        (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
+        (ep/send-msg ep conn-id :subject-id-changed subject-id))
       (boolean subject-id))))
+
+(defn <handle-log-out [ep *conn-id->info arg metadata]
+  (au/go
+    (let [{:keys [conn-id]} metadata
+          subject-id nil]
+      (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
+      (ep/send-msg ep conn-id :subject-id-changed subject-id)
+      true)))
 
 (defn vivo-server
   ([port state-schema]
@@ -126,9 +135,11 @@
          *db-id-num (atom initial-db-id-num)
          db-id (u/long->b62 initial-db-id-num)
          *db-id->state (atom {db-id initial-sys-state})]
-     (ep/set-handler ep :authenticate
-                     (partial <handle-authenticate authentication-fn
+     (ep/set-handler ep :log-in
+                     (partial <handle-log-in ep authentication-fn
                               *conn-id->info))
+     (ep/set-handler ep :log-out
+                     (partial <handle-log-out ep *conn-id->info))
      (ep/set-handler ep :connect-store
                      (partial handle-connect-store state-schema *conn-id->info))
      (ep/set-handler ep :get-state

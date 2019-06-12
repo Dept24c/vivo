@@ -30,17 +30,17 @@
        #"Bad argument to component"
        (macro-impl/parse-def-component-args 'foo nil))))
 
-(deftest test-parse-def-component-args-no-sm
+(deftest test-check-arglist-no-sm
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"First argument must be `sm`"
-       (macro-impl/parse-def-component-args 'foo [{} []]))))
+       (macro-impl/check-arglist 'foo '[]))))
 
-(deftest test-parse-def-component-args-no-sm-2
+(deftest test-check-arglist-no-sm-2
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"First argument must be `sm`"
-       (macro-impl/parse-def-component-args 'foo [{} '[x]]))))
+       (macro-impl/check-arglist 'foo '[x]))))
 
 (deftest test-check-arglist
   (is (thrown-with-msg?
@@ -48,19 +48,17 @@
        #"The argument list must be a vector"
        (macro-impl/check-arglist 'foo '()))))
 
-(deftest test-check-subscription-args-repeat-sym
+(deftest test-repeat-symbol
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"Illegal repeated symbol"
-       (macro-impl/check-subscription-args
-        'foo "component" '{a [:b]} '[sm a]))))
+       (macro-impl/parse-def-component-args 'foo ['{a [:b]} '[sm a]]))))
 
-(deftest test-check-subscription-args-undefined-sym
+(deftest test-check-sub-map-undefined-sym
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"Undefined symbol\(s\) in subscription map"
-       (macro-impl/check-subscription-args
-        'foo "component" '{a [:b c]} '[sm]))))
+       (u/check-sub-map 'foo "component" '{a [:b c]}))))
 
 (deftest test-check-constructor-args
   (is (thrown-with-msg?
@@ -112,7 +110,7 @@
         bad-sub-map '{user-id [:local a-symbol-which-is-not-defined]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"is not defined as a key in the subscription map"
+         #"Undefined symbol.* in subscription map"
          (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
 
 (deftest test-subscribe!

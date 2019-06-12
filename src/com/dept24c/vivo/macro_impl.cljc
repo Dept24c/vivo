@@ -26,40 +26,6 @@
                      " (the state manager). Got: `" first-arg "`.")
                 (u/sym-map component-name first-arg arglist))))))
 
-(defn get-undefined-syms [subscription-map]
-  (let [defined-syms (set (keys subscription-map))]
-    (vec (reduce-kv (fn [acc sym ks]
-                      (reduce (fn [acc* k]
-                                (if-not (symbol? k)
-                                  acc*
-                                  (if (defined-syms k)
-                                    acc*
-                                    (conj acc* k))))
-                              acc ks))
-                    #{} subscription-map))))
-
-(defn check-subscription-args
-  [subscriber-name subscriber-type subscription-map arglist]
-  (check-arglist subscriber-name arglist)
-  (let [repeated-syms (vec (set/intersection (set (keys subscription-map))
-                                             (set arglist)))]
-    (when (seq repeated-syms)
-      (throw
-       (ex-info
-        (str "Illegal repeated symbol(s) in " subscriber-type " "
-             subscriber-name "`. The same symbol may not appear in "
-             "both the subscription map and the argument list. Repeated "
-             "symbols: " repeated-syms)
-        (u/sym-map repeated-syms subscription-map arglist))))
-    (let [undefined-syms (get-undefined-syms subscription-map)]
-      (when (seq undefined-syms)
-        (throw
-         (ex-info
-          (str "Undefined symbol(s) in subscription map for " subscriber-type
-               " " subscriber-name "`. These symbols are used in subscription "
-               "keypaths, but are not defined: " undefined-syms)
-          (u/sym-map undefined-syms subscription-map)))))))
-
 (defn check-constructor-args [subscriber-name args num-args-defined]
   (let [num-args-passed (count args)]
     (when-not (= num-args-defined num-args-passed)
@@ -72,6 +38,7 @@
 
 (defn parse-def-component-args [component-name args]
   (let [[first-arg second-arg & others] args]
+
     (cond
       (sequential? first-arg)
       (do
@@ -80,8 +47,19 @@
 
       (map? first-arg)
       (do
-        (check-subscription-args component-name "component"
-                                 first-arg second-arg)
+        (let [[sub-map arglist] [first-arg second-arg]
+              repeated-syms (vec (set/intersection (set (keys sub-map))
+                                                   (set arglist)))]
+          (check-arglist component-name arglist)
+          (u/check-sub-map component-name "component" sub-map)
+          (when (seq repeated-syms)
+            (throw
+             (ex-info
+              (str "Illegal repeated symbol(s) in component "
+                   component-name "`. The same symbol may not appear in "
+                   "both the subscription map and the argument list. Repeated "
+                   "symbols: " repeated-syms)
+              (u/sym-map repeated-syms sub-map)))))
         [first-arg second-arg others])
 
       :else

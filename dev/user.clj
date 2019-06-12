@@ -15,6 +15,9 @@
           :users {}
           :app-name "test-app"})
 
+(defn authorized? [subject-id path]
+  (not= :secret (first path)))
+
 (defn configure-logging []
   (logging/add-log-reporter! :println logging/println-reporter)
   (logging/set-log-level! :debug))
@@ -31,10 +34,12 @@
    (start default-server-port))
   ([port]
    (configure-logging)
-   (alter-var-root #'stop-server
-                   (constantly (server/vivo-server port ss/state-schema
-                                                   {:initial-sys-state
-                                                    test-initial-sys-state})))))
+   (let [opts {:initial-sys-state test-initial-sys-state
+               :authentication-fn (constantly "user-a")
+               :authorization-fn authorized?}]
+     (alter-var-root #'stop-server
+                     (constantly (server/vivo-server port ss/state-schema
+                                                     opts))))))
 
 ;; Note: This has problems due to not having socket address reuse
 (defn restart []

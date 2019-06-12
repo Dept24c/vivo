@@ -14,6 +14,7 @@
   [:text l/string-schema])
 
 (l/def-record-schema state-schema
+  [:app-name l/string-schema]
   [:msgs (l/array-schema msg-schema)]
-  [:users users-schema]
-  [:app-name l/string-schema])
+  [:secret l/string-schema]
+  [:users users-schema])

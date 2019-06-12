@@ -75,3 +75,36 @@
        (is (= 1 (count (au/<? all-msgs-ch))))
        (vivo/unsubscribe! sm "test-sub-all-msgs")
        (vivo/unsubscribe! sm "test-sub-last-msg")))))
+
+(deftest test-authentication
+  (au/test-async
+   10000
+   (ca/go
+     (let [sm (vivo/state-manager sm-opts)
+           df-ch (ca/chan)]
+       (vivo/subscribe! sm "test-auth"
+                        '{subject-id :vivo/subject-id}
+                        (fn [df]
+                          (ca/put! df-ch df)))
+       (is (= {'subject-id nil} (au/<? df-ch)))
+       (vivo/log-in! sm "x" "x")
+       (is (= {'subject-id "user-a"} (au/<? df-ch)))
+       (vivo/log-out! sm)
+       (is (= {'subject-id nil} (au/<? df-ch)))
+       (vivo/unsubscribe! sm "test-auth")))))
+
+(deftest test-authorization
+  (au/test-async
+   10000
+   (ca/go
+     (let [sm (vivo/state-manager sm-opts)
+           df-ch (ca/chan)
+           expected-df {'app-name "test-app"
+                        'secret :vivo/unauthorized}]
+       (vivo/subscribe! sm "test-authz"
+                        '{app-name [:sys :state/app-name]
+                          secret [:sys :secret]}
+                        (fn [df]
+                          (ca/put! df-ch df)))
+       (is (= expected-df (au/<? df-ch)))
+       (vivo/unsubscribe! sm "test-authz")))))

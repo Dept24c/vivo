@@ -20,10 +20,13 @@
    :state-cache-size 1000})
 
 (defprotocol IState
-  (update-state! [this update-cmds tx-info cb])
+  (handle-store-changed [this arg metadata])
+  (handle-subject-id-changed [this subject-id metadata])
+  (log-in! [this identifier secret cb])
+  (log-out! [this cb])
   (subscribe! [this sub-id sub-map update-fn])
   (unsubscribe! [this sub-id])
-  (handle-store-changed [this arg metadata])
+  (update-state! [this update-cmds tx-info cb])
   (<get-in-sys-state [this db-id path]))
 
 (defn throw-bad-path-root [path]
@@ -197,31 +200,34 @@
   (eval-math-cmd state cmd mod))
 
 (defn <make-df
-  [local-state db-id ordered-sym-path-pairs tx-info-sym tx-info
-   <get-in-sys-state]
+  [local-state db-id ordered-sym-path-pairs tx-info-sym tx-info subject-id-sym
+   subject-id <get-in-sys-state]
   (au/go
     (try
-      (let [last-i (dec (count ordered-sym-path-pairs))]
-        (loop [df (if tx-info-sym
-                    {tx-info-sym tx-info}
-                    {})
-               i 0]
-          (let [[sym path] (nth ordered-sym-path-pairs i)
-                [head & tail] (mapv #(if-not (symbol? %)
-                                       %
-                                       (or (df %)
-                                           (throw
-                                            (ex-info "Path value not found."
-                                                     {:v %
-                                                      :type :no-path-val}))))
-                                    path)
-                v (case head
-                    :local (:val (get-in-state local-state tail))
-                    :sys (au/<? (<get-in-sys-state db-id tail)))
-                new-df (assoc df sym v)]
-            (if (= last-i i)
-              new-df
-              (recur new-df (inc i))))))
+      (let [df* (cond-> {}
+                  tx-info-sym (assoc tx-info-sym tx-info)
+                  subject-id-sym (assoc subject-id-sym subject-id))
+            last-i (dec (count ordered-sym-path-pairs))]
+        (if-not (seq ordered-sym-path-pairs)
+          df*
+          (loop [df df*
+                 i 0]
+            (let [[sym path] (nth ordered-sym-path-pairs i)
+                  [head & tail] (mapv #(if-not (symbol? %)
+                                         %
+                                         (or (df %)
+                                             (throw
+                                              (ex-info "Path value not found."
+                                                       {:v %
+                                                        :type :no-path-val}))))
+                                      path)
+                  v (case head
+                      :local (:val (get-in-state local-state tail))
+                      :sys (au/<? (<get-in-sys-state db-id tail)))
+                  new-df (assoc df sym v)]
+              (if (= last-i i)
+                new-df
+                (recur new-df (inc i)))))))
       (catch #?(:clj Exception :cljs js/Error) e
         ;; Return false if path formation fails (happens on initial subscription
         ;; with incomplete state).
@@ -229,12 +235,15 @@
           false
           (throw e))))))
 
-(defn <notify-sub [local-state db-id tx-info log-error <get-in-sys-state sub]
+(defn <notify-sub
+  [local-state db-id tx-info subject-id log-error <get-in-sys-state sub]
   (ca/go
     (try
-      (let [{:keys [update-fn ordered-sym-path-pairs tx-info-sym *last-df]} sub
+      (let [{:keys [update-fn ordered-sym-path-pairs
+                    tx-info-sym subject-id-sym *last-df]} sub
             new-df (au/<? (<make-df local-state db-id ordered-sym-path-pairs
-                                    tx-info-sym tx-info <get-in-sys-state))]
+                                    tx-info-sym tx-info subject-id-sym
+                                    subject-id <get-in-sys-state))]
         (when (and new-df (not= @*last-df new-df))
           (reset! *last-df new-df)
           (update-fn new-df)))
@@ -286,8 +295,14 @@
                           (str "All keys in sub-map must be symbols. Got `"
                                sym "`.")
                           (u/sym-map sym sub-map))))
-                (if (= :vivo/tx-info v)
+                (cond
+                  (= :vivo/tx-info v)
                   (assoc acc :tx-info-sym sym)
+
+                  (= :vivo/subject-id v)
+                  (assoc acc :subject-id-sym sym)
+
+                  :else
                   (let [path v
                         [head & tail] (check-path path sub-syms sub-map)
                         deps (filter symbol? path)]
@@ -298,20 +313,21 @@
                                                        (dep/depend g sym dep))
                                                      % deps))))))
               {:tx-info-sym nil
+               :subject-id-sym nil
                :g (dep/graph)
                :sym->path {}}
               sub-map)
-        {:keys [tx-info-sym g sym->path]} info
+        {:keys [tx-info-sym subject-id-sym g sym->path]} info
         ordered-dep-syms (dep/topo-sort g)
         no-dep-syms (set/difference (set (keys sym->path))
-                                    (set ordered-dep-syms))]
-    {:ordered-sym-path-pairs (reduce (fn [acc sym]
-                                       (let [path (sym->path sym)]
-                                         (conj acc [sym path])))
-                                     []
-                                     (concat (seq no-dep-syms)
-                                             ordered-dep-syms))
-     :tx-info-sym tx-info-sym}))
+                                    (set ordered-dep-syms))
+        ordered-sym-path-pairs (reduce (fn [acc sym]
+                                         (let [path (sym->path sym)]
+                                           (conj acc [sym path])))
+                                       []
+                                       (concat (seq no-dep-syms)
+                                               ordered-dep-syms))]
+    (u/sym-map ordered-sym-path-pairs tx-info-sym subject-id-sym)))
 
 (defn no-server-exception []
   (ex-info (str "Can't update :sys state because the `get-server-url` option "
@@ -319,7 +335,8 @@
            {:reason :no-get-server-url}))
 
 (defrecord StateManager [capsule-client sys-state-schema log-info log-error
-                         state-cache *local-state *sub-id->sub *last-db-id]
+                         state-cache *local-state *sub-id->sub *last-db-id
+                         *subject-id]
   IState
   (<get-in-sys-state [this db-id* path]
     (au/go
@@ -358,8 +375,8 @@
                         (swap! *local-state #(reduce eval-cmd % local-cmds))
                         (doseq [sub (vals @*sub-id->sub)]
                           (<notify-sub
-                           @*local-state @*last-db-id tx-info log-error
-                           (partial <get-in-sys-state this) sub))
+                           @*local-state @*last-db-id tx-info @*subject-id
+                           log-error (partial <get-in-sys-state this) sub))
                         true)
 
                       [false true]
@@ -385,32 +402,38 @@
           tx-info (u/str->edn tx-info-str)]
       (reset! *last-db-id db-id)
       (doseq [sub (vals @*sub-id->sub)]
-        (<notify-sub local-state db-id tx-info log-error
+        (<notify-sub local-state db-id tx-info @*subject-id log-error
+                     (partial <get-in-sys-state this) sub))))
+
+  (handle-subject-id-changed [this subject-id metadata]
+    (reset! *subject-id subject-id)
+    (let [db-id @*last-db-id
+          local-state @*local-state
+          tx-info :subject-id-changed]
+      (doseq [sub (vals @*sub-id->sub)]
+        (<notify-sub local-state db-id tx-info subject-id log-error
                      (partial <get-in-sys-state this) sub))))
 
   (subscribe! [this sub-id sub-map update-fn]
     (when-not (string? sub-id)
       (throw (ex-info "The sub-id parameter must be a string."
                       (u/sym-map sub-id))))
-    (when-not (map? sub-map)
-      (throw (ex-info "The sub-map parameter must be a map."
-                      (u/sym-map sub-map))))
-    (when-not (pos? (count sub-map))
-      (throw (ex-info "The sub-map parameter must contain at least one entry."
-                      (u/sym-map sub-map))))
+    (u/check-sub-map sub-id "subscriber" sub-map)
     (when-not (ifn? update-fn)
       (throw (ex-info "The update-fn parameter must be a function."
                       (u/sym-map update-fn))))
-    (let [{:keys [ordered-sym-path-pairs tx-info-sym]} (make-sub-info sub-map)]
+    (let [{:keys [ordered-sym-path-pairs
+                  tx-info-sym subject-id-sym]} (make-sub-info sub-map)]
       (ca/go
         (try
           (let [tx-info :initial-subscription
                 df (au/<? (<make-df @*local-state nil ordered-sym-path-pairs
                                     tx-info-sym tx-info
+                                    subject-id-sym @*subject-id
                                     (partial <get-in-sys-state this)))
                 *last-df (atom df)
                 sub (u/sym-map update-fn ordered-sym-path-pairs
-                               tx-info-sym *last-df)]
+                               tx-info-sym subject-id-sym *last-df)]
             (swap! *sub-id->sub assoc sub-id sub)
             (when df
               (update-fn df)))
@@ -424,7 +447,30 @@
       (throw (ex-info "The sub-id parameter must be a string."
                       (u/sym-map sub-id))))
     (swap! *sub-id->sub dissoc sub-id)
-    nil))
+    nil)
+
+  (log-in! [this identifier secret cb]
+    (ca/go
+      (try
+        (let [ret (au/<? (cc/send-msg capsule-client :log-in
+                                      (u/sym-map identifier secret)))]
+          (when cb
+            (cb ret)))
+        (catch #?(:clj Exception :cljs js/Error) e
+          (log-error (str "Error in log-in: " u/ex-msg-and-stacktrace e))
+          (when cb
+            (cb e))))))
+
+  (log-out! [this cb]
+    (ca/go
+      (try
+        (let [ret (au/<? (cc/send-msg capsule-client :log-out nil))]
+          (when cb
+            (cb ret)))
+        (catch #?(:clj Exception :cljs js/Error) e
+          (log-error (str "Error in log-out: " u/ex-msg-and-stacktrace e))
+          (when cb
+            (cb e)))))))
 
 (defn make-capsule-client
   [get-server-url sys-state-schema sys-state-store-name sys-state-store-branch]
@@ -457,10 +503,14 @@
         *local-state (atom initial-local-state)
         *sub-id->sub (atom {})
         *last-db-id (atom nil)
+        *subject-id (atom nil)
         state-cache (sr/stockroom state-cache-size)
         sm (->StateManager capsule-client sys-state-schema log-info log-error
-                           state-cache *local-state *sub-id->sub *last-db-id)]
+                           state-cache *local-state *sub-id->sub *last-db-id
+                           *subject-id)]
     (when get-server-url
       (cc/set-handler capsule-client :store-changed
-                      (partial handle-store-changed sm)))
+                      (partial handle-store-changed sm))
+      (cc/set-handler capsule-client :subject-id-changed
+                      (partial handle-subject-id-changed sm)))
     sm))
