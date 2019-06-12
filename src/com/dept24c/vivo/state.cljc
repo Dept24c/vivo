@@ -15,17 +15,15 @@
 (def update-state-timeout-ms 5000)
 
 (def default-sm-opts
-  {:initial-local-state nil
-   :initial-sys-state nil
-   :log-error println
+  {:log-error println
    :log-info println
-   :sys-state-cache-size 1000})
+   :state-cache-size 1000})
 
 (defprotocol IState
   (update-state! [this update-cmds tx-info cb])
   (subscribe! [this sub-id sub-map update-fn])
   (unsubscribe! [this sub-id])
-  (handle-store-changed [this arg])
+  (handle-store-changed [this arg metadata])
   (<get-in-sys-state [this db-id path]))
 
 (defn throw-bad-path-root [path]
@@ -256,10 +254,9 @@
                                                              path arg)}))
                          [] sys-cmds)
             us-arg {:tx-info-str (u/edn->str tx-info)
-                    :update-cmds update-cmds}
-            ret (au/<? (cc/<send-msg capsule-client :update-state us-arg
-                                     update-state-timeout-ms))]
-        (:db-id ret))
+                    :update-cmds update-cmds}]
+        (au/<? (cc/<send-msg capsule-client :update-state us-arg
+                             update-state-timeout-ms)))
       (catch #?(:clj Exception :cljs js/Error) e
         (if-not (str/includes? (u/ex-msg e) "timed out")
           (throw e)
@@ -322,18 +319,20 @@
            {:reason :no-get-server-url}))
 
 (defrecord StateManager [capsule-client sys-state-schema log-info log-error
-                         sys-state-cache *local-state *sub-id->sub]
+                         state-cache *local-state *sub-id->sub *last-db-id]
   IState
   (<get-in-sys-state [this db-id* path]
     (au/go
-      (or (and db-id* (sr/get sys-state-cache [db-id* path]))
+      (or (and db-id* (sr/get state-cache [db-id* path]))
           (let [arg {:db-id db-id*
                      :path path}
                 ret (au/<? (cc/<send-msg capsule-client :get-state arg))
-                {:keys [db-id value]} ret
-                v (u/value-rec->edn sys-state-schema path value)]
-            (sr/put sys-state-cache [db-id path] v)
-            v))))
+                {:keys [db-id is-unauthorized value]} ret]
+            (if is-unauthorized
+              :vivo/unauthorized
+              (let [v (u/value-rec->edn sys-state-schema path value)]
+                (sr/put state-cache [db-id path] v)
+                v))))))
 
   (update-state! [this update-cmds tx-info cb]
     (when-not (sequential? update-cmds)
@@ -342,21 +341,37 @@
     (let [{:keys [local-cmds sys-cmds]} (split-updates update-cmds)]
       (ca/go
         (try
-          ;; db-id will be nil when there are no sys updates or if
-          ;; <do-sys-updates times out
-          (let [db-id (when (seq sys-cmds)
-                        (au/<? (<do-sys-updates
-                                capsule-client log-info tx-info
-                                sys-state-schema sys-cmds)))
-                local-state (if (seq local-cmds)
-                              (swap! *local-state
-                                     #(reduce eval-cmd % local-cmds))
-                              @*local-state)]
-            (doseq [sub (vals @*sub-id->sub)]
-              (<notify-sub local-state db-id tx-info log-error
+          (let [ret (case [(boolean (seq local-cmds)) (boolean (seq sys-cmds))]
+                      [true true]
+                      (let [sys-ret (au/<? (<do-sys-updates
+                                            capsule-client log-info tx-info
+                                            sys-state-schema sys-cmds))]
+                        (if sys-ret
+                          (do
+                            (swap! *local-state #(reduce eval-cmd % local-cmds))
+                            ;; Don't need to notify subs because server will
+                            true)
+                          false))
+
+                      [true false]
+                      (do
+                        (swap! *local-state #(reduce eval-cmd % local-cmds))
+                        (doseq [sub (vals @*sub-id->sub)]
+                          (<notify-sub
+                           @*local-state @*last-db-id tx-info log-error
                            (partial <get-in-sys-state this) sub))
+                        true)
+
+                      [false true]
+                      (au/<? (<do-sys-updates
+                              capsule-client log-info tx-info
+                              sys-state-schema sys-cmds))
+                      ;; no notify-subs b/c server will send :store-changed
+
+                      [false false]
+                      false)]
             (when cb
-              (cb true)))
+              (cb (boolean ret))))
           (catch #?(:clj Exception :cljs js/Error) e
             (log-error (str "Exception in update-state!: "
                             (u/ex-msg-and-stacktrace e)))
@@ -364,10 +379,11 @@
               (cb e))))))
     nil)
 
-  (handle-store-changed [this arg]
+  (handle-store-changed [this arg metadata]
     (let [{:keys [db-id tx-info-str]} arg
           local-state @*local-state
           tx-info (u/str->edn tx-info-str)]
+      (reset! *last-db-id db-id)
       (doseq [sub (vals @*sub-id->sub)]
         (<notify-sub local-state db-id tx-info log-error
                      (partial <get-in-sys-state this) sub))))
@@ -432,7 +448,7 @@
 (defn state-manager [opts]
   (let [opts* (merge default-sm-opts opts)
         {:keys [initial-local-state get-server-url log-error
-                log-info sys-state-cache-size sys-state-schema
+                log-info state-cache-size sys-state-schema
                 sys-state-store-name sys-state-store-branch]} opts*
         capsule-client (when get-server-url
                          (make-capsule-client get-server-url sys-state-schema
@@ -440,9 +456,10 @@
                                               sys-state-store-branch))
         *local-state (atom initial-local-state)
         *sub-id->sub (atom {})
-        sys-state-cache (sr/stockroom sys-state-cache-size)
+        *last-db-id (atom nil)
+        state-cache (sr/stockroom state-cache-size)
         sm (->StateManager capsule-client sys-state-schema log-info log-error
-                           sys-state-cache *local-state *sub-id->sub)]
+                           state-cache *local-state *sub-id->sub *last-db-id)]
     (when get-server-url
       (cc/set-handler capsule-client :store-changed
                       (partial handle-store-changed sm)))

@@ -157,31 +157,33 @@
   [:store-name l/string-schema]
   [:branch l/string-schema])
 
-(l/def-record-schema login-subject-arg-schema
+(l/def-record-schema authenticate-arg-schema
   {:key-ns-type :none}
-  [:subject-id l/string-schema]
+  [:identifier l/string-schema]
   [:secret l/string-schema])
 
 (defn make-sm-server-protocol [state-schema]
   (let [values-union-schema (make-values-union-schema state-schema)
-        get-state-ret-schema (l/record-schema ::get-state-ret-schema
-                                              {:key-ns-type :none}
-                                              [[:db-id db-id-schema]
-                                               [:value values-union-schema]])]
+        get-state-ret-schema (l/record-schema
+                              ::get-state-ret-schema
+                              {:key-ns-type :none}
+                              [[:db-id (l/maybe db-id-schema)]
+                               [:is-unauthorized (l/maybe l/boolean-schema)]
+                               [:value (l/maybe values-union-schema)]])]
     {:roles [:state-manager :server]
-     :msgs {:connect-store {:arg connect-store-arg-schema
+     :msgs {:authenticate {:arg authenticate-arg-schema
+                           :ret l/boolean-schema
+                           :sender :state-manager}
+            :connect-store {:arg connect-store-arg-schema
                             :ret l/boolean-schema
                             :sender :state-manager}
             :get-state {:arg get-state-arg-schema
                         :ret get-state-ret-schema
                         :sender :state-manager}
-            :login-subject {:arg login-subject-arg-schema
-                            :ret l/boolean-schema
-                            :sender :state-manager}
             :store-changed {:arg store-change-schema
                             :sender :server}
             :update-state {:arg (make-update-state-arg-schema state-schema)
-                           :ret (l/maybe store-change-schema)
+                           :ret l/boolean-schema
                            :sender :state-manager}}}))
 
 (def schema-at-path (sr/memoize-sr l/schema-at-path 100))

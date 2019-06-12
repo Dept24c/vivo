@@ -68,9 +68,9 @@
        (is (= "test-app" (au/<? app-name-ch)))
        (is (= msg2 (au/<? last-msg-ch)))
        (is (= 2 (count (au/<? all-msgs-ch))))
-       (au/<? (vivo/update-state! sm [{:path [:sys :state/msgs -1]
-                                       :op :remove
-                                       :arg msg}]))
+       (au/<? (vivo/<update-state! sm [{:path [:sys :state/msgs -1]
+                                        :op :remove
+                                        :arg msg}]))
        (is (= msg (au/<? last-msg-ch)))
        (is (= 1 (count (au/<? all-msgs-ch))))
        (vivo/unsubscribe! sm "test-sub-all-msgs")
