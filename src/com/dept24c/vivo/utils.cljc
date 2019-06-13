@@ -234,12 +234,11 @@
                                       acc*
                                       (conj acc* k))))
                                 acc v)
-                        (if (#{:vivo/tx-info :vivo/subject-id} v)
+                        (if (#{:vivo/tx-info} v)
                           acc
                           (throw (ex-info
                                   (str "Bad path. Must be a sequence or "
-                                       "one of the special vivo keywords ("
-                                       ":vivo/tx-info or :vivo/subject-id).")
+                                       ":vivo/tx-info.")
                                   (sym-map sym v sub-map))))))
                     #{} sub-map))))
 

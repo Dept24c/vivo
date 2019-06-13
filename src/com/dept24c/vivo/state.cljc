@@ -200,13 +200,12 @@
   (eval-math-cmd state cmd mod))
 
 (defn <make-df
-  [local-state db-id ordered-sym-path-pairs tx-info-sym tx-info subject-id-sym
-   subject-id <get-in-sys-state]
+  [local-state db-id ordered-sym-path-pairs tx-info-sym tx-info
+   <get-in-sys-state]
   (au/go
     (try
       (let [df* (cond-> {}
-                  tx-info-sym (assoc tx-info-sym tx-info)
-                  subject-id-sym (assoc subject-id-sym subject-id))
+                  tx-info-sym (assoc tx-info-sym tx-info))
             last-i (dec (count ordered-sym-path-pairs))]
         (if-not (seq ordered-sym-path-pairs)
           df*
@@ -236,14 +235,13 @@
           (throw e))))))
 
 (defn <notify-sub
-  [local-state db-id tx-info subject-id log-error <get-in-sys-state sub]
+  [local-state db-id tx-info log-error <get-in-sys-state sub]
   (ca/go
     (try
       (let [{:keys [update-fn ordered-sym-path-pairs
-                    tx-info-sym subject-id-sym *last-df]} sub
+                    tx-info-sym *last-df]} sub
             new-df (au/<? (<make-df local-state db-id ordered-sym-path-pairs
-                                    tx-info-sym tx-info subject-id-sym
-                                    subject-id <get-in-sys-state))]
+                                    tx-info-sym tx-info <get-in-sys-state))]
         (when (and new-df (not= @*last-df new-df))
           (reset! *last-df new-df)
           (update-fn new-df)))
@@ -299,9 +297,6 @@
                   (= :vivo/tx-info v)
                   (assoc acc :tx-info-sym sym)
 
-                  (= :vivo/subject-id v)
-                  (assoc acc :subject-id-sym sym)
-
                   :else
                   (let [path v
                         [head & tail] (check-path path sub-syms sub-map)
@@ -313,11 +308,10 @@
                                                        (dep/depend g sym dep))
                                                      % deps))))))
               {:tx-info-sym nil
-               :subject-id-sym nil
                :g (dep/graph)
                :sym->path {}}
               sub-map)
-        {:keys [tx-info-sym subject-id-sym g sym->path]} info
+        {:keys [tx-info-sym g sym->path]} info
         ordered-dep-syms (dep/topo-sort g)
         no-dep-syms (set/difference (set (keys sym->path))
                                     (set ordered-dep-syms))
@@ -327,7 +321,7 @@
                                        []
                                        (concat (seq no-dep-syms)
                                                ordered-dep-syms))]
-    (u/sym-map ordered-sym-path-pairs tx-info-sym subject-id-sym)))
+    (u/sym-map ordered-sym-path-pairs tx-info-sym)))
 
 (defn no-server-exception []
   (ex-info (str "Can't update :sys state because the `get-server-url` option "
@@ -335,8 +329,7 @@
            {:reason :no-get-server-url}))
 
 (defrecord StateManager [capsule-client sys-state-schema log-info log-error
-                         state-cache *local-state *sub-id->sub *last-db-id
-                         *subject-id]
+                         state-cache *local-state *sub-id->sub *last-db-id]
   IState
   (<get-in-sys-state [this db-id* path]
     (au/go
@@ -375,8 +368,8 @@
                         (swap! *local-state #(reduce eval-cmd % local-cmds))
                         (doseq [sub (vals @*sub-id->sub)]
                           (<notify-sub
-                           @*local-state @*last-db-id tx-info @*subject-id
-                           log-error (partial <get-in-sys-state this) sub))
+                           @*local-state @*last-db-id tx-info log-error
+                           (partial <get-in-sys-state this) sub))
                         true)
 
                       [false true]
@@ -402,16 +395,16 @@
           tx-info (u/str->edn tx-info-str)]
       (reset! *last-db-id db-id)
       (doseq [sub (vals @*sub-id->sub)]
-        (<notify-sub local-state db-id tx-info @*subject-id log-error
+        (<notify-sub local-state db-id tx-info log-error
                      (partial <get-in-sys-state this) sub))))
 
   (handle-subject-id-changed [this subject-id metadata]
-    (reset! *subject-id subject-id)
+    (swap! *local-state assoc :vivo/subject-id subject-id)
     (let [db-id @*last-db-id
           local-state @*local-state
           tx-info :subject-id-changed]
       (doseq [sub (vals @*sub-id->sub)]
-        (<notify-sub local-state db-id tx-info subject-id log-error
+        (<notify-sub local-state db-id tx-info log-error
                      (partial <get-in-sys-state this) sub))))
 
   (subscribe! [this sub-id sub-map update-fn]
@@ -422,18 +415,16 @@
     (when-not (ifn? update-fn)
       (throw (ex-info "The update-fn parameter must be a function."
                       (u/sym-map update-fn))))
-    (let [{:keys [ordered-sym-path-pairs
-                  tx-info-sym subject-id-sym]} (make-sub-info sub-map)]
+    (let [{:keys [ordered-sym-path-pairs tx-info-sym]} (make-sub-info sub-map)]
       (ca/go
         (try
           (let [tx-info :initial-subscription
                 df (au/<? (<make-df @*local-state nil ordered-sym-path-pairs
                                     tx-info-sym tx-info
-                                    subject-id-sym @*subject-id
                                     (partial <get-in-sys-state this)))
                 *last-df (atom df)
                 sub (u/sym-map update-fn ordered-sym-path-pairs
-                               tx-info-sym subject-id-sym *last-df)]
+                               tx-info-sym *last-df)]
             (swap! *sub-id->sub assoc sub-id sub)
             (when df
               (update-fn df)))
@@ -503,11 +494,9 @@
         *local-state (atom initial-local-state)
         *sub-id->sub (atom {})
         *last-db-id (atom nil)
-        *subject-id (atom nil)
         state-cache (sr/stockroom state-cache-size)
         sm (->StateManager capsule-client sys-state-schema log-info log-error
-                           state-cache *local-state *sub-id->sub *last-db-id
-                           *subject-id)]
+                           state-cache *local-state *sub-id->sub *last-db-id)]
     (when get-server-url
       (cc/set-handler capsule-client :store-changed
                       (partial handle-store-changed sm))

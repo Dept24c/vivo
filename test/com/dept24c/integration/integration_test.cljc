@@ -83,7 +83,7 @@
      (let [sm (vivo/state-manager sm-opts)
            df-ch (ca/chan)]
        (vivo/subscribe! sm "test-auth"
-                        '{subject-id :vivo/subject-id}
+                        '{subject-id [:local :vivo/subject-id]}
                         (fn [df]
                           (ca/put! df-ch df)))
        (is (= {'subject-id nil} (au/<? df-ch)))
