@@ -213,17 +213,17 @@
           (loop [df df*
                  i 0]
             (let [[sym path] (nth ordered-sym-path-pairs i)
-                  [head & tail] (mapv #(if-not (symbol? %)
-                                         %
-                                         (or (df %)
-                                             (throw
-                                              (ex-info "Path value not found."
-                                                       {:v %
-                                                        :type :no-path-val}))))
-                                      path)
-                  v (case head
-                      :local (:val (get-in-state local-state tail))
-                      :sys (au/<? (<get-in-sys-state db-id tail)))
+                  [head & tail] (reduce (fn [acc k]
+                                          (if-not (symbol? k)
+                                            (conj acc k)
+                                            (if-let [v (df k)]
+                                              (conj acc v)
+                                              (reduced nil))))
+                                        [] path)
+                  v (when tail
+                      (case head
+                        :local (:val (get-in-state local-state tail))
+                        :sys (au/<? (<get-in-sys-state db-id tail))))
                   new-df (assoc df sym v)]
               (if (= last-i i)
                 new-df
