@@ -19,15 +19,16 @@
    :log-info println
    :state-cache-size 1000})
 
-(defprotocol IState
-  (handle-store-changed [this arg metadata])
-  (handle-subject-id-changed [this subject-id metadata])
+(defprotocol IStateManager
   (log-in! [this identifier secret cb])
   (log-out! [this cb])
+  (shutdown! [this])
   (subscribe! [this sub-id sub-map update-fn])
   (unsubscribe! [this sub-id])
   (update-state! [this update-cmds tx-info cb])
-  (<get-in-sys-state [this db-id path]))
+  (<get-in-sys-state [this db-id path])
+  (<handle-sys-state-changed [this arg metadata])
+  (<handle-subject-id-changed [this subject-id metadata]))
 
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
@@ -330,7 +331,10 @@
 
 (defrecord StateManager [capsule-client sys-state-schema log-info log-error
                          state-cache *local-state *sub-id->sub *last-db-id]
-  IState
+  IStateManager
+  (shutdown! [this]
+    (cc/shutdown capsule-client))
+
   (<get-in-sys-state [this db-id* path]
     (au/go
       (or (and db-id* (sr/get state-cache [db-id* path]))
@@ -376,7 +380,7 @@
                       (au/<? (<do-sys-updates
                               capsule-client log-info tx-info
                               sys-state-schema sys-cmds))
-                      ;; no notify-subs b/c server will send :store-changed
+                      ;; no notify-subs b/c server will send :sys-state-changed
 
                       [false false]
                       false)]
@@ -389,23 +393,25 @@
               (cb e))))))
     nil)
 
-  (handle-store-changed [this arg metadata]
-    (let [{:keys [db-id tx-info-str]} arg
-          local-state @*local-state
-          tx-info (u/str->edn tx-info-str)]
-      (reset! *last-db-id db-id)
-      (doseq [sub (vals @*sub-id->sub)]
-        (<notify-sub local-state db-id tx-info log-error
-                     (partial <get-in-sys-state this) sub))))
+  (<handle-sys-state-changed [this arg metadata]
+    (au/go
+      (let [{:keys [db-id tx-info-str]} arg
+            local-state @*local-state
+            tx-info (u/str->edn tx-info-str)]
+        (reset! *last-db-id db-id)
+        (doseq [sub (vals @*sub-id->sub)]
+          (<notify-sub local-state db-id tx-info log-error
+                       (partial <get-in-sys-state this) sub)))))
 
-  (handle-subject-id-changed [this subject-id metadata]
-    (swap! *local-state assoc :vivo/subject-id subject-id)
-    (let [db-id @*last-db-id
-          local-state @*local-state
-          tx-info :subject-id-changed]
-      (doseq [sub (vals @*sub-id->sub)]
-        (<notify-sub local-state db-id tx-info log-error
-                     (partial <get-in-sys-state this) sub))))
+  (<handle-subject-id-changed [this subject-id metadata]
+    (au/go
+      (swap! *local-state assoc :vivo/subject-id subject-id)
+      (let [db-id @*last-db-id
+            local-state @*local-state
+            tx-info :subject-id-changed]
+        (doseq [sub (vals @*sub-id->sub)]
+          (<notify-sub local-state db-id tx-info log-error
+                       (partial <get-in-sys-state this) sub)))))
 
   (subscribe! [this sub-id sub-map update-fn]
     (when-not (string? sub-id)
@@ -443,28 +449,28 @@
   (log-in! [this identifier secret cb]
     (ca/go
       (try
-        (let [ret (au/<? (cc/send-msg capsule-client :log-in
-                                      (u/sym-map identifier secret)))]
+        (let [ret (au/<? (cc/<send-msg capsule-client :log-in
+                                       (u/sym-map identifier secret)))]
           (when cb
             (cb ret)))
         (catch #?(:clj Exception :cljs js/Error) e
-          (log-error (str "Error in log-in: " u/ex-msg-and-stacktrace e))
+          (log-error (str "Error in log-in: " (u/ex-msg-and-stacktrace e)))
           (when cb
             (cb e))))))
 
   (log-out! [this cb]
     (ca/go
       (try
-        (let [ret (au/<? (cc/send-msg capsule-client :log-out nil))]
+        (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
           (when cb
             (cb ret)))
         (catch #?(:clj Exception :cljs js/Error) e
-          (log-error (str "Error in log-out: " u/ex-msg-and-stacktrace e))
+          (log-error (str "Error in log-out: " (u/ex-msg-and-stacktrace e)))
           (when cb
             (cb e)))))))
 
 (defn make-capsule-client
-  [get-server-url sys-state-schema sys-state-store-name sys-state-store-branch]
+  [get-server-url sys-state-schema sys-state-store-branch]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in state-manager "
                          "constructor.")
@@ -478,18 +484,16 @@
                                      :subject-secret ""})
         client (cc/client get-server-url get-credentials
                           protocol :state-manager)]
-    (cc/send-msg client :connect-store {:store-name sys-state-store-name
-                                        :branch sys-state-store-branch})
+    (cc/send-msg client :set-branch sys-state-store-branch)
     client))
 
 (defn state-manager [opts]
   (let [opts* (merge default-sm-opts opts)
         {:keys [initial-local-state get-server-url log-error
                 log-info state-cache-size sys-state-schema
-                sys-state-store-name sys-state-store-branch]} opts*
+                sys-state-store-branch]} opts*
         capsule-client (when get-server-url
                          (make-capsule-client get-server-url sys-state-schema
-                                              sys-state-store-name
                                               sys-state-store-branch))
         *local-state (atom initial-local-state)
         *sub-id->sub (atom {})
@@ -498,8 +502,8 @@
         sm (->StateManager capsule-client sys-state-schema log-info log-error
                            state-cache *local-state *sub-id->sub *last-db-id)]
     (when get-server-url
-      (cc/set-handler capsule-client :store-changed
-                      (partial handle-store-changed sm))
+      (cc/set-handler capsule-client :sys-state-changed
+                      (partial <handle-sys-state-changed sm))
       (cc/set-handler capsule-client :subject-id-changed
-                      (partial handle-subject-id-changed sm)))
+                      (partial <handle-subject-id-changed sm)))
     sm))

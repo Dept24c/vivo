@@ -3,6 +3,7 @@
    [clojure.tools.namespace.repl :refer [refresh refresh-all]]
    [com.dept24c.vivo.server :as server]
    [com.dept24c.vivo.state-schema :as ss]
+   [com.dept24c.vivo.utils :as u]
    [deercreeklabs.capsule.logging :as logging]
    [puget.printer :refer [cprint]]))
 
@@ -29,17 +30,27 @@
       (stop-server))
     (println "Server is not running.")))
 
+(defn make-user-id-to-msgs [{:syms [msgs]}]
+  (reduce (fn [acc {:msg/keys [user-id] :as msg}]
+            (update acc user-id conj msg))
+          {} msgs))
+
 (defn start
   ([]
    (start default-server-port))
   ([port]
    (configure-logging)
-   (let [opts {:initial-sys-state test-initial-sys-state
+   (let [tfs [{:sub-map '{msgs [:sys :state/msgs]}
+               :f make-user-id-to-msgs
+               :output-path [:sys :state/user-id-to-msgs]}]
+         opts {:initial-sys-state test-initial-sys-state
                :authentication-fn (constantly "user-a")
-               :authorization-fn authorized?}]
+               :authorization-fn authorized?
+               :transaction-fns tfs}]
      (alter-var-root #'stop-server
-                     (constantly (server/vivo-server port ss/state-schema
-                                                     opts))))))
+                     (constantly (server/vivo-server
+                                  port "vivo-test-store"
+                                  ss/state-schema opts))))))
 
 ;; Note: This has problems due to not having socket address reuse
 (defn restart []

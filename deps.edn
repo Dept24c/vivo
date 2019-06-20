@@ -3,9 +3,9 @@
         com.cognitect.aws/endpoints {:mvn/version "1.1.11.559"}
         deercreeklabs/async-utils {:mvn/version "0.1.16"}
         deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
-                               :sha "4e983109ccbdf0a918affdabc55151188af0e602"}
+                               :sha "7a6869ac5a00b462ca23bd39f3ab2837490bc67f"}
         deercreeklabs/lancaster {:git/url "https://github.com/deercreeklabs/lancaster.git"
-                                 :sha "807040bb352927cca98ba4fd1df9058fc25be559"}
+                                 :sha "b919bc12f5d0916ddafdfcbf953386add37483b5"}
         deercreeklabs/stockroom {:mvn/version "0.2.0"}
         mvxcvi/puget {:mvn/version "1.1.2"}
         org.clojure/clojure {:mvn/version "1.10.1"}

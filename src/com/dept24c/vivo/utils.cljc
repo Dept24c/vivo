@@ -6,7 +6,6 @@
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
-   [deercreeklabs.lancaster.bilt :as bilt]
    [deercreeklabs.stockroom :as sr]
    #?(:clj [puget.printer :refer [cprint cprint-str]]))
   #?(:cljs
@@ -103,7 +102,7 @@
                               {:key-ns-type :none} (seq valid-ops)))
 
 (l/def-union-schema path-item-schema
-  bilt/keyword-schema
+  l/keyword-schema
   l/string-schema
   l/int-schema)
 
@@ -130,8 +129,7 @@
   (l/union-schema (map make-value-rec-schema (l/sub-schemas state-schema))))
 
 (defn make-update-cmd-schema [state-schema]
-  (l/record-schema ::update-cmd
-                   {:key-ns-type :none}
+  (l/record-schema ::update-cmd                   {:key-ns-type :none}
                    [[:path path-schema]
                     [:op op-schema]
                     [:arg (l/maybe (make-values-union-schema state-schema))]]))
@@ -148,15 +146,10 @@
   [:db-id (l/maybe db-id-schema)]
   [:path path-schema])
 
-(l/def-record-schema store-change-schema
+(l/def-record-schema sys-state-change-schema
   {:key-ns-type :none}
   [:db-id db-id-schema]
   [:tx-info-str l/string-schema])
-
-(l/def-record-schema connect-store-arg-schema
-  {:key-ns-type :none}
-  [:store-name l/string-schema]
-  [:branch l/string-schema])
 
 (l/def-record-schema log-in-arg-schema
   {:key-ns-type :none}
@@ -172,10 +165,7 @@
                                [:is-unauthorized (l/maybe l/boolean-schema)]
                                [:value (l/maybe values-union-schema)]])]
     {:roles [:state-manager :server]
-     :msgs {:connect-store {:arg connect-store-arg-schema
-                            :ret l/boolean-schema
-                            :sender :state-manager}
-            :get-state {:arg get-state-arg-schema
+     :msgs {:get-state {:arg get-state-arg-schema
                         :ret get-state-ret-schema
                         :sender :state-manager}
             :log-in {:arg log-in-arg-schema
@@ -184,8 +174,11 @@
             :log-out {:arg l/null-schema
                       :ret l/boolean-schema
                       :sender :state-manager}
-            :store-changed {:arg store-change-schema
-                            :sender :server}
+            :set-branch {:arg l/string-schema
+                         :ret l/boolean-schema
+                         :sender :state-manager}
+            :sys-state-changed {:arg sys-state-change-schema
+                                :sender :server}
             :subject-id-changed {:arg (l/maybe subject-id-schema)
                                  :sender :server}
             :update-state {:arg (make-update-state-arg-schema state-schema)

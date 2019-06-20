@@ -69,3 +69,7 @@
         cb #(ca/put! ch %)]
     (state/log-out! sm cb)
     ch))
+
+(defn shutdown!
+  [sm]
+  (state/shutdown! sm))

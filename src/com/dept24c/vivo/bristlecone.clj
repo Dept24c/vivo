@@ -62,8 +62,7 @@
          "Branch " branch-name " is " (count branch-name) " characters.")
     (u/sym-map branch-name))))
 
-(defrecord BristleconeClient [storage-schema storage subject-id
-                              fp->schema-cache]
+(defrecord BristleconeClient [storage-schema storage fp->schema-cache]
   u/IBristleconeClient
   (<commit! [this branch db-id]
     (u/<commit! this branch db-id nil))
@@ -72,7 +71,7 @@
     (au/go
       ))
 
-  ;; (<create-branch [this source-branch target-branch]
+  ;; (<create-branch [this source-branch target-branch subject-id]
   ;;   (when-not target-branch
   ;;     (throw (ex-info "Target branch must be provided. Got `nil`."
   ;;                     (u/sym-map source-branch target-branch))))
@@ -285,11 +284,11 @@
     (->DDBStorage ddb table-name)))
 
 (defn bristlecone-client*
-  [storage-schema storage subject-id]
+  [storage-schema storage]
   (let [fp->schema-cache (sr/stockroom 100)]
-    (->BristleconeClient storage-schema storage subject-id fp->schema-cache)))
+    (->BristleconeClient storage-schema storage fp->schema-cache)))
 
 ;; TODO: Validate args
 (defn bristlecone-client
-  [store-name storage-schema subject-id]
-  (bristlecone-client* storage-schema (ddb-storage store-name) subject-id))
+  [store-name storage-schema]
+  (bristlecone-client* storage-schema (ddb-storage store-name)))
