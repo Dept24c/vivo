@@ -1,16 +1,16 @@
 {:deps {com.cognitect.aws/api {:mvn/version "0.8.305"}
-        com.cognitect.aws/dynamodb {:mvn/version "718.2.443.0"}
-        com.cognitect.aws/endpoints {:mvn/version "1.1.11.559"}
+        com.cognitect.aws/dynamodb {:mvn/version "722.2.470.0"}
+        com.cognitect.aws/endpoints {:mvn/version "1.1.11.568"}
         deercreeklabs/async-utils {:mvn/version "0.1.16"}
         deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
-                               :sha "7a6869ac5a00b462ca23bd39f3ab2837490bc67f"}
+                               :sha "5116953ef841dd6b7c93310a7c7e0dc6da8acd6f"}
         deercreeklabs/lancaster {:git/url "https://github.com/deercreeklabs/lancaster.git"
-                                 :sha "b919bc12f5d0916ddafdfcbf953386add37483b5"}
+                                 :sha "a30bef74b752333ed49b880a45350d9d2c29f286"}
         deercreeklabs/stockroom {:mvn/version "0.2.0"}
         mvxcvi/puget {:mvn/version "1.1.2"}
         org.clojure/clojure {:mvn/version "1.10.1"}
         org.clojure/clojurescript {:mvn/version "1.10.520"}
-        org.clojure/core.async {:mvn/version "0.4.490"}
+        org.clojure/core.async {:mvn/version "0.4.500"}
         rum {:mvn/version "0.11.3"}
         weavejester/dependency {:mvn/version "0.2.1"}}
 
