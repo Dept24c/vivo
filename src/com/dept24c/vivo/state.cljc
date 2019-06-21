@@ -17,7 +17,8 @@
 (def default-sm-opts
   {:log-error println
    :log-info println
-   :state-cache-size 1000})
+   :state-cache-size 1000
+   :sys-state-store-branch "master"})
 
 (defprotocol IStateManager
   (log-in! [this identifier secret cb])
