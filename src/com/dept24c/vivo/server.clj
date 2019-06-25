@@ -208,9 +208,9 @@
                          {:sub-map sub-map
                           :output-path output-path})))
        (let [info (state/make-sub-info sub-map)
-             {:keys [ordered-sym-path-pairs tx-info-sym]} info]
-         (conj acc (u/sym-map ordered-sym-path-pairs tx-info-sym
-                              f output-path)))))
+             {:keys [ordered-sym-path-pairs tx-info-sym]} info
+             tf (u/sym-map ordered-sym-path-pairs tx-info-sym f output-path)]
+         (conj acc tf))))
    [] tfs))
 
 (defn vivo-server

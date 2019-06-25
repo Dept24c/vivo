@@ -339,15 +339,16 @@
   (<get-in-sys-state [this db-id* path]
     (au/go
       (or (and db-id* (sr/get state-cache [db-id* path]))
-          (let [arg {:db-id db-id*
-                     :path path}
-                ret (au/<? (cc/<send-msg capsule-client :get-state arg))
-                {:keys [db-id is-unauthorized value]} ret]
-            (if is-unauthorized
-              :vivo/unauthorized
-              (let [v (u/value-rec->edn sys-state-schema path value)]
-                (sr/put state-cache [db-id path] v)
-                v))))))
+          (when capsule-client
+            (let [arg {:db-id db-id*
+                       :path path}
+                  ret (au/<? (cc/<send-msg capsule-client :get-state arg))
+                  {:keys [db-id is-unauthorized value]} ret]
+              (if is-unauthorized
+                :vivo/unauthorized
+                (let [v (u/value-rec->edn sys-state-schema path value)]
+                  (sr/put state-cache [db-id path] v)
+                  v)))))))
 
   (update-state! [this update-cmds tx-info cb]
     (when-not (sequential? update-cmds)
