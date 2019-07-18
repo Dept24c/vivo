@@ -1,18 +1,17 @@
-{:deps {com.cognitect.aws/api {:mvn/version "0.8.305"}
-        com.cognitect.aws/dynamodb {:mvn/version "722.2.470.0"}
-        com.cognitect.aws/endpoints {:mvn/version "1.1.11.568"}
-        deercreeklabs/async-utils {:mvn/version "0.1.16"}
-        deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
-                               :sha "5116953ef841dd6b7c93310a7c7e0dc6da8acd6f"}
-        deercreeklabs/lancaster {:git/url "https://github.com/deercreeklabs/lancaster.git"
-                                 :sha "a30bef74b752333ed49b880a45350d9d2c29f286"}
-        deercreeklabs/stockroom {:mvn/version "0.2.0"}
-        mvxcvi/puget {:mvn/version "1.1.2"}
-        org.clojure/clojure {:mvn/version "1.10.1"}
-        org.clojure/clojurescript {:mvn/version "1.10.520"}
-        org.clojure/core.async {:mvn/version "0.4.500"}
-        rum {:mvn/version "0.11.3"}
-        weavejester/dependency {:mvn/version "0.2.1"}}
+{:deps
+ {com.dept24c/bristlecone {:local/root "../bristlecone"}
+  #_{:git/url "https://github.com/Dept24c/bristlecone.git"
+     :sha "9c23f8546ee02d842fa2e9a134b398b980af7f8e"}
+  deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
+                         :sha "6d078466752962bc20bdbca878e585b5c067c88e"}
+  deercreeklabs/lancaster {:local/root "../../dcl/lancaster"}
+  deercreeklabs/stockroom {:mvn/version "0.2.0"}
+  mvxcvi/puget {:mvn/version "1.1.2"}
+  org.clojure/clojure {:mvn/version "1.10.1"}
+  org.clojure/clojurescript {:mvn/version "1.10.520"}
+  org.clojure/core.async {:mvn/version "0.4.500"}
+  rum {:mvn/version "0.11.3"}
+  weavejester/dependency {:mvn/version "0.2.1"}}
 
  :paths ["src" "resources"]
 
@@ -37,6 +36,6 @@
                     :extra-paths ["dev"]}
 
   :test {:extra-paths ["test"]
-         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-418"}
-                      lambdaisland/kaocha-cljs {:mvn/version "0.0-32"}
+         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-529"}
+                      lambdaisland/kaocha-cljs {:mvn/version "0.0-40"}
                       lambdaisland/kaocha-cloverage {:mvn/version "0.0-32"}}}}}

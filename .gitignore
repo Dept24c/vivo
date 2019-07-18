@@ -15,6 +15,9 @@ pom.xml
 .cljs_node_repl
 /node_modules
 package-lock.json
+yarn.lock
+yarn-error.log
+.shadow-cljs
 
 # Project stuff
 /build
