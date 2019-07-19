@@ -32,8 +32,10 @@
   (state/unsubscribe! sm sub-id))
 
 (defn update-state!
-  [sm update-commands cb]
-  (state/update-state! sm update-commands cb))
+  ([sm update-commands]
+   (update-state! sm update-commands nil))
+  ([sm update-commands cb]
+   (state/update-state! sm update-commands cb)))
 
 (defn <update-state!
   ([sm update-commands]
