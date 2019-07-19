@@ -2,7 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [clojure.set :as set]
-   [com.dept24c.vivo.state-manager :as state-manager]
+   [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au])
   #?(:clj
@@ -92,14 +92,14 @@
                                      #?(:cljs
                                         (rum/request-render
                                          (:rum/react-component cstate))))]
-                     (state-manager/subscribe! state-manager sub-id sub-map
-                                               update-fn)
+                     (state/subscribe! state-manager sub-id sub-map
+                                       update-fn)
                      ;; For SSR, wait for update-fn to be called.
                      #?(:clj (au/<?? updated-ch))
                      cstate))
      :will-unmount (fn [cstate]
                      (let [{:keys [state-manager sub-id]} cstate]
-                       (state-manager/unsubscribe! state-manager sub-id)
+                       (state/unsubscribe! state-manager sub-id)
                        cstate))}))
 
 (defn build-component [component-name args]

@@ -4,7 +4,7 @@
    [clojure.test :refer [are deftest is]]
    [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.macro-impl :as macro-impl]
-   [com.dept24c.vivo.state-manager :as state-manager]
+   [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au])
   #?(:clj
@@ -188,7 +188,7 @@
                               :arg :new}]]]
     (doseq [case cases]
       (let [[expected {:keys [path op arg] :as cmd}] case
-            ret (state-manager/insert* state path op arg)]
+            ret (state/insert* state path op arg)]
         (is (= case [ret cmd]))))))
 
 (deftest test-deep-insert*
@@ -240,7 +240,7 @@
                                         :arg :new}]]]
     (doseq [case cases]
       (let [[expected {:keys [path op arg] :as cmd}] case
-            ret (state-manager/insert* state path op arg)]
+            ret (state/insert* state path op arg)]
         (is (= case [ret cmd]))))))
 
 (deftest test-bad-path-root-in-update-state!
@@ -264,13 +264,13 @@
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"does not point to a vector"
-       (state-manager/insert* {} [0] :insert-before :new))))
+       (state/insert* {} [0] :insert-before :new))))
 
 (deftest test-bad-insert*-path
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"the last element of the path must be an integer"
-       (state-manager/insert* [] [] :insert-before :new))))
+       (state/insert* [] [] :insert-before :new))))
 
 (deftest test-bad-command-op
   (let [sm (vivo/state-manager)]
@@ -294,7 +294,7 @@
                [{:x [:a :b :c]} state [:x -10]]]]
     (doseq [case cases]
       (let [[expected state* path] case
-            ret (state-manager/eval-cmd state* {:path path :op :remove})]
+            ret (state/eval-cmd state* {:path path :op :remove})]
         (is (= case [ret state* path]))))))
 
 (deftest test-math
@@ -315,7 +315,7 @@
                [{:x [{:a 10} {:a 19}]} state2 {:path [:x 1 :a] :op :- :arg 1}]]]
     (doseq [case cases]
       (let [[expected state* cmd] case
-            ret (state-manager/eval-cmd state* cmd)]
+            ret (state/eval-cmd state* cmd)]
         (is (= case [ret state* cmd]))))))
 
 (deftest test-ordered-update-maps

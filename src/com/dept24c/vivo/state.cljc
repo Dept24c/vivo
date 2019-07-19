@@ -1,4 +1,4 @@
-(ns com.dept24c.vivo.state-manager
+(ns com.dept24c.vivo.state
   (:require
    [clojure.core.async :as ca]
    [clojure.set :as set]

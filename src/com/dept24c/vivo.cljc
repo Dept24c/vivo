@@ -2,7 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [com.dept24c.vivo.macro-impl :as macro-impl]
-   [com.dept24c.vivo.state-manager :as state-manager]
+   [com.dept24c.vivo.state :as state]
    #?(:cljs ["react" :as React])
    #?(:cljs ["react-dom" :as ReactDOM]))
   #?(:cljs
@@ -12,7 +12,7 @@
   ([]
    (state-manager {}))
   ([opts]
-   (state-manager/state-manager opts)))
+   (state/state-manager opts)))
 
 (defmacro def-component
   "Defines a Vivo React component. You may optionally provide a
@@ -24,48 +24,48 @@
 (defn subscribe!
   "Returns a subscription id."
   [sm sub-map cur-state update-fn]
-  (state-manager/subscribe! sm sub-map cur-state update-fn))
+  (state/subscribe! sm sub-map cur-state update-fn))
 
 (defn unsubscribe!
   "Returns nil."
   [sm sub-id]
-  (state-manager/unsubscribe! sm sub-id))
+  (state/unsubscribe! sm sub-id))
 
 (defn update-state!
   [sm update-commands cb]
-  (state-manager/update-state! sm update-commands cb))
+  (state/update-state! sm update-commands cb))
 
 (defn <update-state!
   ([sm update-commands]
    (let [ch (ca/chan)
          cb #(ca/put! ch %)]
-     (state-manager/update-state! sm update-commands cb)
+     (state/update-state! sm update-commands cb)
      ch)))
 
 (defn log-in!
   ([sm identifier secret]
-   (state-manager/log-in! sm identifier secret nil))
+   (state/log-in! sm identifier secret nil))
   ([sm identifier secret cb]
-   (state-manager/log-in! sm identifier secret cb)))
+   (state/log-in! sm identifier secret cb)))
 
 (defn <log-in!
   [sm identifier secret]
   (let [ch (ca/chan)
         cb #(ca/put! ch %)]
-    (state-manager/log-in! sm identifier secret cb)
+    (state/log-in! sm identifier secret cb)
     ch))
 
 (defn log-out!
   ([sm]
-   (state-manager/log-out! sm nil))
+   (state/log-out! sm nil))
   ([sm cb]
-   (state-manager/log-out! sm cb)))
+   (state/log-out! sm cb)))
 
 (defn <log-out!
   [sm]
   (let [ch (ca/chan)
         cb #(ca/put! ch %)]
-    (state-manager/log-out! sm cb)
+    (state/log-out! sm cb)
     ch))
 
 #?(:cljs
@@ -83,4 +83,4 @@
   "Shutdown the state manager and its connection to the server.
    Mostly useful in tests."
   [sm]
-  (state-manager/shutdown! sm))
+  (state/shutdown! sm))
