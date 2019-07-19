@@ -1,10 +1,8 @@
 {:deps
- {com.dept24c/bristlecone {:local/root "../bristlecone"}
-  #_{:git/url "https://github.com/Dept24c/bristlecone.git"
-     :sha "9c23f8546ee02d842fa2e9a134b398b980af7f8e"}
+ {com.dept24c/bristlecone {:git/url "https://github.com/Dept24c/bristlecone.git"
+                           :sha "f5308aa373cb4cf227133ad8e608763e9f21124f"}
   deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
-                         :sha "6d078466752962bc20bdbca878e585b5c067c88e"}
-  deercreeklabs/lancaster {:local/root "../../dcl/lancaster"}
+                         :sha "861b294280383db902709d99a268787a6ab18a59"}
   deercreeklabs/stockroom {:mvn/version "0.2.0"}
   mvxcvi/puget {:mvn/version "1.1.2"}
   org.clojure/clojure {:mvn/version "1.10.1"}
