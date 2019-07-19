@@ -167,7 +167,7 @@
 (defn make-update-state-arg-schema [state-schema]
   (let [update-cmd-schema (make-update-cmd-schema state-schema)]
     (l/record-schema ::update-state-arg
-                     [:update-cmds (l/array-schema update-cmd-schema)])))
+                     [[:update-cmds (l/array-schema update-cmd-schema)]])))
 
 (l/def-record-schema get-state-arg-schema
   [:db-id db-id-schema]
@@ -176,7 +176,7 @@
 (l/def-record-schema sys-state-change-schema
   [:cur-db-id db-id-schema]
   [:prev-db-id db-id-schema]
-  [:updated-paths (l/array-schema path-schema)])
+  [:updated-paths (l/array-schema (l/maybe path-schema))])
 
 (l/def-record-schema log-in-arg-schema
   [:identifier l/string-schema]

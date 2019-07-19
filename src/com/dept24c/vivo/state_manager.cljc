@@ -268,8 +268,9 @@
 
 (defn update-sub?* [updated-paths sub-path]
   (reduce (fn [acc updated-path]
-            (let [[relationship sub-tail] (u/relationship-info
-                                           updated-path sub-path)]
+            (let [[relationship _] (u/relationship-info
+                                    (or updated-path [])
+                                    (or sub-path []))]
               (if (= :sibling relationship)
                 false
                 (reduced true))))
@@ -302,28 +303,34 @@
   (<make-state-info
     [this ordered-pairs local-state db-id]
     (au/go
-      (reduce
-       (fn [acc [sym path]]
-         (let [resolved-path (mapv (fn [k]
-                                     (if (symbol? k)
-                                       (get-in acc [:state k])
-                                       k))
-                                   path)
-               v (cond
-                   (local-path? path)
-                   (->> (rest resolved-path)
-                        (get-in-state local-state)
-                        (:val))
+      (let [init {:state {}
+                  :paths []}]
+        (if-not (seq ordered-pairs)
+          init
+          (loop [acc init
+                 i 0]
+            (let [[sym path] (nth ordered-pairs i)
+                  resolved-path (mapv (fn [k]
+                                        (if (symbol? k)
+                                          (get-in acc [:state k])
+                                          k))
+                                      path)
+                  v (cond
+                      (local-path? path)
+                      (->> (rest resolved-path)
+                           (get-in-state local-state)
+                           (:val))
 
-                   (sys-path? path)
-                   ;; TODO: Optimize by getting multiple paths in one call
-                   (au/<? (<get-in-sys-state this db-id (rest resolved-path))))]
-           (-> acc
-               (assoc-in [:state sym] v)
-               (update :paths conj resolved-path))))
-       {:state {}
-        :paths []}
-       ordered-pairs)))
+                      (sys-path? path)
+                      ;; TODO: Optimize by getting multiple paths in one call
+                      (au/<? (<get-in-sys-state this db-id
+                                                (rest resolved-path))))
+                  new-acc (-> acc
+                              (assoc-in [:state sym] v)
+                              (update :paths conj resolved-path))]
+              (if (= (dec (count ordered-pairs)) i)
+                new-acc
+                (recur new-acc (inc i)))))))))
 
   (subscribe! [this sub-map cur-state update-fn*]
     (let [sub-id (get-sub-id *last-sub-id)
@@ -424,7 +431,8 @@
     (au/go
       (let [cmds (mapv (fn [cmd]
                          (update cmd :arg #(u/edn->value-rec sys-state-schema
-                                                             (:path cmd) %))))]
+                                                             (:path cmd) %)))
+                       sys-cmds)]
         (au/<? (cc/<send-msg capsule-client :update-state {:update-cmds cmds}
                              update-state-timeout-ms)))
       true))

@@ -67,47 +67,41 @@
                                    {:path [:sys :msgs -1]
                                     :op :insert-after
                                     :arg msg2}]))))
-           (vivo/subscribe! sm "test-sub-app-name"
-                            '{app-name [:sys :app-name]}
+           (vivo/subscribe! sm '{app-name [:sys :app-name]} nil
                             (fn [df]
                               (if-let [app-name (df 'app-name)]
                                 (ca/put! app-name-ch app-name)
                                 (ca/close! app-name-ch))))
-           ;; (vivo/subscribe! sm "test-sub-all-msgs"
-           ;;                  '{msgs [:sys :msgs]
-           ;;                    users [:sys :users]}
-           ;;                  (fn [{:syms [msgs users]}]
-           ;;                    (if (seq msgs)
-           ;;                      (let [msgs* (join-msgs-and-users msgs users)]
-           ;;                        (ca/put! all-msgs-ch msgs*))
-           ;;                      (ca/close! all-msgs-ch))))
-           ;; (vivo/subscribe! sm "test-sub-index"
-           ;;                  '{uid->msgs [:sys :user-id-to-msgs]}
-           ;;                  (fn [{:syms [uid->msgs]}]
-           ;;                    (if (seq uid->msgs)
-           ;;                      (ca/put! index-ch uid->msgs)
-           ;;                      (ca/close! index-ch))))
-           ;; (vivo/subscribe! sm "test-sub-last-msg"
-           ;;                  '{last-msg [:sys :msgs -1]}
-           ;;                  (fn [df]
-           ;;                    (if-let [last-msg (df 'last-msg)]
-           ;;                      (ca/put! last-msg-ch last-msg)
-           ;;                      (ca/close! last-msg-ch))))
+           (vivo/subscribe! sm '{msgs [:sys :msgs]
+                                 users [:sys :users]}
+                            nil
+                            (fn [{:syms [msgs users]}]
+                              (if (seq msgs)
+                                (let [msgs* (join-msgs-and-users msgs users)]
+                                  (ca/put! all-msgs-ch msgs*))
+                                (ca/close! all-msgs-ch))))
+           (vivo/subscribe! sm '{uid->msgs [:sys :user-id-to-msgs]} nil
+                            (fn [{:syms [uid->msgs]}]
+                              (if (seq uid->msgs)
+                                (ca/put! index-ch uid->msgs)
+                                (ca/close! index-ch))))
+           (vivo/subscribe! sm '{last-msg [:sys :msgs -1]} nil
+                            (fn [df]
+                              (if-let [last-msg (df 'last-msg)]
+                                (ca/put! last-msg-ch last-msg)
+                                (ca/close! last-msg-ch))))
            (is (= app-name (au/<? app-name-ch)))
-           ;; (is (= msg2 (au/<? last-msg-ch)))
-           ;; (is (= expected-all-msgs (au/<? all-msgs-ch)))
-           ;; (is (= {1 [{:msg/text "This is great" :msg/user-id 1}
-           ;;            {:msg/text "A msg" :msg/user-id 1}]}
-           ;;        (au/<? index-ch)))
-           ;; (au/<? (vivo/<update-state! sm [{:path [:sys :msgs -1]
-           ;;                                  :op :remove}]))
+           (is (= msg2 (au/<? last-msg-ch)))
+           (is (= expected-all-msgs (au/<? all-msgs-ch)))
+           (is (= {1 [{:text "This is great" :user-id 1}
+                      {:text "A msg" :user-id 1}]}
+                  (au/<? index-ch)))
+           (au/<? (vivo/<update-state! sm [{:path [:sys :msgs -1]
+                                            :op :remove}]))
            ;; (is (= msg (au/<? last-msg-ch)))
            ;; (is (= 1 (count (au/<? all-msgs-ch))))
-           ;; (is (= {1 [{:msg/text "A msg" :msg/user-id 1}]}
+           ;; (is (= {1 [{:text "A msg" :user-id 1}]}
            ;;        (au/<? index-ch)))
-           (vivo/unsubscribe! sm "test-sub-app-name")
-           ;; (vivo/unsubscribe! sm "test-sub-all-msgs")
-           ;; (vivo/unsubscribe! sm "test-sub-last-msg")
            )
          (finally
            (vivo/shutdown! sm)))))))

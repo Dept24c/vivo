@@ -50,8 +50,6 @@
                 change-info (assoc ret :updated-paths (map :path update-cmds))]
             (doseq [conn-id conn-ids]
               (ep/send-msg ep conn-id :sys-state-changed change-info))
-            (println "###### in update loop...")
-            (u/pprint (u/sym-map change-info update-cmds branch))
             (ca/>! ret-ch true))))
       (catch Exception e
         (log-error (str "Error in state-update-loop:\n"
@@ -64,38 +62,6 @@
           branch (str "temp-branch-" (rand-int 1e9))]
       (au/<? (bc/<create-branch! bc-client branch db-id true))
       branch)))
-
-(defn <handle-set-state-source
-  [*conn-id->info *branch->info bc-client source metadata]
-  (au/go
-    (let [{:keys [conn-id]} metadata
-          perm-branch (:branch source)
-          branch (or perm-branch
-                     (au/<? (<get-temp-branch bc-client source)))]
-      (swap! *conn-id->info update conn-id assoc
-             :branch branch :temp-branch? (not perm-branch))
-      (swap! *branch->info update branch
-             (fn [{:keys [conn-ids] :as info}]
-               (if conn-ids
-                 (update info :conn-ids conj conn-id)
-                 (assoc info :conn-ids #{conn-id}))))
-      (au/<? (bc/get-db-id bc-client branch)))))
-
-(defn <handle-get-state
-  [bc-client state-schema authorization-fn *conn-id->info arg metadata]
-  (au/go
-    (let [{:keys [conn-id]} metadata
-          {:keys [subject-id branch]} (@*conn-id->info conn-id)
-          {:keys [path db-id]} arg
-          authorized? (let [ret (authorization-fn subject-id path)]
-                        (if (au/channel? ret)
-                          (au/<? ret)
-                          ret))]
-      (if-not authorized?
-        {:is-forbidden true}
-        {:v (->> (bc/<get-in bc-client db-id path)
-                 (au/<?)
-                 (u/edn->value-rec state-schema path))}))))
 
 (defn <handle-update-state
   [ep bc-client authorization-fn tx-fns log-error *conn-id->info
@@ -114,6 +80,46 @@
                  ch*))]
     (ca/put! ch (u/sym-map subject-id branch update-cmds conn-ids ret-ch))
     ret-ch))
+
+(defn <handle-set-state-source
+  [*conn-id->info *branch->info bc-client sys-state-schema source metadata]
+  (au/go
+    (let [{:keys [conn-id]} metadata
+          perm-branch (:branch source)
+          branch (or perm-branch
+                     (au/<? (<get-temp-branch bc-client source)))
+          _ (swap! *conn-id->info update conn-id assoc
+                   :branch branch :temp-branch? (not perm-branch))
+          _ (swap! *branch->info update branch
+                   (fn [{:keys [conn-ids] :as info}]
+                     (if conn-ids
+                       (update info :conn-ids conj conn-id)
+                       (assoc info :conn-ids #{conn-id}))))
+          db-id (au/<? (bc/<get-db-id bc-client branch))]
+      (or db-id
+          (let [default-data (l/default-data sys-state-schema)
+                update-cmds [{:path []
+                              :op :set
+                              :arg default-data}]
+                ret (au/<? (bc/<commit! bc-client branch update-cmds
+                                        "Create initial db"))]
+            (:cur-db-id ret))))))
+
+(defn <handle-get-state
+  [bc-client state-schema authorization-fn *conn-id->info arg metadata]
+  (au/go
+    (let [{:keys [conn-id]} metadata
+          {:keys [subject-id branch]} (@*conn-id->info conn-id)
+          {:keys [path db-id]} arg
+          authorized? (let [ret (authorization-fn subject-id path)]
+                        (if (au/channel? ret)
+                          (au/<? ret)
+                          ret))]
+      (if-not authorized?
+        {:is-forbidden true}
+        {:v (->> (bc/<get-in bc-client db-id path)
+                 (au/<?)
+                 (u/edn->value-rec state-schema path))}))))
 
 (defn generate-token []
   (let [rng (SecureRandom.)
@@ -320,7 +326,8 @@
                               *subject-id->conn-ids *conn-id->info))
      (ep/set-handler ep :set-state-source
                      (partial <handle-set-state-source
-                              *conn-id->info *branch->info bc-client))
+                              *conn-id->info *branch->info bc-client
+                              sys-state-schema))
      (ep/set-handler ep :get-state
                      (partial <handle-get-state bc-client sys-state-schema
                               authorization-fn *conn-id->info))
