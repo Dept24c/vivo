@@ -52,54 +52,81 @@
   #?(:clj (edn/read-string s)
      :cljs (reader/read-string s)))
 
-;;;;;;;;;;;;;;;;;;;; Protocols ;;;;;;;;;;;;;;;;;;;;
+(defn ms->mins [ms]
+  (int (/ ms 1000 60)))
 
-(defprotocol IBristleconeClient
-  (<commit!
-    [this branch db-id]
-    [this branch db-id msg])
-  (<create-branch [this source-branch target-branch])
-  (<delete-branch [this branch])
-  (<get [this db-id path])
-  (<get-branches [this])
-  (<get-head [this branch])
-  (<get-key-count [this db-id path])
-  (<get-keys
-    [this db-id path]
-    [this db-id path limit]
-    [this db-id path limit offset])
-  (<get-log-count [this branch])
-  (<get-log
-    [this branch]
-    [this branch limit]
-    [this branch limit offset])
-  (<merge [this source-branch target-branch])
-  (<transact!
-    [this branch update-commands]
-    [this branch update-commands msg])
-  (<update! [this db-id update-commands]))
+(defn str->int [s]
+  (when-not (string? s)
+    (if (nil? s)
+      (throw (ex-info "Argument to str->int must not be nil."
+                      {}))
+      (throw (ex-info (str "Argument to str->int must be a string. Got: "
+                           (type s))
+                      {:arg s
+                       :arg-type (type s)}))))
+  (when-not (seq s)
+    (throw (ex-info "Argument to str->int must not be the empty string."
+                    {})))
+  (try
+    #?(:clj (Integer/parseInt s)
+       :cljs (js/parseInt s 10))
+    (catch #?(:clj Exception :cljs js/Error) e
+      (throw (ex-info (str "Could not convert " s " to an integer.")
+                      {:e e
+                       :arg s})))))
 
-(defprotocol IBristleconeClientInternals
-  (<fp-bytes->schema [this fp-bytes])
-  (<read-block* [this block-num])
-  (<schema->fp-bytes [this sch])
-  (<write-block* [this block-num data]))
+(defn str->float [s]
+  (when-not (string? s)
+    (if (nil? s)
+      (throw (ex-info "Argument to str->float must not be nil."
+                      {}))
+      (throw (ex-info (str "Argument to str->float must be a string. Got: "
+                           (type s))
+                      {:arg s
+                       :arg-type (type s)}))))
+  (when-not (seq s)
+    (throw (ex-info "Argument to str->float must not be the empty string."
+                    {})))
+  (try
+    #?(:clj (Float/parseFloat s)
+       :cljs (js/parseFloat s 10))
+    (catch #?(:clj Exception :cljs js/Error) e
+      (throw (ex-info (str "Could not convert " s " to a float")
+                      {:e e
+                       :arg s})))))
 
-(defprotocol IBristleconeStorage
-  (<allocate-block-num [this])
-  (<read-block [this block-id])
-  (<write-block [this block-id data]))
+(defn relationship-info
+  "Given two key sequences, return a vector of [relationship tail].
+   Relationsip is one of :sibling, :parent, :child, or :equal.
+   Tail is the keypath between the parent and child. Only defined when
+   relationship is :parent."
+  [ksa ksb]
+  (let [va (vec ksa)
+        vb (vec ksb)
+        len-a (count va)
+        len-b (count vb)
+        len-min (min len-a len-b)
+        divergence-i (loop [i 0]
+                       (if (and (< i len-min)
+                                (= (va i) (vb i)))
+                         (recur (inc i))
+                         i))
+        a-tail? (> len-a divergence-i)
+        b-tail? (> len-b divergence-i)]
+    (cond
+      (and a-tail? b-tail?) [:sibling nil]
+      a-tail? [:child nil]
+      b-tail? [:parent (drop divergence-i ksb)]
+      :else [:equal nil])))
 
 ;;;;;;;;;;;;;;;;;;;; Schemas ;;;;;;;;;;;;;;;;;;;;
 
 (def db-id-schema l/string-schema)
 (def subject-id-schema l/string-schema)
-(def valid-ops
-  #{:set :remove :insert-before :insert-after
-    :plus :minus :multiply :divide :mod})
-
+(def valid-ops  [:set :remove :insert-before :insert-after
+                 :plus :minus :multiply :divide :mod])
 (def op-schema (l/enum-schema :com.dept24c.vivo.utils/op
-                              {:key-ns-type :none} (seq valid-ops)))
+                              valid-ops))
 
 (l/def-union-schema path-item-schema
   l/keyword-schema
@@ -121,66 +148,76 @@
   (str "v-" (long->non-neg-str (l/fingerprint64 value-schema))))
 
 (defn make-value-rec-schema [value-schema]
-  (l/record-schema (keyword "com.dept24c.vivo.utils"
-                            (schema->value-rec-name value-schema))
-                   [[:v (l/maybe value-schema)]]))
+  (let [vr-name (schema->value-rec-name value-schema)]
+    (l/record-schema (keyword "com.dept24c.vivo.utils" vr-name)
+                     [[(keyword vr-name) (l/maybe value-schema)]])))
+
+(l/def-enum-schema forbidden-schema
+  :vivo/forbidden)
 
 (defn make-values-union-schema [state-schema]
-  (l/union-schema (map make-value-rec-schema (l/sub-schemas state-schema))))
+  (l/union-schema (mapv make-value-rec-schema (l/sub-schemas state-schema))))
 
 (defn make-update-cmd-schema [state-schema]
-  (l/record-schema ::update-cmd                   {:key-ns-type :none}
-                   [[:path path-schema]
+  (l/record-schema ::update-cmd
+                   [[:path (l/maybe path-schema)]
                     [:op op-schema]
                     [:arg (l/maybe (make-values-union-schema state-schema))]]))
 
 (defn make-update-state-arg-schema [state-schema]
   (let [update-cmd-schema (make-update-cmd-schema state-schema)]
     (l/record-schema ::update-state-arg
-                     {:key-ns-type :none}
-                     [[:tx-info-str (l/maybe l/string-schema)]
-                      [:update-cmds (l/array-schema update-cmd-schema)]])))
+                     [:update-cmds (l/array-schema update-cmd-schema)])))
 
 (l/def-record-schema get-state-arg-schema
-  {:key-ns-type :none}
-  [:db-id (l/maybe db-id-schema)]
+  [:db-id db-id-schema]
   [:path path-schema])
 
 (l/def-record-schema sys-state-change-schema
-  {:key-ns-type :none}
-  [:db-id db-id-schema]
-  [:tx-info-str l/string-schema])
+  [:cur-db-id db-id-schema]
+  [:prev-db-id db-id-schema]
+  [:updated-paths (l/array-schema path-schema)])
 
 (l/def-record-schema log-in-arg-schema
-  {:key-ns-type :none}
   [:identifier l/string-schema]
-  [:secret l/string-schema])
+  [:secret l/string-schema]
+  [:is-token l/boolean-schema])
+
+(l/def-record-schema log-in-ret-schema
+  [:subject-id subject-id-schema]
+  [:token l/string-schema])
+
+(l/def-record-schema branch-state-source-schema
+  [:branch l/string-schema])
+
+(l/def-record-schema temp-branch-state-source-schema
+  [:temp-branch/db-id (l/maybe db-id-schema)])
+
+(def state-source-schema (l/union-schema [branch-state-source-schema
+                                          temp-branch-state-source-schema]))
+
+(defn make-get-state-ret-schema [values-union-schema]
+  (l/record-schema ::get-state-ret
+                   [[:vivo/is-forbidden (l/maybe l/boolean-schema)]
+                    [:v (l/maybe values-union-schema)]]))
 
 (defn make-sm-server-protocol [state-schema]
-  (let [values-union-schema (make-values-union-schema state-schema)
-        get-state-ret-schema (l/record-schema
-                              ::get-state-ret-schema
-                              {:key-ns-type :none}
-                              [[:db-id (l/maybe db-id-schema)]
-                               [:is-unauthorized (l/maybe l/boolean-schema)]
-                               [:value (l/maybe values-union-schema)]])]
+  (let [values-union-schema (make-values-union-schema state-schema)]
     {:roles [:state-manager :server]
      :msgs {:get-state {:arg get-state-arg-schema
-                        :ret get-state-ret-schema
+                        :ret (make-get-state-ret-schema values-union-schema)
                         :sender :state-manager}
             :log-in {:arg log-in-arg-schema
-                     :ret l/boolean-schema
+                     :ret (l/maybe log-in-ret-schema)
                      :sender :state-manager}
             :log-out {:arg l/null-schema
                       :ret l/boolean-schema
                       :sender :state-manager}
-            :set-branch {:arg l/string-schema
-                         :ret l/boolean-schema
-                         :sender :state-manager}
+            :set-state-source {:arg state-source-schema
+                               :ret db-id-schema
+                               :sender :state-manager}
             :sys-state-changed {:arg sys-state-change-schema
                                 :sender :server}
-            :subject-id-changed {:arg (l/maybe subject-id-schema)
-                                 :sender :server}
             :update-state {:arg (make-update-state-arg-schema state-schema)
                            :ret l/boolean-schema
                            :sender :state-manager}}}))
@@ -189,32 +226,15 @@
 
 (defn value-rec-key [state-schema path]
   (let [value-schema (schema-at-path state-schema path)
-        rec-name (schema->value-rec-name value-schema)]
-    (keyword rec-name "v")))
+        vr-name (schema->value-rec-name value-schema)]
+    (keyword vr-name)))
 
 (defn edn->value-rec [state-schema path v]
   (let [k (value-rec-key state-schema path)]
     {k v}))
 
-(defn value-rec->edn [state-schema path value-rec]
-  (get value-rec (value-rec-key state-schema path)))
-
-(def b62alphabet
-  [\A \B \C \D \E \F \G \H \I \J \K \L \M \N \O \P \Q \R \S \T \U \V \W \X \Y \Z
-   \a \b \c \d \e \f \g \h \i \j \k \l \m \n \o \p \q \r \s \t \u \v \w \x \y \z
-   \0 \1 \2 \3 \4 \5 \6 \7 \8 \9])
-
-(defn long->b62 [l]
-  (loop [i 0
-         n l
-         s ""]
-    (let [c (b62alphabet (mod n 62))
-          new-i (inc i)
-          new-n (quot n 62)
-          new-s (str s c)]
-      (if (= 10 new-i)
-        new-s
-        (recur new-i new-n new-s)))))
+(defn value-rec->edn [value-rec]
+  (-> value-rec first second))
 
 (defn get-undefined-syms [sub-map]
   (let [defined-syms (set (keys sub-map))]
@@ -227,12 +247,9 @@
                                       acc*
                                       (conj acc* k))))
                                 acc v)
-                        (if (#{:vivo/tx-info} v)
-                          acc
-                          (throw (ex-info
-                                  (str "Bad path. Must be a sequence or "
-                                       ":vivo/tx-info.")
-                                  (sym-map sym v sub-map))))))
+                        (throw (ex-info
+                                (str "Bad path. Must be a sequence.")
+                                (sym-map sym v sub-map)))))
                     #{} sub-map))))
 
 (defn check-sub-map

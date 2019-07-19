@@ -2,15 +2,16 @@
   (:require
    [clojure.core.async :as ca]
    [clojure.string :as str]
-   [com.dept24c.vivo.bristlecone :as br]
-   [com.dept24c.vivo.state :as state]
+   [com.dept24c.bristlecone :as bc]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
+   [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.endpoint :as ep]
    [deercreeklabs.capsule.server :as cs]
    [deercreeklabs.lancaster :as l])
   (:import
-   (clojure.lang ExceptionInfo)))
+   (clojure.lang ExceptionInfo)
+   (java.security SecureRandom)))
 
 (defn default-health-http-handler [req]
   (if (= "/health" (:uri req))
@@ -29,227 +30,304 @@
    :handle-http default-health-http-handler
    :http-timeout-ms 60000
    :log-info println
-   :log-error println}) ;; TODO: use stderr
-
-(defn make-tf-df [tf tx-info-str state]
-  (let [{:keys [ordered-sym-path-pairs tx-info-sym]} tf
-        df* (cond-> {}
-              tx-info-sym (assoc tx-info-sym (u/str->edn tx-info-str)))
-        last-i (dec (count ordered-sym-path-pairs))]
-    (if-not (seq ordered-sym-path-pairs)
-      df*
-      (loop [df df*
-             i 0]
-        (let [[sym path] (nth ordered-sym-path-pairs i)
-              [head & tail] (reduce (fn [acc k]
-                                      (if-not (symbol? k)
-                                        (conj acc k)
-                                        (if-let [v (df k)]
-                                          (conj acc v)
-                                          (reduced nil))))
-                                    [] path)
-              v (:val (state/get-in-state state tail))
-              new-df (assoc df sym v)]
-          (if (= last-i i)
-            new-df
-            (recur new-df (inc i))))))))
-
-(defn eval-tfs [tfs tx-info-str old-state new-state]
-  (let [ret (reduce (fn [acc tf]
-                      (let [old-df (make-tf-df tf tx-info-str old-state)
-                            new-df (make-tf-df tf tx-info-str new-state)
-                            {:keys [f output-path]} tf]
-                        (if (= old-df new-df)
-                          acc
-                          (assoc-in acc (rest output-path) (f new-df)))))
-                    new-state tfs)]
-    ret))
+   :log-error println ;; TODO: use stderr
+   :login-lifetime-mins (* 60 24 30)}) ;; 30 days
 
 (defn start-state-update-loop
-  [ep ch *db-id-num *db-id->state authorization-fn tfs log-error]
+  [ep ch bc-client authorization-fn tx-fns log-error]
   (ca/go-loop []
     (try
-      (let [update (au/<? ch)
-            {:keys [subject-id update-cmds tx-info-str conn-ids ret-ch]} update
-            old-db-id (u/long->b62 @*db-id-num)
-            db-id (u/long->b62 (swap! *db-id-num inc))
-            old-state (@*db-id->state old-db-id)
-            new-state (->> (reduce (fn [acc {:keys [path] :as cmd}]
-                                     (if (authorization-fn subject-id path)
-                                       (state/eval-cmd acc cmd)
-                                       (reduced :vivo/unauthorized)))
-                                   old-state update-cmds)
-                           (eval-tfs tfs tx-info-str old-state))
-            ret (if (= :vivo/unauthorized new-state)
-                  false
-                  (let [change-info (u/sym-map db-id tx-info-str)]
-                    (swap! *db-id->state assoc db-id new-state)
-                    (doseq [conn-id conn-ids]
-                      (ep/send-msg ep conn-id :sys-state-changed change-info))
-                    true))]
-        (ca/>! ret-ch ret))
+      (let [{:keys [subject-id branch update-cmds conn-ids ret-ch]} (au/<? ch)
+            authorized? (reduce (fn [acc {:keys [path] :as cmd}]
+                                  (if (authorization-fn subject-id path)
+                                    acc
+                                    (reduced false)))
+                                true update-cmds)]
+        (if-not authorized?
+          (ca/>! ret-ch false)
+          (let [ret (au/<? (bc/<commit! bc-client branch update-cmds ""
+                                        tx-fns))
+                change-info (assoc ret :updated-paths (map :path update-cmds))]
+            (doseq [conn-id conn-ids]
+              (ep/send-msg ep conn-id :sys-state-changed change-info))
+            (println "###### in update loop...")
+            (u/pprint (u/sym-map change-info update-cmds branch))
+            (ca/>! ret-ch true))))
       (catch Exception e
         (log-error (str "Error in state-update-loop:\n"
                         (u/ex-msg-and-stacktrace e)))))
     (recur)))
 
-(defn handle-set-branch [*conn-id->info *branch->info branch metadata]
-  (let [{:keys [conn-id]} metadata]
-    (swap! *conn-id->info update conn-id assoc :branch branch)
-    (swap! *branch->info update branch
-           (fn [{:keys [conn-ids] :as info}]
-             (if conn-ids
-               (update info :conn-ids conj conn-id)
-               (assoc info :conn-ids #{conn-id}))))
-    true))
+(defn <get-temp-branch [bc-client source]
+  (au/go
+    (let [db-id (:temp-branch/db-id source)
+          branch (str "temp-branch-" (rand-int 1e9))]
+      (au/<? (bc/<create-branch! bc-client branch db-id true))
+      branch)))
+
+(defn <handle-set-state-source
+  [*conn-id->info *branch->info bc-client source metadata]
+  (au/go
+    (let [{:keys [conn-id]} metadata
+          perm-branch (:branch source)
+          branch (or perm-branch
+                     (au/<? (<get-temp-branch bc-client source)))]
+      (swap! *conn-id->info update conn-id assoc
+             :branch branch :temp-branch? (not perm-branch))
+      (swap! *branch->info update branch
+             (fn [{:keys [conn-ids] :as info}]
+               (if conn-ids
+                 (update info :conn-ids conj conn-id)
+                 (assoc info :conn-ids #{conn-id}))))
+      (au/<? (bc/get-db-id bc-client branch)))))
 
 (defn <handle-get-state
-  [state-schema authorization-fn *conn-id->info *db-id->state *db-id-num
-   arg metadata]
+  [bc-client state-schema authorization-fn *conn-id->info arg metadata]
   (au/go
-    (let [{:keys [path db-id]} arg
-          {:keys [conn-id]} metadata
-          {:keys [subject-id]} (@*conn-id->info conn-id)]
-      (if-not (authorization-fn subject-id path)
-        {:db-id db-id
-         :is-unauthorized true}
-        (let [db-id* (or db-id
-                         ;; TODO: Get the latest db-id from the selected branch
-                         (u/long->b62 @*db-id-num))
-              state (@*db-id->state db-id*)
-              {:keys [val]} (state/get-in-state state path)
-              value (u/edn->value-rec state-schema path val)]
-          {:db-id db-id*
-           :value value})))))
+    (let [{:keys [conn-id]} metadata
+          {:keys [subject-id branch]} (@*conn-id->info conn-id)
+          {:keys [path db-id]} arg
+          authorized? (let [ret (authorization-fn subject-id path)]
+                        (if (au/channel? ret)
+                          (au/<? ret)
+                          ret))]
+      (if-not authorized?
+        {:is-forbidden true}
+        {:v (->> (bc/<get-in bc-client db-id path)
+                 (au/<?)
+                 (u/edn->value-rec state-schema path))}))))
 
 (defn <handle-update-state
-  [ep state-schema authorization-fn log-error tfs *conn-id->info
-   *branch->info *db-id->state *db-id-num arg metadata]
-  (au/go
-    (let [{:keys [tx-info-str]} arg
-          {:keys [conn-id]} metadata
-          {:keys [subject-id branch]} (@*conn-id->info conn-id)
-          xf-cmd (fn [{:keys [path] :as cmd}]
-                   (update cmd :arg #(u/value-rec->edn state-schema path %)))
-          update-cmds (map xf-cmd (:update-cmds arg))
-          {:keys [update-ch conn-ids]}  (@*branch->info branch)
-          ret-ch (ca/chan)
-          ch (or update-ch
-                 (let [ch* (ca/chan 100)]
-                   (swap! *branch->info assoc-in [branch :update-ch] ch*)
-                   (start-state-update-loop ep ch* *db-id-num *db-id->state
-                                            authorization-fn tfs log-error)
-                   ch*))]
-      (ca/put! ch (u/sym-map subject-id update-cmds tx-info-str
-                             conn-ids ret-ch))
-      (au/<? ret-ch))))
+  [ep bc-client authorization-fn tx-fns log-error *conn-id->info
+   *branch->info arg metadata]
+  (let [{:keys [conn-id]} metadata
+        {:keys [subject-id branch]} (@*conn-id->info conn-id)
+        xf-cmd #(update % :arg u/value-rec->edn)
+        update-cmds (map xf-cmd (:update-cmds arg))
+        {:keys [update-ch conn-ids]} (@*branch->info branch)
+        ret-ch (ca/chan)
+        ch (or update-ch
+               (let [ch* (ca/chan 100)]
+                 (swap! *branch->info assoc-in [branch :update-ch] ch*)
+                 (start-state-update-loop ep ch* bc-client authorization-fn
+                                          tx-fns log-error)
+                 ch*))]
+    (ca/put! ch (u/sym-map subject-id branch update-cmds conn-ids ret-ch))
+    ret-ch))
 
-(defn <handle-log-in [ep authentication-fn *conn-id->info arg metadata]
+(defn generate-token []
+  (let [rng (SecureRandom.)
+        bytes (byte-array 32)]
+    (.nextBytes rng bytes)
+    (ba/byte-array->b64 bytes)))
+
+(defn <store-token-info
+  [bc-client table-name subject-id token token-expiration-time-mins]
   (au/go
-    (let [{:keys [identifier secret]} arg
-          {:keys [conn-id]} metadata
-          subject-id (authentication-fn identifier secret)]
+    #_
+    (let [arg {:op :PutItem
+               :request {:TableName table-name
+                         :Item {"token" {:S token}
+                                "subject-id" {:S subject-id}
+                                "token-expiration-time-mins"
+                                {:N (str token-expiration-time-mins)}}}}
+          ret (au/<? (aws-async/invoke ddb-client arg))]
+      (= {} ret))))
+
+(defn <batch-store-token-infos [bc-client table-name infos]
+  (au/go
+    #_
+    (let [->rq (fn [{:keys [token subject-id token-expiration-time-mins]}]
+                 {:PutRequest {:Item {"token" {:S token}
+                                      "subject-id" {:S subject-id}
+                                      "token-expiration-time-mins"
+                                      {:N (str token-expiration-time-mins)}}}})
+          arg {:op :BatchWriteItem
+               :request {:RequestItems {table-name (map ->rq infos)}
+                         :ReturnConsumedCapacity "TOTAL"
+                         :ReturnItemCollectionMetrics "SIZE"}}
+          ret (au/<? (aws-async/invoke ddb-client arg))]
+      ret)))
+
+(defn mapval [m]
+  (-> m first second))
+
+(defn token-info-ddb->clj
+  [{:keys [token subject-id token-expiration-time-mins]}]
+  {:token (mapval token)
+   :subject-id (mapval subject-id)
+   :token-expiration-time-mins
+   (u/str->int (mapval token-expiration-time-mins))})
+
+(defn <get-token-info [bc-client table-name subject-id]
+  (au/go
+    #_
+    (let [arg {:op :GetItem
+               :request {:TableName table-name
+                         :Key {"subject-id" {:S subject-id}}}}
+          ret (au/<? (aws-async/invoke ddb-client arg))]
+      (some-> ret :Item token-info-ddb->clj))))
+
+(defn <get-all-token-infos [bc-client table-name]
+  (au/go
+    #_
+    (loop [out []
+           last-key nil]
+      (let [arg {:op :Scan
+                 :request (cond-> {:TableName table-name}
+                            last-key (assoc :ExclusiveStartKey last-key))}
+            ret (au/<? (aws-async/invoke ddb-client arg))
+            infos (some->> ret :Items (map token-info-ddb->clj))
+            new-out (into out infos)]
+        (if-let [new-last-key (:LastEvaluatedKey ret)]
+          (recur new-out new-last-key)
+          new-out)))))
+
+(defn <delete-token-info [bc-client subject-id]
+  (au/go
+    ;; TODO: Implement
+    ))
+
+(defn <handle-token-log-in [bc-client table-name subject-id submitted-token]
+  (au/go
+    #_
+    (let [{:keys [token]} (au/<? (<get-token-info ddb-client table-name
+                                                  subject-id))]
+      (when (= token submitted-token)
+        (u/sym-map subject-id token)))))
+
+(defn <handle-normal-log-in
+  [bc-client table-name authentication-fn identifier secret token-life-mins]
+  (au/go
+    (let [subject-id (let [ret (authentication-fn identifier secret)]
+                       (if (au/channel? ret)
+                         (au/<? ret)
+                         ret))]
       (when subject-id
-        (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
-        (ep/send-msg ep conn-id :subject-id-changed subject-id))
-      (boolean subject-id))))
+        (let [token (generate-token)
+              token-expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
+                                            token-life-mins)]
+          (au/<? (<store-token-info bc-client table-name subject-id token
+                                    token-expiration-time-mins))
+          (u/sym-map subject-id token))))))
 
-(defn <handle-log-out [ep *conn-id->info arg metadata]
+(defn <handle-log-in [ep bc-client authentication-fn token-life-mins
+                      *conn-id->info *subject-id->conn-ids arg metadata]
   (au/go
-    (let [{:keys [conn-id]} metadata]
-      (swap! *conn-id->info update conn-id dissoc :subject-id)
-      (ep/send-msg ep conn-id :subject-id-changed nil)
-      true)))
+    #_
+    (let [{:keys [identifier secret is-token]} arg
+          {:keys [conn-id]} metadata
+          ret (au/<? (if is-token
+                       (<handle-token-log-in bc-client table-name
+                                             identifier secret)
+                       (<handle-normal-log-in bc-client table-name
+                                              authentication-fn identifier
+                                              secret token-life-mins)))
+          {:keys [subject-id]} ret]
+      (when ret
+        (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
+        (swap! *subject-id->conn-ids update subject-id
+               (fn [old-conn-ids]
+                 (if old-conn-ids
+                   (conj old-conn-ids conn-id)
+                   #{conn-id})))
+        ret))))
 
-(defn xf-tfs [tfs]
-  (reduce
-   (fn [acc tf]
-     (let [{:keys [sub-map f output-path]} tf]
-       (when-not sub-map
-         (throw (ex-info "Transaction function must have a :sub-map."
-                         {:sub-map sub-map
-                          :output-path output-path})))
-       (when-not (map? sub-map)
-         (throw (ex-info "Transaction function's :sub-map must be a map."
-                         {:sub-map sub-map
-                          :output-path output-path})))
-       (let [undefined-syms (u/get-undefined-syms sub-map)]
-         (when (seq undefined-syms)
-           (throw
-            (ex-info
-             (str "Undefined symbol(s) in subscription map for transaction  "
-                  "function. These symbols are used in subscription "
-                  "keypaths, but are not defined: " undefined-syms)
-             (u/sym-map undefined-syms sub-map output-path)))))
-       (doseq [[sym path] sub-map]
-         (when-not (= :sys (first path))
-           (throw
-            (ex-info (str "Paths in the :sub-map of a transaction function "
-                          "must begin with `:sys`.")
-                     {:sub-map sub-map
-                      :output-path output-path}))))
-       (when-not (pos? (count sub-map))
-         (throw (ex-info
-                 (str "Transaction function's :sub-map must contain at "
-                      "least one entry.")
-                 {:sub-map sub-map
-                  :output-path output-path})))
-       (when-not f
-         (throw (ex-info "Transaction function must have an :f key and value."
-                         {:sub-map sub-map
-                          :output-path output-path})))
-       (when-not output-path
-         (throw (ex-info "Transaction function must have an :output-path."
-                         {:sub-map sub-map
-                          :output-path output-path})))
-       (when-not (= :sys (first output-path))
-         (throw (ex-info (str "Transaction function's :output-path must "
-                              "begin with `:sys`.")
-                         {:sub-map sub-map
-                          :output-path output-path})))
-       (let [info (state/make-sub-info sub-map)
-             {:keys [ordered-sym-path-pairs tx-info-sym]} info
-             tf (u/sym-map ordered-sym-path-pairs tx-info-sym f output-path)]
-         (conj acc tf))))
-   [] tfs))
+(defn <log-out-subject-id*
+  [ep bc-client subject-id log-error *subject-id->conn-ids]
+  (au/go
+    (au/<? (<delete-token-info bc-client subject-id))
+    (doseq [conn-id (@*subject-id->conn-ids subject-id)]
+      (ep/close-conn ep conn-id))
+    (swap! *subject-id->conn-ids dissoc subject-id)
+    true))
+
+(defn <handle-log-out
+  [ep bc-client log-error *subject-id->conn-ids *conn-id->info arg metadata]
+  (let [{:keys [conn-id]} metadata
+        {:keys [subject-id]} (@*conn-id->info conn-id)]
+    (<log-out-subject-id* ep bc-client subject-id log-error
+                          *subject-id->conn-ids *conn-id->info)))
+
+(defn start-token-expiration-loop
+  [ep bc-client log-error *subject-id->conn-ids]
+  ;; (ca/go-loop []
+  ;;   (try
+  ;;     (doseq [info (au/<? (<get-expired-token-infos bc-client))]
+  ;;       (au/<? (<log-out-subject-id* ep bc-client (:subject-id info)
+  ;;                                    log-error *subject-id->conn-ids)))
+  ;;     (ca/<! (ca/timeout 60000)) ;; 1 minute
+  ;;     (catch Exception e
+  ;;       (log-error (str "Error in token-expriration-loop:\n"
+  ;;                       (u/ex-msg-and-stacktrace e)))))
+  ;;   (recur))
+  )
+
+(defn on-disconnect
+  [*conn-id->info *subject-id->conn-ids *branch->info bc-client
+   log-error log-info {:keys [conn-id] :as conn-info}]
+  (ca/go
+    (try
+      (let [{:keys [branch subject-id temp-branch?]} (@*conn-id->info conn-id)]
+        (swap! *conn-id->info dissoc conn-id)
+        (swap! *branch->info update branch update :conn-ids disj conn-id)
+        (swap! *subject-id->conn-ids
+               (fn [m]
+                 (let [new-conn-ids (disj (m subject-id) conn-id)]
+                   (if (seq new-conn-ids)
+                     (assoc m subject-id new-conn-ids)
+                     (dissoc m subject-id)))))
+        (when temp-branch?
+          (au/<? (bc/<delete-branch! bc-client branch)))
+        (log-info "Client disconnected (conn-info: " conn-info ")."))
+      (catch Throwable e
+        (log-error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
+                        (u/ex-msg-and-stacktrace e)))))))
 
 (defn vivo-server
-  ([port store-name state-schema]
-   (vivo-server port store-name state-schema {}))
-  ([port store-name state-schema opts]
-   (let [{:keys [log-info log-error initial-sys-state
-                 transaction-fns handle-http http-timeout-ms
-                 authentication-fn authorization-fn]} (merge default-opts opts)
-         protocol (u/make-sm-server-protocol state-schema)
+  "Returns a no-arg fn that stops the server."
+  ([port repository-name sys-state-schema]
+   (vivo-server port repository-name sys-state-schema {}))
+  ([port repository-name sys-state-schema opts]
+   (let [{:keys [authentication-fn
+                 authorization-fn
+                 handle-http
+                 http-timeout-ms
+                 log-error
+                 log-info
+                 login-lifetime-mins
+                 transaction-fns]} (merge default-opts opts)
+         bc-client (au/<?? (bc/<bristlecone-client
+                            repository-name sys-state-schema))
+         protocol (u/make-sm-server-protocol sys-state-schema)
          authenticator (constantly true)
-         ep (ep/endpoint "state-manager" authenticator protocol :server)
-         cs-opts (u/sym-map handle-http http-timeout-ms)
-         capsule-server (cs/server [ep] port cs-opts)
-         br-client (br/bristlecone-client store-name state-schema)
-         transaction-fns* (xf-tfs transaction-fns)
          *conn-id->info (atom {})
-         initial-db-id-num 0
-         *db-id-num (atom initial-db-id-num)
-         db-id (u/long->b62 initial-db-id-num)
-         *db-id->state (atom {db-id initial-sys-state})
-         *branch->info (atom {})]
-
+         *subject-id->conn-ids (atom {})
+         *branch->info (atom {})
+         ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
+                                          *subject-id->conn-ids *branch->info
+                                          bc-client log-error log-info)}
+         ep (ep/endpoint "state-manager" authenticator protocol :server ep-opts)
+         cs-opts (u/sym-map handle-http http-timeout-ms)
+         capsule-server (cs/server [ep] port cs-opts)]
+     (start-token-expiration-loop ep bc-client log-error *subject-id->conn-ids)
      (ep/set-handler ep :log-in
-                     (partial <handle-log-in ep authentication-fn
-                              *conn-id->info))
+                     (partial <handle-log-in ep bc-client
+                              authentication-fn login-lifetime-mins
+                              *conn-id->info *subject-id->conn-ids))
      (ep/set-handler ep :log-out
-                     (partial <handle-log-out ep *conn-id->info))
-     (ep/set-handler ep :set-branch
-                     (partial handle-set-branch
-                              *conn-id->info *branch->info))
+                     (partial <handle-log-out ep bc-client log-error
+                              *subject-id->conn-ids *conn-id->info))
+     (ep/set-handler ep :set-state-source
+                     (partial <handle-set-state-source
+                              *conn-id->info *branch->info bc-client))
      (ep/set-handler ep :get-state
-                     (partial <handle-get-state state-schema authorization-fn
-                              *conn-id->info *db-id->state *db-id-num))
+                     (partial <handle-get-state bc-client sys-state-schema
+                              authorization-fn *conn-id->info))
      (ep/set-handler ep :update-state
-                     (partial <handle-update-state ep state-schema
-                              authorization-fn log-error transaction-fns*
-                              *conn-id->info *branch->info
-                              *db-id->state *db-id-num))
+                     (partial <handle-update-state ep bc-client
+                              authorization-fn transaction-fns log-error
+                              *conn-id->info *branch->info))
      (cs/start capsule-server)
      (log-info (str "Vivo server started on port " port "."))
      #(cs/stop capsule-server))))

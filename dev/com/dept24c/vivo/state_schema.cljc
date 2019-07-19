@@ -21,6 +21,6 @@
 (l/def-record-schema state-schema
   [:app-name l/string-schema]
   [:msgs msgs-schema]
-  [:secret l/string-schema]
+  [:secret (l/maybe l/string-schema)]
   [:users users-schema]
-  [:user-id-to-msgs user-id-to-msgs-schema])
+  [:user-id-to-msgs (l/maybe user-id-to-msgs-schema)])

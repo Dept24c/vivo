@@ -4,6 +4,7 @@
    [com.dept24c.vivo.server :as server]
    [com.dept24c.vivo.state-schema :as ss]
    [com.dept24c.vivo.utils :as u]
+   [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.logging :as logging]
    [puget.printer :refer [cprint]]))
 
@@ -11,13 +12,13 @@
 
 (def stop-server nil)
 
-(def test-initial-sys-state
-  #:state{:msgs []
-          :users {}
-          :app-name "test-app"})
+(defn <authenticate [id secret]
+  (au/go
+    "user-a"))
 
-(defn authorized? [subject-id path]
-  (not= :secret (first path)))
+(defn <authorized? [subject-id path]
+  (au/go
+    (not= :secret (first path))))
 
 (defn configure-logging []
   (logging/add-log-reporter! :println logging/println-reporter)
@@ -31,7 +32,7 @@
     (println "Server is not running.")))
 
 (defn make-user-id-to-msgs [{:syms [msgs]}]
-  (reduce (fn [acc {:msg/keys [user-id] :as msg}]
+  (reduce (fn [acc {:keys [user-id] :as msg}]
             (update acc user-id conj msg))
           {} msgs))
 
@@ -40,16 +41,15 @@
    (start default-server-port))
   ([port]
    (configure-logging)
-   (let [tfs [{:sub-map '{msgs [:sys :state/msgs]}
+   (let [tfs [{:sub-map '{msgs [:msgs]}
                :f make-user-id-to-msgs
-               :output-path [:sys :state/user-id-to-msgs]}]
-         opts {:initial-sys-state test-initial-sys-state
-               :authentication-fn (constantly "user-a")
-               :authorization-fn authorized?
+               :output-path [:user-id-to-msgs]}]
+         opts {:authentication-fn <authenticate
+               :authorization-fn <authorized?
                :transaction-fns tfs}]
      (alter-var-root #'stop-server
                      (constantly (server/vivo-server
-                                  port "vivo-test-store"
+                                  port "vivo-test"
                                   ss/state-schema opts))))))
 
 ;; Note: This has problems due to not having socket address reuse

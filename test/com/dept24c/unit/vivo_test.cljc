@@ -4,7 +4,7 @@
    [clojure.test :refer [are deftest is]]
    [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.macro-impl :as macro-impl]
-   [com.dept24c.vivo.state :as state]
+   [com.dept24c.vivo.state-manager :as state-manager]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au])
   #?(:clj
@@ -79,7 +79,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The sub-map parameter must contain at least one entry"
-         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
 
 (deftest test-nil-sub-map
   (let [sm (vivo/state-manager)
@@ -87,7 +87,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The sub-map parameter must be a map"
-         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
 
 (deftest test-non-sym-key-in-sub-map
   (let [sm (vivo/state-manager)
@@ -95,7 +95,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"All keys in sub-map must be symbols. Got `:not-a-symbol`"
-         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
 
 (deftest test-bad-path-in-sub-map
   (let [sm (vivo/state-manager)
@@ -103,15 +103,15 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Only integers, keywords, symbols, and strings are valid path keys"
-         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
 
 (deftest test-bad-symbol-in-sub-map
   (let [sm (vivo/state-manager)
         bad-sub-map '{user-id [:local a-symbol-which-is-not-defined]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Undefined symbol.* in subscription map"
-         (vivo/subscribe! sm "test-1" bad-sub-map (constantly true))))))
+         #"is not defined"
+         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
 
 (deftest test-subscribe!
   (au/test-async
@@ -123,18 +123,16 @@
            name "Alice"
            user-id "123"
            sub-map '{id [:local :user-id]
-                     name [:local :users id :name]
-                     tx-info :vivo/tx-info}
+                     name [:local :users id :name]}
            expected '{id "123"
-                      name "Alice"
-                      tx-info :initial-subscription}]
+                      name "Alice"}]
        (au/<? (vivo/<update-state! sm [{:path [:local :users]
                                         :op :set
                                         :arg {user-id {:name name}}}
                                        {:path [:local :user-id]
                                         :op :set
                                         :arg user-id}]))
-       (vivo/subscribe! sm "test-1" sub-map update-fn)
+       (vivo/subscribe! sm sub-map nil update-fn)
        (is (= expected (au/<? ch)))))))
 
 (deftest test-subscribe!-single-entry
@@ -150,7 +148,7 @@
        (au/<? (vivo/<update-state! sm [{:path [:local :user-id]
                                         :op :set
                                         :arg user-id}]))
-       (vivo/subscribe! sm "test-1" sub-map update-fn)
+       (vivo/subscribe! sm sub-map nil update-fn)
        (is (= user-id (au/<? ch)))))))
 
 (deftest test-simple-insert*
@@ -190,7 +188,7 @@
                               :arg :new}]]]
     (doseq [case cases]
       (let [[expected {:keys [path op arg] :as cmd}] case
-            ret (state/insert* state path op arg)]
+            ret (state-manager/insert* state path op arg)]
         (is (= case [ret cmd]))))))
 
 (deftest test-deep-insert*
@@ -242,46 +240,46 @@
                                         :arg :new}]]]
     (doseq [case cases]
       (let [[expected {:keys [path op arg] :as cmd}] case
-            ret (state/insert* state path op arg)]
+            ret (state-manager/insert* state path op arg)]
         (is (= case [ret cmd]))))))
 
 (deftest test-bad-path-root-in-update-state!
   (let [sm (vivo/state-manager)]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Paths must begin with either :local or :sys. Got `:not-a-valid-root`"
-         (vivo/update-state! sm [{:path [:not-a-valid-root :x]
-                                  :op :set
-                                  :arg 1}])))))
+         #"Paths must begin with either :local, :conn, or :sys."
+         (vivo/<update-state! sm [{:path [:not-a-valid-root :x]
+                                   :op :set
+                                   :arg 1}])))))
 
 (deftest test-bad-path-root-in-sub-map
   (let [sm (vivo/state-manager)
         sub-map '{a [:not-a-valid-root :x]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Paths must begin with either :local or :sys. Got `:not-a-valid-root`"
-         (vivo/subscribe! sm "sub123" sub-map (constantly nil))))))
+         #"Paths must begin with either :local, :conn, or :sys."
+         (vivo/subscribe! sm sub-map nil (constantly nil))))))
 
 (deftest test-bad-insert*-on-map
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"does not point to a vector"
-       (state/insert* {} [0] :insert-before :new))))
+       (state-manager/insert* {} [0] :insert-before :new))))
 
 (deftest test-bad-insert*-path
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"the last element of the path must be an integer"
-       (state/insert* [] [] :insert-before :new))))
+       (state-manager/insert* [] [] :insert-before :new))))
 
 (deftest test-bad-command-op
   (let [sm (vivo/state-manager)]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"is not a valid op. Got: `:not-an-op`."
-         (vivo/update-state! sm [{:path [:local :x]
-                                  :op :not-an-op
-                                  :arg 1}])))))
+         (vivo/<update-state! sm [{:path [:local :x]
+                                   :op :not-an-op
+                                   :arg 1}])))))
 
 (deftest test-remove
   (let [state {:x [:a :b :c]}
@@ -296,7 +294,7 @@
                [{:x [:a :b :c]} state [:x -10]]]]
     (doseq [case cases]
       (let [[expected state* path] case
-            ret (state/eval-cmd state* {:path path :op :remove})]
+            ret (state-manager/eval-cmd state* {:path path :op :remove})]
         (is (= case [ret state* path]))))))
 
 (deftest test-math
@@ -317,7 +315,7 @@
                [{:x [{:a 10} {:a 19}]} state2 {:path [:x 1 :a] :op :- :arg 1}]]]
     (doseq [case cases]
       (let [[expected state* cmd] case
-            ret (state/eval-cmd state* cmd)]
+            ret (state-manager/eval-cmd state* cmd)]
         (is (= case [ret state* cmd]))))))
 
 (deftest test-ordered-update-maps
@@ -333,22 +331,22 @@
        (au/<? (vivo/<update-state! sm [{:path [:local]
                                         :op :set
                                         :arg {:msgs [{:title orig-title}]}}]))
-       (vivo/subscribe! sm "test-1" sub-map update-fn)
+       (vivo/subscribe! sm sub-map nil update-fn)
        (is (= orig-title (au/<? ch)))
-       (vivo/update-state! sm
-                           [{:path [:local :msgs 0]
-                             :op :insert-before
-                             :arg {:title orig-title}}
-                            {:path [:local :msgs 0 :title]
-                             :op :set
-                             :arg new-title}])
+       (au/<? (vivo/<update-state! sm
+                                   [{:path [:local :msgs 0]
+                                     :op :insert-before
+                                     :arg {:title orig-title}}
+                                    {:path [:local :msgs 0 :title]
+                                     :op :set
+                                     :arg new-title}]))
        (is (= new-title (au/<? ch)))
-       (vivo/update-state! sm [{:path [:local :msgs 0 :title]
-                                :op :set
-                                :arg new-title}
-                               {:path [:local :msgs 0]
-                                :op :insert-before
-                                :arg {:title orig-title}}])
+       (au/<? (vivo/<update-state! sm [{:path [:local :msgs 0 :title]
+                                        :op :set
+                                        :arg new-title}
+                                       {:path [:local :msgs 0]
+                                        :op :insert-before
+                                        :arg {:title orig-title}}]))
        (is (= orig-title (au/<? ch)))))))
 
 (deftest test-end-relative-sub-map
@@ -364,9 +362,29 @@
        (au/<? (vivo/<update-state! sm [{:path [:local]
                                         :op :set
                                         :arg {:msgs [{:title orig-title}]}}]))
-       (vivo/subscribe! sm "test-1" sub-map update-fn)
+       (vivo/subscribe! sm sub-map nil update-fn)
        (is (= orig-title (au/<? ch)))
-       (vivo/update-state! sm [{:path [:local :msgs -1]
-                                :op :insert-after
-                                :arg {:title new-title}}])
+       (au/<? (vivo/<update-state! sm [{:path [:local :msgs -1]
+                                        :op :insert-after
+                                        :arg {:title new-title}}]))
        (is (= new-title (au/<? ch)))))))
+
+(deftest test-relationship
+  (are [ret ks1 ks2] (= ret (u/relationship-info ks1 ks2))
+    [:equal nil] [] []
+    [:equal nil]  [:a] [:a]
+    [:equal nil] [:a :b :c] [:a :b :c]
+    [:parent [:a]] [] [:a]
+    [:parent [:b]] [:a] [:a :b]
+    [:parent [:b :c]] [:a] [:a :b :c]
+    [:parent [:c]] [:a :b] [:a :b :c]
+    [:child nil][:a] []
+    [:child nil] [:a :b] [:a]
+    [:child nil] [:a :b :c :d] [:a :b]
+    [:sibling nil] [:a] [:b]
+    [:sibling nil] [:a :c] [:b :c]
+    [:sibling nil] [:b] [:c :d :e]
+    [:sibling nil] [:a :b] [:a :c]
+    [:sibling nil] [:a :b] [:b :c]
+    [:sibling nil] [:a :b] [:a :c]
+    [:sibling nil] [:a :c :d] [:a :b :d]))

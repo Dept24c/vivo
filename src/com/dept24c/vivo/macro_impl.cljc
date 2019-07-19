@@ -2,7 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [clojure.set :as set]
-   [com.dept24c.vivo.state :as state]
+   [com.dept24c.vivo.state-manager :as state-manager]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [rum.core :as rum])
@@ -70,7 +70,7 @@
              "a subscription map or an argument list. Got: `"
              first-arg "`. type: " (type first-arg))
         (u/sym-map first-arg args))))))
-
+#_
 (defn subscribed-mixin
   [component-name num-args-defined sub-map]
   (let [*data-frame (atom nil)]
@@ -93,17 +93,18 @@
                                      #?(:cljs
                                         (rum/request-render
                                          (:rum/react-component cstate))))]
-                     (state/subscribe! state-manager sub-id sub-map
-                                       update-fn)
+                     (state-manager/subscribe! state-manager sub-id sub-map
+                                               update-fn)
                      ;; For SSR, wait for update-fn to be called.
                      #?(:clj (au/<?? updated-ch))
                      cstate))
      :will-unmount (fn [cstate]
                      (let [{:keys [state-manager sub-id]} cstate]
-                       (state/unsubscribe! state-manager sub-id)
+                       (state-manager/unsubscribe! state-manager sub-id)
                        cstate))}))
 
 (defn build-component [component-name args]
+  #_
   (let [[sub-map arglist body] (parse-def-component-args component-name args)
         sub-syms (keys sub-map)
         cname (name component-name)

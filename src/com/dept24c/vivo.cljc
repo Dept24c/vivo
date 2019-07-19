@@ -2,7 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [com.dept24c.vivo.macro-impl :as macro-impl]
-   [com.dept24c.vivo.state :as state])
+   [com.dept24c.vivo.state-manager :as state-manager])
   #?(:cljs
      (:require-macros com.dept24c.vivo)))
 
@@ -10,7 +10,7 @@
   ([]
    (state-manager {}))
   ([opts]
-   (state/state-manager opts)))
+   (state-manager/state-manager opts)))
 
 (defmacro def-component
   "Defines a Vivo React component. You may optionally provide a
@@ -20,56 +20,54 @@
   (macro-impl/build-component component-name args))
 
 (defn subscribe!
-  "Returns nil."
-  [sm sub-id sub-map update-fn]
-  (state/subscribe! sm sub-id sub-map update-fn))
+  "Returns a subscription id."
+  [sm sub-map cur-state update-fn]
+  (state-manager/subscribe! sm sub-map cur-state update-fn))
 
 (defn unsubscribe!
   "Returns nil."
   [sm sub-id]
-  (state/unsubscribe! sm sub-id))
+  (state-manager/unsubscribe! sm sub-id))
 
 (defn update-state!
-  ([sm update-commands]
-   (update-state! sm update-commands nil))
-  ([sm update-commands tx-info]
-   (state/update-state! sm update-commands tx-info nil)))
+  [sm update-commands cb]
+  (state-manager/update-state! sm update-commands cb))
 
 (defn <update-state!
   ([sm update-commands]
-   (<update-state! sm update-commands nil))
-  ([sm update-commands tx-info]
    (let [ch (ca/chan)
          cb #(ca/put! ch %)]
-     (state/update-state! sm update-commands tx-info cb)
+     (state-manager/update-state! sm update-commands cb)
      ch)))
 
 (defn log-in!
   ([sm identifier secret]
-   (state/log-in! sm identifier secret nil))
+   (state-manager/log-in! sm identifier secret nil))
   ([sm identifier secret cb]
-   (state/log-in! sm identifier secret cb)))
+   (state-manager/log-in! sm identifier secret cb)))
 
 (defn <log-in!
   [sm identifier secret]
   (let [ch (ca/chan)
         cb #(ca/put! ch %)]
-    (state/log-in! sm identifier secret cb)
+    (state-manager/log-in! sm identifier secret cb)
     ch))
 
 (defn log-out!
   ([sm]
-   (state/log-out! sm nil))
+   (state-manager/log-out! sm nil))
   ([sm cb]
-   (state/log-out! sm cb)))
+   (state-manager/log-out! sm cb)))
 
 (defn <log-out!
   [sm]
   (let [ch (ca/chan)
         cb #(ca/put! ch %)]
-    (state/log-out! sm cb)
+    (state-manager/log-out! sm cb)
     ch))
 
 (defn shutdown!
+  "Shutdown the state manager and its connection to the server.
+   Mostly useful in tests."
   [sm]
-  (state/shutdown! sm))
+  (state-manager/shutdown! sm))
