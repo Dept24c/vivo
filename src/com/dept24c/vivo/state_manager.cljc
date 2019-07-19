@@ -8,8 +8,6 @@
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
-   #?(:cljs ["react" :as React])
-   #?(:cljs ["react-dom" :as ReactDOM])
    [weavejester.dependency :as dep]))
 
 (def default-sm-opts
@@ -539,12 +537,3 @@
       (cc/set-handler capsule-client :sys-state-changed
                       (partial <handle-sys-state-changed sm)))
     sm))
-
-#?(:cljs
-   (defn use-vivo-state [sm sub-map]
-     (let [[state update-fn] (.useState React nil)
-           effect (fn []
-                    (let [sub-id (subscribe! sm sub-map state update-fn)]
-                      #(unsubscribe! sm sub-id)))]
-       (.useEffect React effect)
-       state)))

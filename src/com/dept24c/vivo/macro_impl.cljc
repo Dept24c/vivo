@@ -4,8 +4,7 @@
    [clojure.set :as set]
    [com.dept24c.vivo.state-manager :as state-manager]
    [com.dept24c.vivo.utils :as u]
-   [deercreeklabs.async-utils :as au]
-   [rum.core :as rum])
+   [deercreeklabs.async-utils :as au])
   #?(:clj
      (:import
       (clojure.lang ExceptionInfo))))

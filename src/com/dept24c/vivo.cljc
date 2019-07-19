@@ -2,7 +2,9 @@
   (:require
    [clojure.core.async :as ca]
    [com.dept24c.vivo.macro-impl :as macro-impl]
-   [com.dept24c.vivo.state-manager :as state-manager])
+   [com.dept24c.vivo.state-manager :as state-manager]
+   #?(:cljs ["react" :as React])
+   #?(:cljs ["react-dom" :as ReactDOM]))
   #?(:cljs
      (:require-macros com.dept24c.vivo)))
 
@@ -65,6 +67,17 @@
         cb #(ca/put! ch %)]
     (state-manager/log-out! sm cb)
     ch))
+
+#?(:cljs
+   (defn use-vivo-state
+     "React hook for Vivo"
+     [sm sub-map]
+     (let [[state update-fn] (.useState React nil)
+           effect (fn []
+                    (let [sub-id (subscribe! sm sub-map state update-fn)]
+                      #(unsubscribe! sm sub-id)))]
+       (.useEffect React effect)
+       state)))
 
 (defn shutdown!
   "Shutdown the state manager and its connection to the server.
