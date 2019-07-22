@@ -70,15 +70,17 @@ an example subscription map:
  user-name [:sys :users user-id :user/name]
  avatar-url [:sys :users user-id :user/avatar-url]}
 ```
-The map's keys are symbols and the values are [paths](#paths). The paths are
-used to index into Vivo state. Vivo then binds the value of the state at
+A subscription map's keys are Clojure symbols and the values are
+[paths](#paths). The paths are used to index into Vivo state.
+Vivo then binds the value of the state at
 the specified path to the appropriate symbol.
 For example, in the subscription map above, the `user-id` symbol will be
 bound to the value found in the Vivo state at `[:local :user/id]`.
 
 Note that symbols may be used in a path. If a symbol is used in a path,
-it must be defined by another map entry. For example, `user-id` is used
-in both the `user-name` and `avatar-url` paths.
+it must be defined by another map entry. For example, in the subscription
+map above, the `user-id` symbol is used in both the `user-name`
+and `avatar-url` paths.
 
 Order is not important in the map; symbols can be defined in any order.
 

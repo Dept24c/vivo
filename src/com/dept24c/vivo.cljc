@@ -58,7 +58,7 @@
   ([sm path arg]
    (let [ch (ca/chan)
          cb #(ca/put! ch %)]
-     (state/set-state! sm path arg cb)
+     (set-state! sm path arg cb)
      ch)))
 
 (defn log-in!
