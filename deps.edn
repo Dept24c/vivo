@@ -1,8 +1,8 @@
 {:deps
  {com.dept24c/bristlecone {:git/url "https://github.com/Dept24c/bristlecone.git"
-                           :sha "f5308aa373cb4cf227133ad8e608763e9f21124f"}
+                           :sha "2dbe55150ece76ad93c62c3fd12cdf8347011c55"}
   deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
-                         :sha "aaa9337a0c4631d5b92697304c64519b7715000b"}
+                         :sha "6eeacdbda81c7d36cb2721e9a77f48dae087c4d3"}
   deercreeklabs/stockroom {:mvn/version "0.2.0"}
   mvxcvi/puget {:mvn/version "1.1.2"}
   org.clojure/clojure {:mvn/version "1.10.1"}

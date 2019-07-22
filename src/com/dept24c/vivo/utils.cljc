@@ -136,7 +136,7 @@
 (l/def-array-schema path-schema
   path-item-schema)
 
-(defn long->non-neg-str [l]
+(defn long->non-neg-str [^long l]
   #?(:cljs (if (.isNegative l)
              (str "1" (.toString (.negate l)))
              (str "0" (.toString l)))
