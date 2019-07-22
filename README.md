@@ -3,7 +3,8 @@
 * [Installation](#installation)
 * [Vivo Concepts](#vivo-concepts)
   * [Paths](#paths)
-  * [Subscription Maps(#subscription-maps)
+  * [Subscription Maps](#subscription-maps)
+  * [Update Commands](#update-commands)
 * [API](#api)
   * [state-manager](#state-manager)
   * [def-component](#def-component)
@@ -31,34 +32,44 @@ In deps.edn:
 # Vivo Concepts
 
 ## Local + System State
+Vivo enables easy access to both local and system state. In the Vivo context,
+local state is local to the client and is not shared. System state is shared
+across all clients in the system.
 
 ## Paths
-State paths are a sequence of keys that index into the state data structure. These keys can be keywords, strings, or integers, depending on the specific state data structure. Keyword keys may or may not have namespaces. A path must start with either `:sys` (system state) or `:local` (local state). Some examples:
+State paths are a sequence of keys that index into the state data structure.
+These keys can be keywords, strings, or integers, depending on the specific
+state data structure. Keyword keys may or may not have namespaces. A path
+must start with either `:sys` (system state) or `:local` (local state).
+Some examples:
 * `[:local :user-id]`
 * `[:local :score-info :high-score]`
 * `[:sys :users "my-user-id" :user/name]`
 * `[:sys :msgs 0]`
 
 ### End-relative Indexing (Sequences only)
-For sequence data types, a path can use front-relative indexing, .e.g.:
+For paths referring to sequence data types, the path can use either
+front-relative indexing, .e.g.:
 
 * `[:sys :msgs 0]` - Refers to the first msg in the list
 * `[:sys :msgs 1]` - Refers to the second msg in the list
 
 or end-relative indexing, e.g.:
 
-`[:sys :msgs -1]` - Refers to the last msg in the list
-`[:sys :msgs -2]` - Refers to the penultimate msg in the list
+* `[:sys :msgs -1]` - Refers to the last msg in the list
+* `[:sys :msgs -2]` - Refers to the penultimate msg in the list
 
 ## Subscription Maps
-Subscription maps are used to specify a subscription to Vivo state. Here is an example subscription map:
+Subscription maps are used to specify a subscription to Vivo state. Here is
+an example subscription map:
 ```clojure
 {user-id [:local :user/id]
  user-name [:sys :users user-id :user/name]
  avatar-url [:sys :users user-id :user/avatar-url]}
 ```
 The map's keys are symbols and the values are [paths](#paths). The paths are used
-to index into Vivo state and bind the value to the appropriate symbol.
+to index into Vivo state. Vivo then bind the value of the state at the specified
+path to the appropriate symbol.
 For example, the `user-id` symbol will be bound to the value found in the
 Vivo state at `[:local :user/id]`.
 
@@ -70,18 +81,24 @@ Order is not important in the map; symbols can be defined in any order.
 
 ## Update Commands
 An update command is a map with three keys:
-* `:path`: The [path](#paths) on which the update command will operate; e.g. `[:local :page]`
-* `:op`: One of the supported update operations: (`:set`, `:remove`, `:insert-before`, `:insert-after`, `:plus`, `:minus`, `:multiply`, `:divide`, `:mod`)
+* `:path`: The [path](#paths) on which the update command will operate;
+e.g. `[:local :page]`
+* `:op`: One of the supported update operations: (`:set`, `:remove`,
+`:insert-before`, `:insert-after`, `:plus`, `:minus`, `:multiply`, `:divide`,
+`:mod`)
 * `:arg`: The command's argument
 
 
 # API
 ---
 ## Async API
-In order to work well in browsers, the Vivo API is asynchronous. Most Vivo functions have three forms:
+In order to work well in browsers, the Vivo API is asynchronous. Most Vivo
+functions have three forms:
 * A simple form: `(update-state! sm update-commands)` - Return value is ignored.
-* A callback form: `(update-state! sm update-commands cb)` - Return value is provided by calling the given callback `cb`.
-* A channel form: `(<update-state! sm update-commands)` - Returns a core.async channel, which will yield the function's return value.
+* A callback form: `(update-state! sm update-commands cb)` - Return value is
+provided by calling the given callback `cb`.
+* A channel form: `(<update-state! sm update-commands)` - Returns a
+core.async channel, which will yield the function's return value.
 
 
 ## API Functions
@@ -92,7 +109,9 @@ In order to work well in browsers, the Vivo API is asynchronous. Most Vivo funct
 (state-manager)
 (state-manager opts)
 ```
-Creates a state manager with the given options, if any. Each Vivo client should have exactly one state manager, which must be passed to all Vivo functions and components.
+Creates a state manager with the given options, if any. Each Vivo client
+should have exactly one state manager, which must be passed to all Vivo
+functions and components.
 
 ### Parameters
 * `opts`: A map of options. Supported options:
