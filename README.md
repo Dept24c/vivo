@@ -34,7 +34,9 @@ In deps.edn:
 ## Local + System State
 Vivo enables easy access to both local and system state. In the Vivo context,
 local state is local to the client and is not shared. System state is shared
-across all clients in the system.
+across all clients in the system. When any local or system state changes,
+any subscribed clients are automatically updated with the current state. This
+makes creating live, connected applications much easier.
 
 ## Paths
 State paths are a sequence of keys that index into the state data structure.
@@ -67,11 +69,11 @@ an example subscription map:
  user-name [:sys :users user-id :user/name]
  avatar-url [:sys :users user-id :user/avatar-url]}
 ```
-The map's keys are symbols and the values are [paths](#paths). The paths are used
-to index into Vivo state. Vivo then bind the value of the state at the specified
-path to the appropriate symbol.
-For example, the `user-id` symbol will be bound to the value found in the
-Vivo state at `[:local :user/id]`.
+The map's keys are symbols and the values are [paths](#paths). The paths are
+used to index into Vivo state. Vivo then binds the value of the state at
+the specified path to the appropriate symbol.
+For example, in the subscription map above, the `user-id` symbol will be
+bound to the value found in the Vivo state at `[:local :user/id]`.
 
 Note that symbols may be used in a path. If a symbol is used in a path,
 it must be defined by another map entry. For example, `user-id` is used
@@ -87,6 +89,8 @@ e.g. `[:local :page]`
 `:insert-before`, `:insert-after`, `:plus`, `:minus`, `:multiply`, `:divide`,
 `:mod`)
 * `:arg`: The command's argument
+
+For example:
 
 
 # API
