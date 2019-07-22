@@ -22,12 +22,14 @@
   (macro-impl/build-component component-name args))
 
 (defn subscribe!
-  "Returns a subscription id."
+  "Creates a Vivo subscription. When any of the paths in the `sub-map`
+   change, calls `update-fn` with the updated state.
+   Returns a subscription id."
   [sm sub-map cur-state update-fn]
   (state/subscribe! sm sub-map cur-state update-fn))
 
 (defn unsubscribe!
-  "Returns nil."
+  "Removes a Vivo subscription. Returns nil."
   [sm sub-id]
   (state/unsubscribe! sm sub-id))
 
@@ -42,6 +44,21 @@
    (let [ch (ca/chan)
          cb #(ca/put! ch %)]
      (state/update-state! sm update-commands cb)
+     ch)))
+
+(defn set-state!
+  ([sm path arg]
+   (set-state! sm path arg nil))
+  ([sm path arg cb]
+   (state/update-state! sm [{:path path
+                             :op :set
+                             :arg arg}] cb)))
+
+(defn <set-state!
+  ([sm path arg]
+   (let [ch (ca/chan)
+         cb #(ca/put! ch %)]
+     (state/set-state! sm path arg cb)
      ch)))
 
 (defn log-in!

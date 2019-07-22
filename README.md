@@ -1,8 +1,6 @@
 # Vivo
 * [About](#about)
 * [Installation](#installation)
-* [Subscription Maps](#subscription-maps)
-* [Update Maps](#update-maps)
 * [API](#api)
 * [License](#license)
 
@@ -14,119 +12,135 @@ Vivo is a framework for building connected applications.
 Use at your own risk.***
 
 # Installation
-
-# Subscription Maps
-Subscription maps are used to specify a subscription to Vivo state.
-Here is an example subscription map:
+In deps.edn:
 ```clojure
-{user-id [:local :user/id]
- user-name [:sys :users user-id :user/name]
- avatar-url [:sys :users user-id :user/avatar-url]}
+{:deps {com.dept24c/vivo {:git/url "https://github.com/Dept24c/vivo.git"
+                          :sha "xxx"}}}
 ```
-The map's keys are symbols and the values are paths. The paths are used
-to destructure Vivo state and bind the value to the appropriate symbol.
-For example, the `user-id` symbol will be bound to the value found in the
-Vivo state at `[:local :user/id]`.
-
-Note that symbols may be used in a path. If a symbol is used in a path,
-it must be defined by another map entry. For example, `user-id` is used
-in both the `user-name` and `avatar-url` paths.
-
-Order is not important in the map; symbols can be defined in any order.
-
-# Update Maps
-Update maps are used by the [update-state!](#update-state!) function
-to update the Vivo state. The semantics are nearly identical to Clojure's
-`update-in` function.
-
-The keys in an update-map are paths, and the values are update expressions.
-For example:
-```clojure
-{[:local] [:assoc :page :home]
- [:sys :messages] [:append "A new msg"]}
-```
-Update expressions are a vector which starts with an operation keyword.
-
-In the first line of the example above, the operation is `:assoc`.
-This expression will associate the value `:home` with the key `:page`
-in the top level of the `:local` state tree.
-
-The second line of the update map will append `A new msg` to the
-array of messages located at `[:sys :messages]` in the state tree.
-
-The currently supported operation keywords are:
-* `:assoc`
-* `:dissoc`
-* `:prepend`
-* `:append`
-* `:+`
-
 
 # API
 ---
+## Async API
+In order to work well in browsers, the Vivo API is asynchronous. Nearly all Vivo functions have three forms:
+* A simple form: `(update-state! sm update-commands)` - Return value is ignored.
+* A callback form: `(update-state! sm update-commands cb)` - Return value is provided by calling the given callback `cb`.
+* A channel form: `(<update-state! sm update-commands)` - Returns a core.async channel, which will yield the function's return value.
+
+
+## API Functions
+---
+
 ## `state-manager`
 ```clojure
-(state-manager root-key->state-provider)
+(state-manager)
+(state-manager opts)
 ```
-Creates a state manager with the given mapping of root keys to
-state providers. Each Vivo client should have exactly one
-state manager, which is passed to all Vivo components.
+Creates a state manager with the given options, if any. Each Vivo client should have exactly one state manager, which must be passed to all Vivo functions and components.
 
 ### Parameters
-* `root-key->state-provider`: A map of root keys to state providers.
-There must be at least one entry in the map.
+* `opts`: A map of options. Supported options:
+  * `:get-server-url`: A zero-arity function which returns a URL for
+  the Vivo server. Can return the URL or a channel which yields the
+  URL. Required if using `:sys` state.
+  * `:initial-local-state`: Initial value of the `:local` state.
+  Defaults to `nil`.
+  * `:log-error`: A function of one argument (a string) to log errors.
+  Defaults to `println`.
+  * `:log-info`: A function of one argument (a string) to log information.
+  Defaults to `println`.
+  * `:state-cache-size`: Size of the state cache, measured in number of items.
+     Defaults to 100.
+  * `:sys-state-schema`: The [Lancaster](https://github.com/deercreeklabs/lancaster) schema for the `:sys` state. Required if using `:sys` state.
+  * `:sys-state-source`: A map describing the source branch for the `:sys` state. Defaults to `{:temp-branch/db-id nil}`. Must be one of:
+    * `{:branch branch-name}` Sets the source to the given `branch-name`.
+    * `{:temp-branch/db-id nil}` Creates an empty temporary branch and sets it as the source. The branch is deleted when the state manager disconnects from the server. Useful for testing and staging environments.
+    * `{:temp-branch/db-id db-id}` Creates a temporary branch from the given `db-id` and sets it as the source. The branch is deleted when the state manager disconnects from the server. Useful for testing and staging environments.
 
 ### Return Value
 The created state manager.
 
 ### Example
 ```clojure
-(defonce sm (vivo/state-manager {:local (vivo/mem-state-provider)}))
+(defonce sm (vivo/state-manager))
 ```
 
 ---
-## `mem-state-provider`
-```clojure
-(mem-state-provider)
-(mem-state-provider initial-state)
-```
-Creates an in-memory, non-durable state provider. Optionally takes
-an initial state as an argument.
 
-### Parameters
-* `initial-state`: Optional. The initial state to store.
-
-### Return Value
-The created state provider
-
-### Example
-```clojure
-(defonce sm (vivo/state-manager {:local (vivo/mem-state-provider)}))
-```
-
----
 ## `update-state!`
 ```clojure
-(update-state sm update-map)
+(update-state! sm update-commands)
+(update-state! sm update-commands cb)
+(<update-state! sm update-commands)
 ```
-Updates the state using the given [update map](#update-maps), which is a
-map of paths to update expressions (upexes).
-If order is important, the update map can be
-replaced with a sequence of [path update-expression] pairs.
+Updates the state by executing the given sequence of update commands. The commands are executed in order. Atomicity is guraranteed. Either all the commands will succeed or none will.
+
 
 ### Parameters
 * `sm`: The Vivo state manager instance
-* `update-map`: A map of paths to [update expressions](#update-expressions)
+* `update-commands`: Each update command is a map with three keys:
+  * `:path`: The path on which the update command will operate; e.g. `[:local :page]`
+  * `:op`: One of the supported update operations: (`:set`, `:remove`, `:insert-before`, `:insert-after`, `:plus`, `:minus`, `:multiply`, `:divide`, `:mod`)
+  * `:arg`: The command's argument
+
 
 ### Return Value
-`nil`
+`true` or `false`, indicating success or failure.
 
 ### Example
+This sets the local page state to `:home`:
 ```clojure
-(vivo/update-state! sm {[:local] [:assoc :page :home]})
+(vivo/update-state! sm [{:path [:local :page]
+                         :op :set
+                         :arg :home}])
+```
+
+### See Also
+* [set-state!](#set-state)
+Since `:set` is the most common update command operation, Vivo provides a convenience fn for it:
+```clojure
+(vivo/set-state! [:local :page] :home)
+```
+is shorthand for:
+```clojure
+(vivo/update-state! sm [{:path [:local :page]
+                         :op :set
+                         :arg :home}])
 ```
 
 ---
+
+## `set-state!`
+```clojure
+(set-state! sm path arg)
+(set-state! sm path arg cb)
+(<set-state! sm path arg)
+```
+Sets the state at the given path to the given arg.
+
+### Parameters
+* `sm`: The Vivo state manager instance
+* `path`: The state path
+* `arg`: The value to set
+
+### Return Value
+`true` or `false`, indicating success or failure.
+
+### Example
+```clojure
+(vivo/set-state! [:local :page] :home)
+```
+This is shorthand for:
+```clojure
+(vivo/update-state! sm [{:path [:local :page]
+                         :op :set
+                         :arg :home}])
+```
+
+### See Also
+* [update-state!](#update-state)
+
+---
+
 ## `def-component`
 ```clojure
 (def-component component-name & args)
@@ -155,33 +169,41 @@ The defined Vivo component
 ```
 
 ---
-## `def-subscriber`
+## `subscribe!`
 ```clojure
-(def-subscriber subscriber-name & args)
+(subscribe! sm sub-map cur-state update-fn)
 ```
-Defines a non-visual Vivo subscriber.
 
 ### Parameters
-* `sub-map`: A [subscription map](#subscription-maps)
-* `constructor-args`: A vector of constructor arguments. The first argument
-must be a parameter named `sm` (the state manager).
-* `body`: The body of the subscriber. The subscriber may do anything,
-including producing side effects. The return value is ignored.
+* `sm`: The Vivo state manager instance
+* `sub-map`: A subscription map. Subscription maps are used to specify a subscription to Vivo state. Here is an example subscription map:
+```clojure
+{user-id [:local :user/id]
+ user-name [:sys :users user-id :user/name]
+ avatar-url [:sys :users user-id :user/avatar-url]}
+```
+The map's keys are symbols and the values are paths. The paths are used
+to destructure Vivo state and bind the value to the appropriate symbol.
+For example, the `user-id` symbol will be bound to the value found in the
+Vivo state at `[:local :user/id]`.
+
+Note that symbols may be used in a path. If a symbol is used in a path,
+it must be defined by another map entry. For example, `user-id` is used
+in both the `user-name` and `avatar-url` paths.
+
+Order is not important in the map; symbols can be defined in any order.
+
+* `cur-state`: The current state.
+* `update-fn`: A function that will be called when the subscribed state changes. The function will recieve a single map argument. The map's keys will be the symbols from the subscription map, and the map's values will be the pieces of state indicated by the paths in the subscription map.
 
 ### Return Value
-The defined subscriber
+A subscription id that can be used in `unsubscribe` calls.
 
 ### Example
-```clojure
-(vivo/def-subscriber a-subscriber
-  {name [:local :name]}
-  [sm ch]
-  (ca/put! ch name))
-```
 
 
 # License
-Copyright Department 24c, LLC
+Copyright Department 24C, LLC
 
 *Apache and the Apache logos are trademarks of The Apache Software Foundation.*
 
