@@ -5,13 +5,14 @@
   * [Paths](#paths)
   * [Subscription Maps](#subscription-maps)
   * [Update Commands](#update-commands)
+  * [Async API](#async-api)
 * [API](#api)
-  * [state-manager](#state-manager)
   * [def-component](#def-component)
+  * [set-state!](#set-state)
+  * [state-manager](#state-manager)
   * [subscribe!](#subscribe)
   * [unsubscribe!](#unsubscribe)
   * [update-state!](#update-state)
-  * [set-state!](#set-state)
   * [use-vivo-state](#use-vivo-state)
 * [License](#license)
 
@@ -92,9 +93,6 @@ e.g. `[:local :page]`
 
 For example:
 
-
-# API
----
 ## Async API
 In order to work well in browsers, the Vivo API is asynchronous. Most Vivo
 functions have three forms:
@@ -105,7 +103,7 @@ provided by calling the given callback `cb`.
 core.async channel, which will yield the function's return value.
 
 
-## API Functions
+# API
 ---
 
 ## `state-manager`
