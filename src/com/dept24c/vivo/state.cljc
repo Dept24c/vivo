@@ -3,6 +3,7 @@
    [clojure.core.async :as ca]
    [clojure.set :as set]
    [clojure.string :as str]
+   [com.dept24c.bristlecone :as bc]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.client :as cc]
@@ -19,18 +20,22 @@
 (def update-state-timeout-ms 30000)
 
 (defprotocol IStateManager
-  (log-in! [this identifier secret cb])
-  (log-out! [this cb])
-  (shutdown! [this])
-  (subscribe! [this sub-map cur-state update-fn])
-  (unsubscribe! [this sub-id])
-  (update-state! [this update-cmds cb])
-  (<make-state-info [this ordered-pairs local-state db-id])
-  (notify-subs [this updated-paths notify-all])
   (<get-in-sys-state [this db-id path])
+  (<handle-sys-and-local-updates [this sys-cmds local-cmds paths cb])
+  (<handle-sys-state-changed [this arg metadata])
+  (<handle-sys-updates-only [this sys-cmds paths cb])
+  (<make-state-info [this ordered-pairs local-state db-id])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
-  (<handle-sys-state-changed [this arg metadata]))
+  (handle-local-updates-only [this local-cmds paths cb])
+  (log-in! [this identifier secret cb])
+  (log-out! [this cb])
+  (notify-subs [this updated-paths notify-all])
+  (shutdown! [this])
+  (start-update-loop [this])
+  (subscribe! [this sub-map cur-state update-fn])
+  (unsubscribe! [this sub-id])
+  (update-state! [this update-cmds cb]))
 
 (defn local-path? [path]
   (= :local (first path)))
@@ -266,25 +271,28 @@
 
 (defn update-sub?* [updated-paths sub-path]
   (reduce (fn [acc updated-path]
-            (let [[relationship _] (u/relationship-info
-                                    (or updated-path [])
-                                    (or sub-path []))]
-              (if (= :sibling relationship)
-                false
-                (reduced true))))
+            (if (some number? updated-path) ;; Numeric paths are complex...
+              (reduced true)
+              (let [[relationship _] (u/relationship-info
+                                      (or updated-path [])
+                                      (or sub-path []))]
+                (if (= :sibling relationship)
+                  false
+                  (reduced true)))))
           false updated-paths))
 
 (defn update-sub? [updated-paths sub-paths]
   (reduce (fn [acc sub-path]
-            (if (update-sub?* updated-paths sub-path)
+            (if (or (some number? sub-path) ;; Numeric paths are complex...
+                    (update-sub?* updated-paths sub-path))
               (reduced true)
               false))
           false sub-paths))
 
 (defrecord StateManager [capsule-client sys-state-schema sys-state-source
                          log-info log-error state-cache sm->op-cache
-                         *local-state *sub-id->sub *cur-db-id *last-sub-id
-                         *conn-initialized? *stopped?]
+                         update-ch *local-state *sub-id->sub *cur-db-id
+                         *last-sub-id *conn-initialized? *stopped?]
   IStateManager
   (log-in! [this identifier secret cb]
     ;; (au/<? (<wait-for-conn-init this))
@@ -387,53 +395,92 @@
                   (ca/<! (ca/timeout 200))
                   (recur (dec tries-remaining)))))))
 
+  (<handle-sys-updates-only [this sys-cmds paths cb]
+    (au/go
+      (let [ret (au/<? (<update-sys-state this sys-cmds))
+            cb* (or cb (constantly nil))]
+        (if-not ret
+          (cb* false)
+          (let [{:keys [prev-db-id cur-db-id updated-paths]} ret
+                local-db-id @*cur-db-id
+                notify-all? (not= prev-db-id local-db-id)]
+            (if (or (nil? local-db-id)
+                    (bc/earlier? local-db-id cur-db-id))
+              (do
+                (reset! *cur-db-id cur-db-id)
+                (notify-subs this updated-paths notify-all?)
+                (cb* true))
+              (cb* false)))))))
+
+  (handle-local-updates-only [this local-cmds paths cb]
+    (swap! *local-state #(reduce eval-cmd % local-cmds))
+    (notify-subs this paths false)
+    (when cb
+      (cb true)))
+
+  (<handle-sys-and-local-updates [this sys-cmds local-cmds paths cb]
+    (au/go
+      (let [ret (au/<? (<update-sys-state this sys-cmds))
+            cb* (or cb (constantly nil))]
+        (if-not ret
+          (cb* false)
+          (let [{:keys [prev-db-id cur-db-id updated-paths]} ret
+                local-db-id @*cur-db-id
+                notify-all? (not= prev-db-id local-db-id)]
+            (if (or (nil? local-db-id)
+                    (bc/earlier? local-db-id cur-db-id))
+              (let [paths* (set/union (set paths) (set updated-paths))]
+                (reset! *cur-db-id cur-db-id)
+                (swap! *local-state #(reduce eval-cmd % local-cmds))
+                (notify-subs this paths* notify-all?)
+                (cb* true))
+              (cb* false)))))))
+
+  (start-update-loop [this]
+    (ca/go-loop []
+      (try
+        (au/<? (<wait-for-conn-init this))
+        (let [{:keys [cb] :as update} (au/<? update-ch)]
+          (try
+            (let [{:keys [sys-cmds local-cmds paths]} update]
+              (case [(boolean (seq sys-cmds)) (boolean (seq local-cmds))]
+                [false true]
+                (handle-local-updates-only this local-cmds paths cb)
+
+                [true false]
+                (au/<? (<handle-sys-updates-only this sys-cmds paths cb))
+
+                [true true]
+                (au/<? (<handle-sys-and-local-updates
+                        this sys-cmds local-cmds paths cb))
+
+                [false false] ;; No cmds
+                (when cb
+                  (cb true))))
+            (catch #?(:cljs js/Error :clj Throwable) e
+              (if cb
+                (cb e)
+                (throw e)))))
+        (catch #?(:cljs js/Error :clj Throwable) e
+          (log-error (str "Exception in update loop: "
+                          (u/ex-msg-and-stacktrace e)))))
+      (recur)))
+
   (update-state! [this update-cmds cb]
     (when-not (sequential? update-cmds)
       (throw (ex-info "The update-cmds parameter must be a sequence."
                       (u/sym-map update-cmds))))
-    (let [{:keys [local-cmds sys-cmds paths]} (make-update-info update-cmds)]
-      (ca/go
-        (try
-          (au/<? (<wait-for-conn-init this))
-          (let [ret (case [(boolean (seq local-cmds)) (boolean (seq sys-cmds))]
-                      [true true]
-                      (if-not (au/<? (<update-sys-state this sys-cmds))
-                        false
-                        (do
-                          (swap! *local-state #(reduce eval-cmd % local-cmds))
-                          ;; Don't need to notify subs because server will
-                          true))
-
-                      [true false]
-                      (do
-                        (swap! *local-state #(reduce eval-cmd % local-cmds))
-                        (notify-subs this paths false)
-                        true)
-
-                      [false true]
-                      (au/<? (<update-sys-state this sys-cmds))
-                      ;; Don't need to notify subs because server will
-
-                      [false false]
-                      false)]
-            (when cb
-              (cb (boolean ret))))
-          (catch #?(:clj Exception :cljs js/Error) e
-            (log-error (str "Exception in update-state!: "
-                            (u/ex-msg-and-stacktrace e)))
-            (when cb
-              (cb e))))))
+    (let [update-info (make-update-info update-cmds)]
+      (ca/put! update-ch (assoc update-info :cb cb)))
     nil)
 
   (<update-sys-state [this sys-cmds]
-    (au/go
-      (let [cmds (mapv (fn [cmd]
-                         (update cmd :arg #(u/edn->value-rec sys-state-schema
-                                                             (:path cmd) %)))
-                       sys-cmds)]
-        (au/<? (cc/<send-msg capsule-client :update-state {:update-cmds cmds}
-                             update-state-timeout-ms)))
-      true))
+    (let [cmds (mapv (fn [cmd]
+                       (update cmd :arg #(u/edn->value-rec sys-state-schema
+                                                           (:path cmd) %)))
+                     sys-cmds)]
+      (cc/<send-msg capsule-client :update-state {:update-cmds cmds}
+                    update-state-timeout-ms)))
 
   (<get-in-sys-state [this db-id path]
     (au/go
@@ -448,10 +495,19 @@
             v))))
 
   (<handle-sys-state-changed [this arg metadata]
-    (let [{:keys [cur-db-id prev-db-id updated-paths]} arg
-          notify-all? (not= prev-db-id @*cur-db-id)]
-      (reset! *cur-db-id cur-db-id)
-      (notify-subs this updated-paths notify-all?))))
+    ;; TODO: Combine this with handle-sys-updates-only
+    (ca/go
+      (try
+        (let [{:keys [prev-db-id cur-db-id updated-paths]} arg
+              local-db-id @*cur-db-id
+              notify-all? (not= prev-db-id local-db-id)]
+          (when (or (nil? local-db-id)
+                    (bc/earlier? local-db-id cur-db-id))
+            (reset! *cur-db-id cur-db-id)
+            (notify-subs this updated-paths notify-all?)))
+        (catch #?(:cljs js/Error :clj Throwable) e
+          (log-error (str "Exception in <handle-sys-state-changed: "
+                          (u/ex-msg-and-stacktrace e))))))))
 
 (defn <init-conn
   [client sys-state-source log-error log-info *cur-db-id *conn-initialized?]
@@ -523,6 +579,7 @@
         *stopped? (atom false)
         state-cache (sr/stockroom state-cache-size)
         sm->op-cache (sr/stockroom 500)
+        update-ch (ca/chan 50)
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
                          (make-capsule-client
@@ -531,8 +588,9 @@
                           *conn-initialized?))
         sm (->StateManager capsule-client sys-state-schema sys-state-source
                            log-info log-error state-cache sm->op-cache
-                           *local-state *sub-id->sub *cur-db-id *last-sub-id
-                           *conn-initialized? *stopped?)]
+                           update-ch *local-state *sub-id->sub *cur-db-id
+                           *last-sub-id *conn-initialized? *stopped?)]
+    (start-update-loop sm)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
                       (partial <handle-sys-state-changed sm)))

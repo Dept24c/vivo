@@ -219,7 +219,8 @@
             :sys-state-changed {:arg sys-state-change-schema
                                 :sender :server}
             :update-state {:arg (make-update-state-arg-schema state-schema)
-                           :ret l/boolean-schema
+                           :ret (l/union-schema [sys-state-change-schema
+                                                 l/boolean-schema])
                            :sender :state-manager}}}))
 
 (def schema-at-path (sr/memoize-sr l/schema-at-path 100))

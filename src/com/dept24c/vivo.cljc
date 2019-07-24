@@ -25,8 +25,10 @@
   "Creates a Vivo subscription. When any of the paths in the `sub-map`
    change, calls `update-fn` with the updated state.
    Returns a subscription id."
-  [sm sub-map cur-state update-fn]
-  (state/subscribe! sm sub-map cur-state update-fn))
+  ([sm sub-map update-fn]
+   (subscribe! sm sub-map nil update-fn))
+  ([sm sub-map cur-state update-fn]
+   (state/subscribe! sm sub-map cur-state update-fn)))
 
 (defn unsubscribe!
   "Removes a Vivo subscription. Returns nil."
@@ -93,7 +95,7 @@
      [sm sub-map]
      (let [[state update-fn] (.useState React nil)
            effect (fn []
-                    (let [sub-id (subscribe! sm sub-map state update-fn)]
+                    (let [sub-id (state/subscribe! sm sub-map state update-fn)]
                       #(unsubscribe! sm sub-id)))]
        (.useEffect React effect)
        state)))

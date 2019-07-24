@@ -79,7 +79,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The sub-map parameter must contain at least one entry"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map (constantly true))))))
 
 (deftest test-nil-sub-map
   (let [sm (vivo/state-manager)
@@ -87,7 +87,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The sub-map parameter must be a map"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map (constantly true))))))
 
 (deftest test-non-sym-key-in-sub-map
   (let [sm (vivo/state-manager)
@@ -95,7 +95,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"All keys in sub-map must be symbols. Got `:not-a-symbol`"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map (constantly true))))))
 
 (deftest test-bad-path-in-sub-map
   (let [sm (vivo/state-manager)
@@ -103,7 +103,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Only integers, keywords, symbols, and strings are valid path keys"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map (constantly true))))))
 
 (deftest test-bad-symbol-in-sub-map
   (let [sm (vivo/state-manager)
@@ -111,7 +111,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"is not defined"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true))))))
+         (vivo/subscribe! sm bad-sub-map (constantly true))))))
 
 (deftest test-subscribe!
   (au/test-async
@@ -132,7 +132,7 @@
                                        {:path [:local :user-id]
                                         :op :set
                                         :arg user-id}]))
-       (vivo/subscribe! sm sub-map nil update-fn)
+       (vivo/subscribe! sm sub-map update-fn)
        (is (= expected (au/<? ch)))))))
 
 (deftest test-subscribe!-single-entry
@@ -148,7 +148,7 @@
        (au/<? (vivo/<update-state! sm [{:path [:local :user-id]
                                         :op :set
                                         :arg user-id}]))
-       (vivo/subscribe! sm sub-map nil update-fn)
+       (vivo/subscribe! sm sub-map update-fn)
        (is (= user-id (au/<? ch)))))))
 
 (deftest test-simple-insert*
@@ -258,7 +258,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Paths must begin with either :local, :conn, or :sys."
-         (vivo/subscribe! sm sub-map nil (constantly nil))))))
+         (vivo/subscribe! sm sub-map (constantly nil))))))
 
 (deftest test-bad-insert*-on-map
   (is (thrown-with-msg?
@@ -328,10 +328,11 @@
            update-fn #(ca/put! ch (% 'title))
            orig-title "Plato"
            new-title "Socrates"]
-       (au/<? (vivo/<update-state! sm [{:path [:local]
-                                        :op :set
-                                        :arg {:msgs [{:title orig-title}]}}]))
-       (vivo/subscribe! sm sub-map nil update-fn)
+       (is (= true (au/<? (vivo/<update-state!
+                           sm [{:path [:local]
+                                :op :set
+                                :arg {:msgs [{:title orig-title}]}}]))))
+       (vivo/subscribe! sm sub-map update-fn)
        (is (= orig-title (au/<? ch)))
        (au/<? (vivo/<update-state! sm
                                    [{:path [:local :msgs 0]
@@ -362,7 +363,7 @@
        (au/<? (vivo/<update-state! sm [{:path [:local]
                                         :op :set
                                         :arg {:msgs [{:title orig-title}]}}]))
-       (vivo/subscribe! sm sub-map nil update-fn)
+       (vivo/subscribe! sm sub-map update-fn)
        (is (= orig-title (au/<? ch)))
        (au/<? (vivo/<update-state! sm [{:path [:local :msgs -1]
                                         :op :insert-after

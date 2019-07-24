@@ -250,12 +250,14 @@ The defined Vivo component
 ```clojure
 (subscribe! sm sub-map cur-state update-fn)
 ```
-Creates a Vivo subscription.
+Creates a Vivo subscription. Note that it is rare to call this function
+directly. Prefer the higher-level [def-component](#def-component) or
+[use-vivo-state](#use-vivo-state), which handle subscribing and unsubscribing
+directly.
 
 ### Parameters
 * `sm`: The Vivo state manager instance
 * `sub-map`: A [subscription map](#subscription-maps)
-* `cur-state`: The current state.
 * `update-fn`: A function that will be called when the subscribed state changes. The function will recieve a single map argument. The map's keys will be the symbols from the subscription map, and the map's values will be the pieces of state indicated by the paths in the subscription map.
 
 ### Return Value
@@ -270,7 +272,10 @@ TODO
 ```clojure
 (unsubscribe! sm sub-id)
 ```
-Deletes a Vivo subscription.
+Deletes a Vivo subscription.  Note that it is rare to call this function
+directly. Prefer the higher-level [def-component](#def-component) or
+[use-vivo-state](#use-vivo-state), which handle subscribing and unsubscribing
+directly.
 
 ### Parameters
 * `sm`: The Vivo state manager instance
@@ -293,6 +298,25 @@ map with the same keys as the [subscription map](#subscription-maps),
 but with state values.
 
 The React [Rules of Hooks](https://reactjs.org/docs/hooks-rules.html) apply.
+
+### Parameters
+* `sm`: The Vivo state manager instance
+* `sub-map`: A [subscription map](#subscription-maps)
+
+### Example
+```clojure
+(vivo/unsubscribe 789)
+```
+
+---
+
+## `shutdown!`
+```clojure
+(shutdown! sm)
+```
+Shut down the state manager, closing its connection to the server. Useful
+in testing and code reloading to avoid having multiple connections to the
+server.
 
 ### Parameters
 * `sm`: The Vivo state manager instance

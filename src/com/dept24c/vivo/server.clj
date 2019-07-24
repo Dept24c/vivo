@@ -50,7 +50,7 @@
                 change-info (assoc ret :updated-paths (map :path update-cmds))]
             (doseq [conn-id conn-ids]
               (ep/send-msg ep conn-id :sys-state-changed change-info))
-            (ca/>! ret-ch true))))
+            (ca/>! ret-ch change-info))))
       (catch Exception e
         (log-error (str "Error in state-update-loop:\n"
                         (u/ex-msg-and-stacktrace e)))))
@@ -70,7 +70,9 @@
         {:keys [subject-id branch]} (@*conn-id->info conn-id)
         xf-cmd #(update % :arg u/value-rec->edn)
         update-cmds (map xf-cmd (:update-cmds arg))
-        {:keys [update-ch conn-ids]} (@*branch->info branch)
+        {:keys [update-ch]
+         branch-conn-ids :conn-ids} (@*branch->info branch)
+        conn-ids (disj branch-conn-ids conn-id)
         ret-ch (ca/chan)
         ch (or update-ch
                (let [ch* (ca/chan 100)]
