@@ -3,7 +3,7 @@
    [clojure.core.async :as ca]
    [clojure.set :as set]
    [clojure.string :as str]
-   [com.dept24c.bristlecone :as bc]
+   [com.dept24c.bristlecone.db-ids :as db-ids]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.client :as cc]
@@ -405,7 +405,7 @@
                 local-db-id @*cur-db-id
                 notify-all? (not= prev-db-id local-db-id)]
             (if (or (nil? local-db-id)
-                    (bc/earlier? local-db-id cur-db-id))
+                    (db-ids/earlier? local-db-id cur-db-id))
               (do
                 (reset! *cur-db-id cur-db-id)
                 (notify-subs this updated-paths notify-all?)
@@ -428,7 +428,7 @@
                 local-db-id @*cur-db-id
                 notify-all? (not= prev-db-id local-db-id)]
             (if (or (nil? local-db-id)
-                    (bc/earlier? local-db-id cur-db-id))
+                    (db-ids/earlier? local-db-id cur-db-id))
               (let [paths* (set/union (set paths) (set updated-paths))]
                 (reset! *cur-db-id cur-db-id)
                 (swap! *local-state #(reduce eval-cmd % local-cmds))
@@ -502,7 +502,7 @@
               local-db-id @*cur-db-id
               notify-all? (not= prev-db-id local-db-id)]
           (when (or (nil? local-db-id)
-                    (bc/earlier? local-db-id cur-db-id))
+                    (db-ids/earlier? local-db-id cur-db-id))
             (reset! *cur-db-id cur-db-id)
             (notify-subs this updated-paths notify-all?)))
         (catch #?(:cljs js/Error :clj Throwable) e

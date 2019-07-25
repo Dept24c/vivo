@@ -1,6 +1,6 @@
 {:deps
  {com.dept24c/bristlecone {:git/url "https://github.com/Dept24c/bristlecone.git"
-                           :sha "c0444695e2356480608da096ce93c6a67ec30500"}
+                           :sha "367f983c2130ef596b0bd7d9bfd741f597033cb8"}
   deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
                          :sha "6eeacdbda81c7d36cb2721e9a77f48dae087c4d3"}
   deercreeklabs/stockroom {:mvn/version "0.2.0"}
@@ -21,7 +21,7 @@
                           "[cider.nrepl/cider-middleware]"]}
 
   :cider-cljs {:extra-deps {cider/cider-nrepl {:mvn/version "0.21.1"}
-                            cider/piggieback {:mvn/version "0.4.0"}}
+                            cider/piggieback {:mvn/version "0.4.1"}}
                :main-opts
                ["-m" "nrepl.cmdline" "--middleware"
                 "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
