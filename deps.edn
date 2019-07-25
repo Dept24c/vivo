@@ -1,6 +1,6 @@
 {:deps
  {com.dept24c/bristlecone {:git/url "https://github.com/Dept24c/bristlecone.git"
-                           :sha "3f932b578a2616b4e127685e19abea1bcd2c4c82"}
+                           :sha "a4b919debfd7c26aed60177fa6870e9416768811"}
   deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
                          :sha "6eeacdbda81c7d36cb2721e9a77f48dae087c4d3"}
   deercreeklabs/stockroom {:mvn/version "0.2.0"}
