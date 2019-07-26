@@ -27,13 +27,15 @@
                ["-m" "nrepl.cmdline" "--middleware"
                 "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
 
-  :dev {:extra-deps {org.clojure/tools.namespace {:mvn/version "0.2.11"}}
+  :dev {:extra-deps {cljsjs/react {:mvn/version "16.8.6-0"}
+                     org.clojure/tools.namespace {:mvn/version "0.2.11"}}
         :extra-paths ["dev"]}
 
   :run-test-server {:main-opts ["-m" "user"]
                     :extra-paths ["dev"]}
 
   :test {:extra-paths ["test"]
-         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-529"}
+         :extra-deps {cljsjs/react {:mvn/version "16.8.6-0"}
+                      lambdaisland/kaocha {:mvn/version "0.0-529"}
                       lambdaisland/kaocha-cljs {:mvn/version "0.0-40"}
                       lambdaisland/kaocha-cloverage {:mvn/version "0.0-32"}}}}}

@@ -9,6 +9,7 @@
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
+   #?(:cljs ["react" :as React])
    [weavejester.dependency :as dep]))
 
 (def default-sm-opts
