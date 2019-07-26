@@ -3,8 +3,7 @@
    [clojure.core.async :as ca]
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.state :as state]
-   #?(:cljs ["react" :as React])
-   #?(:cljs ["react-dom" :as ReactDOM]))
+   #?(:cljs ["react" :as React]))
   #?(:cljs
      (:require-macros com.dept24c.vivo)))
 
@@ -21,9 +20,22 @@
   [component-name & args]
   (macro-impl/build-component component-name args))
 
+#?(:cljs
+   (defn use-vivo-state
+     "React hook for Vivo"
+     [sm sub-map]
+     (let [[state update-fn] (.useState React nil)
+           effect (fn []
+                    (let [sub-id (state/subscribe! sm sub-map state update-fn)]
+                      #(unsubscribe! sm sub-id)))]
+       (.useEffect React effect)
+       state)))
+
 (defn subscribe!
   "Creates a Vivo subscription. When any of the paths in the `sub-map`
-   change, calls `update-fn` with the updated state.
+   change, calls `update-fn` with the updated state. Note that this
+   is a low-level function that generally should not be called directly.
+   Prefer `def-component` or `use-vivo-state`.
    Returns a subscription id."
   ([sm sub-map update-fn]
    (subscribe! sm sub-map nil update-fn))
@@ -77,28 +89,10 @@
     ch))
 
 (defn log-out!
-  ([sm]
-   (state/log-out! sm nil))
-  ([sm cb]
-   (state/log-out! sm cb)))
-
-(defn <log-out!
+  "Log out from the Vivo server."
   [sm]
-  (let [ch (ca/chan)
-        cb #(ca/put! ch %)]
-    (state/log-out! sm cb)
-    ch))
+  (state/log-out! sm))
 
-#?(:cljs
-   (defn use-vivo-state
-     "React hook for Vivo"
-     [sm sub-map]
-     (let [[state update-fn] (.useState React nil)
-           effect (fn []
-                    (let [sub-id (state/subscribe! sm sub-map state update-fn)]
-                      #(unsubscribe! sm sub-id)))]
-       (.useEffect React effect)
-       state)))
 
 (defn shutdown!
   "Shutdown the state manager and its connection to the server.

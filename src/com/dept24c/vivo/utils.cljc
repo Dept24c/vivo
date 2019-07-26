@@ -127,6 +127,7 @@
                  :plus :minus :multiply :divide :mod])
 (def op-schema (l/enum-schema :com.dept24c.vivo.utils/op
                               valid-ops))
+(def token-schema l/string-schema)
 
 (l/def-union-schema path-item-schema
   l/keyword-schema
@@ -151,9 +152,6 @@
   (let [vr-name (schema->value-rec-name value-schema)]
     (l/record-schema (keyword "com.dept24c.vivo.utils" vr-name)
                      [[(keyword vr-name) (l/maybe value-schema)]])))
-
-(l/def-enum-schema forbidden-schema
-  :vivo/forbidden)
 
 (defn make-values-union-schema [state-schema]
   (l/union-schema (mapv make-value-rec-schema (l/sub-schemas state-schema))))
@@ -180,12 +178,11 @@
 
 (l/def-record-schema log-in-arg-schema
   [:identifier l/string-schema]
-  [:secret l/string-schema]
-  [:is-token l/boolean-schema])
+  [:secret l/string-schema])
 
 (l/def-record-schema log-in-ret-schema
   [:subject-id subject-id-schema]
-  [:token l/string-schema])
+  [:token token-schema])
 
 (l/def-record-schema branch-state-source-schema
   [:branch l/string-schema])
@@ -193,12 +190,22 @@
 (l/def-record-schema temp-branch-state-source-schema
   [:temp-branch/db-id (l/maybe db-id-schema)])
 
+(l/def-record-schema token-info-schema
+  [:expiration-time-mins l/long-schema]
+  [:subject-id subject-id-schema])
+
+(l/def-record-schema subject-info-schema
+  [:hashed-secret l/string-schema]
+  [:identifiers (l/array-schema l/string-schema)])
+
+(def token-map-schema (l/map-schema token-info-schema))
+
 (def state-source-schema (l/union-schema [branch-state-source-schema
                                           temp-branch-state-source-schema]))
 
 (defn make-get-state-ret-schema [values-union-schema]
   (l/record-schema ::get-state-ret
-                   [[:vivo/is-forbidden (l/maybe l/boolean-schema)]
+                   [[:vivo/unauthorized (l/maybe l/boolean-schema)]
                     [:v (l/maybe values-union-schema)]]))
 
 (defn make-sm-server-protocol [state-schema]
@@ -210,8 +217,10 @@
             :log-in {:arg log-in-arg-schema
                      :ret (l/maybe log-in-ret-schema)
                      :sender :state-manager}
+            :log-in-w-token {:arg token-schema
+                             :ret (l/maybe subject-id-schema)
+                             :sender :state-manager}
             :log-out {:arg l/null-schema
-                      :ret l/boolean-schema
                       :sender :state-manager}
             :set-state-source {:arg state-source-schema
                                :ret db-id-schema

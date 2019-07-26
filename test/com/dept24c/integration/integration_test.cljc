@@ -107,65 +107,42 @@
 
 ;; TODO: Test combined :sys and :local subs and updates
 
-#_
 (deftest test-authentication
   (au/test-async
    10000
    (ca/go
      (let [sm (vivo/state-manager sm-opts)]
        (try
-         (let [df-ch (ca/chan)
-               sub-id "test-auth"]
-           (vivo/subscribe! sm sub-id
-                            '{subject-id [:local :vivo/subject-id]}
-                            (fn [df]
-                              (ca/put! df-ch df)))
-           (is (= {'subject-id nil} (au/<? df-ch)))
-           (vivo/log-in! sm "x" "x")
-           (is (= {'subject-id "user-a"} (au/<? df-ch)))
+         (let [state-ch (ca/chan)
+               subject-id "04df0587-43d7-41d8-af55-f4f6614e17eb"
+               identifier "test@tester.com"
+               secret "laughable"
+               sub-map '{subject-id [:local :vivo/subject-id]}
+               sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))]
+           (is (= {'subject-id nil} (au/<? state-ch)))
+           (vivo/log-in! sm identifier secret)
+           (is (= {'subject-id subject-id} (au/<? state-ch)))
            (vivo/log-out! sm)
-           (is (= {'subject-id nil} (au/<? df-ch)))
+           (is (= {'subject-id nil} (au/<? state-ch)))
            (vivo/unsubscribe! sm sub-id))
          (finally
            (vivo/shutdown! sm)))))))
-#_
+
 (deftest test-authorization
   (au/test-async
    10000
    (ca/go
      (let [sm (vivo/state-manager sm-opts)]
        (try
-         (let [df-ch (ca/chan)
-               sub-id "test-authz"
-               expected-df {'app-name "test-app"
-                            'secret :vivo/unauthorized}]
-           (vivo/subscribe! sm sub-id
-                            '{app-name [:sys :app-name]
-                              secret [:sys :secret]}
-                            (fn [df]
-                              (ca/put! df-ch df)))
-           (is (= expected-df (au/<? df-ch)))
-           (vivo/unsubscribe! sm sub-id))
-         (finally
-           (vivo/shutdown! sm)))))))
-#_
-(deftest test-conn-id
-  (au/test-async
-   10000
-   (ca/go
-     (let [sm (vivo/state-manager sm-opts)]
-       (try
-         (let [df-ch (ca/chan)
-               sub-id  "test-conn-id"]
-           (vivo/subscribe! sm sub-id
-                            '{conn-info [:conn :conn-info]}
-                            (fn [df]
-                              (ca/put! df-ch df)))
-           (is (= {'conn-info nil} (au/<? df-ch)))
-           (au/<? (vivo/<update-state! sm [{:path [:conn :conn-info]
-                                            :op :set
-                                            :arg "bar"}]))
-           (is (= {'conn-info :foo} (au/<? df-ch)))
+         (let [app-name "test-app"
+               _ (au/<? (vivo/<set-state! sm [:sys :app-name] app-name))
+               state-ch (ca/chan)
+               sub-map '{app-name [:sys :app-name]
+                         secret [:sys :secret]}
+               sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))
+               expected-state {'app-name app-name
+                               'secret :vivo/unauthorized}]
+           (is (= expected-state (au/<? state-ch)))
            (vivo/unsubscribe! sm sub-id))
          (finally
            (vivo/shutdown! sm)))))))

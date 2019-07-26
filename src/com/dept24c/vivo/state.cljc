@@ -17,6 +17,7 @@
    :state-cache-size 100})
 
 (def get-state-timeout-ms 30000)
+(def login-token-local-storage-key "login-token")
 (def update-state-timeout-ms 30000)
 
 (defprotocol IStateManager
@@ -29,13 +30,26 @@
   (<wait-for-conn-init [this])
   (handle-local-updates-only [this local-cmds paths cb])
   (log-in! [this identifier secret cb])
-  (log-out! [this cb])
+  (log-out! [this])
   (notify-subs [this updated-paths notify-all])
+  (set-subject-id [this subject-id])
   (shutdown! [this])
   (start-update-loop [this])
   (subscribe! [this sub-map cur-state update-fn])
   (unsubscribe! [this sub-id])
   (update-state! [this update-cmds cb]))
+
+(defn get-login-token []
+  #?(:cljs
+     (.getItem (.-localStorage js/window) login-token-local-storage-key)))
+
+(defn set-login-token [token]
+  #?(:cljs
+     (.setItem (.-localStorage js/window) login-token-local-storage-key token)))
+
+(defn delete-login-token []
+  #?(:cljs
+     (.removeItem (.-localStorage js/window) login-token-local-storage-key)))
 
 (defn local-path? [path]
   (= :local (first path)))
@@ -291,15 +305,48 @@
 
 (defrecord StateManager [capsule-client sys-state-schema sys-state-source
                          log-info log-error state-cache sm->op-cache
-                         update-ch *local-state *sub-id->sub *cur-db-id
-                         *last-sub-id *conn-initialized? *stopped?]
+                         update-ch subject-id-ch *local-state *sub-id->sub
+                         *cur-db-id *last-sub-id *conn-initialized? *stopped?]
   IStateManager
+  (set-subject-id [this subject-id]
+    (let [k :vivo/subject-id]
+      (if subject-id
+        (swap! *local-state assoc k subject-id)
+        (swap! *local-state dissoc k))
+      (notify-subs this [[:local k]] false)
+      nil))
+
   (log-in! [this identifier secret cb]
-    ;; (au/<? (<wait-for-conn-init this))
-    )
-  (log-out! [this cb]
-    ;;(au/<? (<wait-for-conn-init this))
-    )
+    (ca/go
+      (try
+        (let [arg (u/sym-map identifier secret)
+              {:keys [subject-id token]} (au/<? (cc/<send-msg capsule-client
+                                                              :log-in arg))
+              ret (if-not subject-id
+                    (do
+                      (log-info "Login failed.")
+                      false)
+                    (do
+                      (set-login-token token)
+                      (set-subject-id this subject-id)
+                      (log-info "Login succeeded.")
+                      true))]
+          (when cb
+            (cb ret)))
+        (catch #?(:cljs js/Error :clj Throwable) e
+          (log-error (str "Exception in log-in!" (u/ex-msg-and-stacktrace e)))
+          (when cb
+            (cb e))))))
+
+  (log-out! [this]
+    (ca/go
+      (try
+        (delete-login-token)
+        (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
+          (set-subject-id this nil)
+          (log-info (str "Logout " (if ret "succeeded." "failed."))))
+        (catch #?(:cljs js/Error :clj Throwable) e
+          (log-error (str "Exception in log-out!" (u/ex-msg-and-stacktrace e)))))))
 
   (shutdown! [this]
     (reset! *stopped? true)
@@ -345,25 +392,25 @@
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
         (try
-          (au/<? (<wait-for-conn-init this))
-          (let [local-state @*local-state
-                {:keys [paths state]} (au/<? (<make-si local-state
-                                                       @*cur-db-id))
-                update-fn (fn [local-state db-id]
-                            (ca/go
-                              (try
-                                (let [si (au/<? (<make-si local-state db-id))
-                                      {uf-state :state} si]
-                                  (when-not (= cur-state uf-state)
-                                    (update-fn* uf-state)))
-                                (catch #?(:cljs js/Error :clj Throwable) e
-                                  (log-error
-                                   (str "Exception calling update-fn:\n"
-                                        (u/ex-msg-and-stacktrace e)))))))
-                sub (u/sym-map paths update-fn)]
-            (swap! *sub-id->sub assoc sub-id sub)
-            (when-not (= cur-state state)
-              (update-fn* state)))
+          (when (au/<? (<wait-for-conn-init this))
+            (let [local-state @*local-state
+                  {:keys [paths state]} (au/<? (<make-si local-state
+                                                         @*cur-db-id))
+                  update-fn (fn [local-state db-id]
+                              (ca/go
+                                (try
+                                  (let [si (au/<? (<make-si local-state db-id))
+                                        {uf-state :state} si]
+                                    (when-not (= cur-state uf-state)
+                                      (update-fn* uf-state)))
+                                  (catch #?(:cljs js/Error :clj Throwable) e
+                                    (log-error
+                                     (str "Exception calling update-fn:\n"
+                                          (u/ex-msg-and-stacktrace e)))))))
+                  sub (u/sym-map paths update-fn)]
+              (swap! *sub-id->sub assoc sub-id sub)
+              (when-not (= cur-state state)
+                (update-fn* state))))
           (catch #?(:cljs js/Error :clj Exception) e
             (log-error (str "Error in subscribe!\n"
                             (u/ex-msg-and-stacktrace e))))))
@@ -439,32 +486,35 @@
   (start-update-loop [this]
     (ca/go-loop []
       (try
-        (au/<? (<wait-for-conn-init this))
-        (let [{:keys [cb] :as update} (au/<? update-ch)]
-          (try
-            (let [{:keys [sys-cmds local-cmds paths]} update]
-              (case [(boolean (seq sys-cmds)) (boolean (seq local-cmds))]
-                [false true]
-                (handle-local-updates-only this local-cmds paths cb)
+        (when (au/<? (<wait-for-conn-init this))
+          (let [[update ch] (ca/alts! [update-ch subject-id-ch])]
+            (if (= subject-id-ch ch)
+              (set-subject-id this update)
+              (try
+                (let [{:keys [sys-cmds local-cmds paths cb]} update]
+                  (case [(boolean (seq sys-cmds)) (boolean (seq local-cmds))]
+                    [false true]
+                    (handle-local-updates-only this local-cmds paths cb)
 
-                [true false]
-                (au/<? (<handle-sys-updates-only this sys-cmds paths cb))
+                    [true false]
+                    (au/<? (<handle-sys-updates-only this sys-cmds paths cb))
 
-                [true true]
-                (au/<? (<handle-sys-and-local-updates
-                        this sys-cmds local-cmds paths cb))
+                    [true true]
+                    (au/<? (<handle-sys-and-local-updates
+                            this sys-cmds local-cmds paths cb))
 
-                [false false] ;; No cmds
-                (when cb
-                  (cb true))))
-            (catch #?(:cljs js/Error :clj Throwable) e
-              (if cb
-                (cb e)
-                (throw e)))))
+                    [false false] ;; No cmds
+                    (when cb
+                      (cb true))))
+                (catch #?(:cljs js/Error :clj Throwable) e
+                  (if-let [cb (:cb update)]
+                    (cb e)
+                    (throw e)))))))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in update loop: "
                           (u/ex-msg-and-stacktrace e)))))
-      (recur)))
+      (when (au/<? (<wait-for-conn-init this)) ;; If stopped, exit loop
+        (recur))))
 
   (update-state! [this update-cmds cb]
     (when-not (sequential? update-cmds)
@@ -488,8 +538,8 @@
           (let [arg (u/sym-map db-id path)
                 ret (au/<? (cc/<send-msg capsule-client :get-state arg
                                          get-state-timeout-ms))
-                v (if (:vivo/is-forbidden ret)
-                    :vivo/is-forbidden
+                v (if (:vivo/unauthorized ret)
+                    :vivo/unauthorized
                     (u/value-rec->edn (:v ret)))]
             (sr/put state-cache [db-id path] v)
             v))))
@@ -510,13 +560,27 @@
                           (u/ex-msg-and-stacktrace e))))))))
 
 (defn <init-conn
-  [client sys-state-source log-error log-info *cur-db-id *conn-initialized?]
+  [capsule-client sys-state-source log-error log-info *cur-db-id
+   *conn-initialized? subject-id-ch]
   (ca/go
     (try
-      ;; TODO: Handle token-based login here
-      (let [source* (or sys-state-source
+      (let [token (get-login-token)
+            login-ch (when token
+                       (cc/<send-msg capsule-client :log-in-w-token token))
+            source* (or sys-state-source
                         {:temp-branch/db-id nil})
-            db-id (au/<? (cc/<send-msg client :set-state-source source*))]
+            set-source-ch (cc/<send-msg capsule-client
+                                        :set-state-source source*)
+            subject-id (when login-ch
+                         (au/<? login-ch))
+            db-id (au/<? set-source-ch)]
+        (if subject-id
+          (do
+            (ca/put! subject-id-ch subject-id)
+            (log-info "Token-based login succeeded."))
+          (do
+            (delete-login-token)
+            (log-info "Token-based login failed")))
         (reset! *cur-db-id db-id)
         (reset! *conn-initialized? true)
         (log-info "State manager connection initialized."))
@@ -526,11 +590,11 @@
 
 (defn <on-connect
   [sys-state-source log-error log-info *cur-db-id *conn-initialized?
-   capsule-client]
+   subject-id-ch capsule-client]
   (ca/go
     (try
       (au/<? (<init-conn capsule-client sys-state-source log-error log-info
-                         *cur-db-id *conn-initialized?))
+                         *cur-db-id *conn-initialized? subject-id-ch))
       (catch #?(:clj Exception :cljs js/Error) e
         (log-error (str "Error in <on-connect: "
                         (u/ex-msg-and-stacktrace e)))))))
@@ -549,7 +613,7 @@
 
 (defn make-capsule-client
   [get-server-url sys-state-schema sys-state-source log-error log-info
-   *cur-db-id *conn-initialized?]
+   *cur-db-id *conn-initialized? subject-id-ch]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in state-manager "
                          "constructor.")
@@ -558,7 +622,8 @@
         get-credentials (constantly {:subject-id "state-manager"
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect sys-state-source log-error
-                                   log-info *cur-db-id *conn-initialized?)
+                                   log-info *cur-db-id *conn-initialized?
+                                   subject-id-ch)
               :on-disconnect (partial on-disconnect *conn-initialized?)}]
     (cc/client get-server-url get-credentials
                protocol :state-manager opts)))
@@ -580,16 +645,18 @@
         state-cache (sr/stockroom state-cache-size)
         sm->op-cache (sr/stockroom 500)
         update-ch (ca/chan 50)
+        subject-id-ch (ca/chan 10)
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
                          (make-capsule-client
                           get-server-url sys-state-schema sys-state-source
-                          log-error log-info *cur-db-id
-                          *conn-initialized?))
+                          log-error log-info *cur-db-id *conn-initialized?
+                          subject-id-ch))
         sm (->StateManager capsule-client sys-state-schema sys-state-source
                            log-info log-error state-cache sm->op-cache
-                           update-ch *local-state *sub-id->sub *cur-db-id
-                           *last-sub-id *conn-initialized? *stopped?)]
+                           update-ch subject-id-ch *local-state *sub-id->sub
+                           *cur-db-id *last-sub-id *conn-initialized?
+                           *stopped?)]
     (start-update-loop sm)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed

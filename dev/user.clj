@@ -12,10 +12,6 @@
 
 (def stop-server nil)
 
-(defn <authenticate [id secret]
-  (au/go
-    "user-a"))
-
 (defn <authorized? [subject-id path]
   (au/go
     (not= :secret (first path))))
@@ -44,8 +40,7 @@
    (let [tfs [{:sub-map '{msgs [:msgs]}
                :f make-user-id-to-msgs
                :output-path [:user-id-to-msgs]}]
-         opts {:authentication-fn <authenticate
-               :authorization-fn <authorized?
+         opts {:authorization-fn <authorized?
                :transaction-fns tfs}]
      (alter-var-root #'stop-server
                      (constantly (server/vivo-server

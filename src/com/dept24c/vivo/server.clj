@@ -2,8 +2,11 @@
   (:require
    [clojure.core.async :as ca]
    [clojure.string :as str]
+   [cognitect.aws.client.api :as aws]
+   [cognitect.aws.client.api.async :as aws-async]
    [com.dept24c.bristlecone :as bc]
    [com.dept24c.vivo.utils :as u]
+   [crypto.password.bcrypt :as bcrypt]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.endpoint :as ep]
@@ -11,7 +14,13 @@
    [deercreeklabs.lancaster :as l])
   (:import
    (clojure.lang ExceptionInfo)
-   (java.security SecureRandom)))
+   (java.security SecureRandom)
+   (java.util UUID)))
+
+(def creds-key-root "--VIVO-CREDS-")
+(def idents-key-root "--VIVO-IDENTS-")
+(def login-tokens-key "--VIVO-LOGIN-TOKENS")
+(def work-factor 12)
 
 (defn default-health-http-handler [req]
   (if (= "/health" (:uri req))
@@ -23,15 +32,13 @@
      :body "I still haven't found what you're looking for..."}))
 
 (def default-opts
-  {:authentication-fn (fn [identifier secret]
-                        nil) ;; return subject-id or nil
-   :authorization-fn (fn [subject-id path]
+  {:authorization-fn (fn [subject-id path]
                        false) ;; return true or false
    :handle-http default-health-http-handler
    :http-timeout-ms 60000
    :log-info println
    :log-error println ;; TODO: use stderr
-   :login-lifetime-mins (* 60 24 30)}) ;; 30 days
+   :login-lifetime-mins (* 60 24 15)}) ;; 15 days
 
 (defn start-state-update-loop
   [ep ch bc-client authorization-fn tx-fns log-error]
@@ -118,7 +125,7 @@
                           (au/<? ret)
                           ret))]
       (if-not authorized?
-        {:is-forbidden true}
+        {:vivo/unauthorized true}
         {:v (->> (bc/<get-in bc-client db-id path)
                  (au/<?)
                  (u/edn->value-rec state-schema path))}))))
@@ -129,147 +136,274 @@
     (.nextBytes rng bytes)
     (ba/byte-array->b64 bytes)))
 
-(defn <store-token-info
-  [bc-client table-name subject-id token token-expiration-time-mins]
+(defn <get-ddb-item [ddb-client table-name k]
   (au/go
-    #_
-    (let [arg {:op :PutItem
-               :request {:TableName table-name
-                         :Item {"token" {:S token}
-                                "subject-id" {:S subject-id}
-                                "token-expiration-time-mins"
-                                {:N (str token-expiration-time-mins)}}}}
-          ret (au/<? (aws-async/invoke ddb-client arg))]
-      (= {} ret))))
-
-(defn <batch-store-token-infos [bc-client table-name infos]
-  (au/go
-    #_
-    (let [->rq (fn [{:keys [token subject-id token-expiration-time-mins]}]
-                 {:PutRequest {:Item {"token" {:S token}
-                                      "subject-id" {:S subject-id}
-                                      "token-expiration-time-mins"
-                                      {:N (str token-expiration-time-mins)}}}})
-          arg {:op :BatchWriteItem
-               :request {:RequestItems {table-name (map ->rq infos)}
-                         :ReturnConsumedCapacity "TOTAL"
-                         :ReturnItemCollectionMetrics "SIZE"}}
-          ret (au/<? (aws-async/invoke ddb-client arg))]
-      ret)))
-
-(defn mapval [m]
-  (-> m first second))
-
-(defn token-info-ddb->clj
-  [{:keys [token subject-id token-expiration-time-mins]}]
-  {:token (mapval token)
-   :subject-id (mapval subject-id)
-   :token-expiration-time-mins
-   (u/str->int (mapval token-expiration-time-mins))})
-
-(defn <get-token-info [bc-client table-name subject-id]
-  (au/go
-    #_
     (let [arg {:op :GetItem
                :request {:TableName table-name
-                         :Key {"subject-id" {:S subject-id}}}}
+                         :Key {"k" {:S k}}}}
           ret (au/<? (aws-async/invoke ddb-client arg))]
-      (some-> ret :Item token-info-ddb->clj))))
+      (some-> ret :Item))))
 
-(defn <get-all-token-infos [bc-client table-name]
+(defn <store-ddb-item [ddb-client table-name item]
   (au/go
-    #_
-    (loop [out []
-           last-key nil]
-      (let [arg {:op :Scan
-                 :request (cond-> {:TableName table-name}
-                            last-key (assoc :ExclusiveStartKey last-key))}
-            ret (au/<? (aws-async/invoke ddb-client arg))
-            infos (some->> ret :Items (map token-info-ddb->clj))
-            new-out (into out infos)]
-        (if-let [new-last-key (:LastEvaluatedKey ret)]
-          (recur new-out new-last-key)
-          new-out)))))
+    (let [arg {:op :PutItem
+               :request {:TableName table-name
+                         :Item item}}
+          ret (au/<? (aws-async/invoke ddb-client arg))]
+      (or (= {} ret)
+          (throw (ex-info "<store-ddb-item failed."
+                          (u/sym-map arg ret)))))))
 
-(defn <delete-token-info [bc-client subject-id]
-  (au/go
-    ;; TODO: Implement
-    ))
+(defn <delete-ddb-item [ddb-client table-name k]
+  (let [arg {:op :DeleteItem
+             :request {:TableName table-name
+                       :Key {"k" {:S k}}}}
+        ret (au/<? (aws-async/invoke ddb-client arg))]
+    (or (= {} ret)
+        (throw (ex-info "<delete-ddb-item failed."
+                        (u/sym-map arg ret))))))
 
-(defn <handle-token-log-in [bc-client table-name subject-id submitted-token]
+(defn <get-v [ddb-client table-name k schema]
   (au/go
-    #_
-    (let [{:keys [token]} (au/<? (<get-token-info ddb-client table-name
-                                                  subject-id))]
-      (when (= token submitted-token)
-        (u/sym-map subject-id token)))))
+    (some->> (<get-ddb-item ddb-client table-name k)
+             (au/<?)
+             (:v)
+             (:B)
+             (slurp)
+             (ba/b64->byte-array)
+             (l/deserialize-same schema))))
 
-(defn <handle-normal-log-in
-  [bc-client table-name authentication-fn identifier secret token-life-mins]
-  (au/go
-    (let [subject-id (let [ret (authentication-fn identifier secret)]
-                       (if (au/channel? ret)
-                         (au/<? ret)
-                         ret))]
-      (when subject-id
-        (let [token (generate-token)
-              token-expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
-                                            token-life-mins)]
-          (au/<? (<store-token-info bc-client table-name subject-id token
-                                    token-expiration-time-mins))
-          (u/sym-map subject-id token))))))
+;; TODO: Replace before 1,000 users
+(defn <get-token-map [ddb-client table-name]
+  (<get-v ddb-client table-name login-tokens-key u/token-map-schema))
 
-(defn <handle-log-in [ep bc-client authentication-fn token-life-mins
-                      *conn-id->info *subject-id->conn-ids arg metadata]
+;; TODO: Replace before 1,000 users
+(defn <store-token-map [ddb-client table-name m]
+  (let [v (->> (l/serialize u/token-map-schema m)
+               (ba/byte-array->b64))
+        item {"k" {:S login-tokens-key}
+              "v" {:B v}}]
+    (<store-ddb-item ddb-client table-name item)))
+
+(defn <handle-token-log-in [ep bc-client ddb-client table-name *conn-id->info
+                            *subject-id->conn-ids token metadata]
   (au/go
-    #_
-    (let [{:keys [identifier secret is-token]} arg
-          {:keys [conn-id]} metadata
-          ret (au/<? (if is-token
-                       (<handle-token-log-in bc-client table-name
-                                             identifier secret)
-                       (<handle-normal-log-in bc-client table-name
-                                              authentication-fn identifier
-                                              secret token-life-mins)))
-          {:keys [subject-id]} ret]
-      (when ret
+    (when-let [subject-id (some-> (<get-token-map ddb-client table-name)
+                                  (au/<?)
+                                  (get token)
+                                  (:subject-id))]
+      (let [{:keys [conn-id]} metadata]
         (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
         (swap! *subject-id->conn-ids update subject-id
-               (fn [old-conn-ids]
-                 (if old-conn-ids
-                   (conj old-conn-ids conn-id)
-                   #{conn-id})))
-        ret))))
+               (fn [conn-ids]
+                 (conj (or conn-ids #{}) conn-id)))
+        subject-id))))
 
-(defn <log-out-subject-id*
-  [ep bc-client subject-id log-error *subject-id->conn-ids]
-  (au/go
-    (au/<? (<delete-token-info bc-client subject-id))
-    (doseq [conn-id (@*subject-id->conn-ids subject-id)]
-      (ep/close-conn ep conn-id))
-    (swap! *subject-id->conn-ids dissoc subject-id)
-    true))
+(defn <handle-log-in
+  [ep bc-client ddb-client table-name token-lifetime-mins log-error
+   *conn-id->info *subject-id->conn-ids arg metadata]
+  (ca/go
+    (try
+      (let [{:keys [conn-id]} metadata
+            {:keys [identifier secret]} arg
+            k (str idents-key-root identifier)
+            item (au/<? (<get-ddb-item ddb-client table-name k))
+            subject-id (some-> item :subject-id :S)]
+        (when subject-id
+          (let [creds-k (str creds-key-root subject-id)
+                subject-info (au/<? (<get-v ddb-client table-name creds-k
+                                            u/subject-info-schema))]
+            (when (bcrypt/check secret (:hashed-secret subject-info))
+              (let [token (generate-token)
+                    expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
+                                            token-lifetime-mins)
+                    token-info (u/sym-map expiration-time-mins subject-id)
+                    token-map (au/<? (<get-token-map ddb-client table-name))
+                    new-token-map (assoc (or token-map {}) token token-info)]
+                (au/<? (<store-token-map ddb-client table-name new-token-map))
+                (swap! *conn-id->info update conn-id
+                       assoc :subject-id subject-id)
+                (swap! *subject-id->conn-ids update subject-id
+                       (fn [conn-ids]
+                         (conj (or conn-ids #{}) conn-id)))
+                (u/sym-map subject-id token))))))
+      (catch Exception e
+        (log-error (str "Error in <handle-log-in:\n"
+                        (u/ex-msg-and-stacktrace e)))))))
 
 (defn <handle-log-out
-  [ep bc-client log-error *subject-id->conn-ids *conn-id->info arg metadata]
-  (let [{:keys [conn-id]} metadata
-        {:keys [subject-id]} (@*conn-id->info conn-id)]
-    (<log-out-subject-id* ep bc-client subject-id log-error
-                          *subject-id->conn-ids *conn-id->info)))
+  [ep bc-client ddb-client table-name log-error *subject-id->conn-ids
+   *conn-id->info arg metadata]
+  (ca/go
+    (try
+      (let [{:keys [conn-id]} metadata
+            {:keys [subject-id]} (@*conn-id->info conn-id)
+            token-map (au/<? (<get-token-map ddb-client table-name))
+            new-token-map (reduce-kv
+                           (fn [acc token info]
+                             (if (= subject-id (:subject-id info))
+                               acc
+                               (assoc acc token info)))
+                           {} token-map)
+            conn-ids (@*subject-id->conn-ids subject-id)]
+        (au/<? (<store-token-map ddb-client table-name new-token-map))
+        (doseq [conn-id conn-ids]
+          (ep/close-conn ep conn-id)))
+      (catch Exception e
+        (log-error (str "Error in <handle-log-out:\n"
+                        (u/ex-msg-and-stacktrace e)))))))
+
+(defn <add-subject [ddb-client table-name identifiers secret]
+  (when-not (sequential? identifiers)
+    (throw (ex-info (str "identifiers must be a sequence. Got: `"
+                         (or identifiers "nil") "`.")
+                    (u/sym-map identifiers secret))))
+  (when-not (every? string? identifiers)
+    (throw (ex-info (str "identifiers must all be strings. Got: `"
+                         identifiers  "`.")
+                    (u/sym-map identifiers secret))))
+  (au/go
+    (let [subject-id (.toString ^UUID (UUID/randomUUID))
+          hashed-secret (bcrypt/encrypt secret work-factor)
+          subject-info (u/sym-map hashed-secret identifiers)
+          si-bytes (l/serialize u/subject-info-schema subject-info)
+          creds-item {"k" {:S (str creds-key-root subject-id)}
+                      "v" {:B (ba/byte-array->b64 si-bytes)}}]
+      (doseq [identifier identifiers]
+        (let [k (str idents-key-root identifier)
+              existing (au/<? (<get-ddb-item ddb-client table-name k))
+              id-item {"k" {:S k}
+                       "subject-id" {:S subject-id}}]
+          (when existing
+            (throw (ex-info (str "identifier `" identifier
+                                 "` already exists.")
+                            (u/sym-map identifier identifiers))))
+          (au/<? (<store-ddb-item ddb-client table-name id-item))))
+      (au/<? (<store-ddb-item ddb-client table-name creds-item))
+      subject-id)))
+
+(defn <delete-subject [ddb-client table-name subject-id]
+  (when-not (string? subject-id)
+    (throw (ex-info (str "subject-id must be a string. Got: `"
+                         (or subject-id "nil") "`.")
+                    (u/sym-map subject-id))))
+  (au/go
+    (let [creds-k (str creds-key-root subject-id)
+          ids (-> (<get-v ddb-client table-name creds-k u/subject-info-schema)
+                  (au/<?)
+                  (:identifiers))]
+      (au/<? (<delete-ddb-item ddb-client table-name creds-k))
+      (doseq [identifier ids]
+        (au/<? (<delete-ddb-item ddb-client table-name
+                                 (str idents-key-root identifier))))
+      true)))
+
+(defn <add-subject-identifier [ddb-client table-name subject-id identifier]
+  (when-not (string? subject-id)
+    (throw (ex-info (str "subject-id must be a string. Got: `"
+                         (or subject-id "nil") "`.")
+                    (u/sym-map subject-id))))
+  (when-not string? identifier
+            (throw (ex-info (str "identifier must be a string. Got: `"
+                                 identifier  "`.")
+                            (u/sym-map identifier subject-id))))
+  (au/go
+    (let [creds-k (str creds-key-root subject-id)
+          subject-info (au/<? (<get-v ddb-client table-name creds-k
+                                      u/subject-info-schema))
+          add-id #(-> (set %)
+                      (conj identifier)
+                      (seq))
+          si-bytes (l/serialize u/subject-info-schema
+                                (update subject-info :identifiers add-id))
+          creds-item {"k" {:S creds-k}
+                      "v" {:B (ba/byte-array->b64 si-bytes)}}
+          id-k (str idents-key-root identifier)
+          existing (au/<? (<get-ddb-item ddb-client table-name id-k))
+          id-item {"k" {:S id-k}
+                   "subject-id" {:S subject-id}}]
+      (when existing
+        (throw (ex-info (str "identifier `" identifier
+                             "` already exists.")
+                        (u/sym-map identifier))))
+      (au/<? (<store-ddb-item ddb-client table-name id-item))
+      (au/<? (<store-ddb-item ddb-client table-name creds-item))
+      true)))
+
+(defn <delete-subject-identifier [ddb-client table-name subject-id identifier]
+  (when-not (string? subject-id)
+    (throw (ex-info (str "subject-id must be a string. Got: `"
+                         (or subject-id "nil") "`.")
+                    (u/sym-map identifier subject-id))))
+  (when-not string? identifier
+            (throw (ex-info (str "identifier must be a string. Got: `"
+                                 identifier  "`.")
+                            (u/sym-map identifier subject-id))))
+  (au/go
+    (let [creds-k (str creds-key-root subject-id)
+          subject-info (au/<? (<get-v ddb-client table-name creds-k
+                                      u/subject-info-schema))
+          rm-id #(-> (set %)
+                     (disj identifier)
+                     (seq))
+          si-bytes (l/serialize u/subject-info-schema
+                                (update subject-info :identifiers rm-id))
+          creds-item {"k" {:S creds-k}
+                      "v" {:B (ba/byte-array->b64 si-bytes)}}]
+      (au/<? (<delete-ddb-item ddb-client table-name
+                               (str idents-key-root identifier)))
+      (au/<? (<store-ddb-item ddb-client table-name creds-item))
+      true)))
+
+(defn <change-secret [ddb-client table-name subject-id secret]
+  (when-not (string? subject-id)
+    (throw (ex-info (str "subject-id must be a string. Got: `"
+                         (or subject-id "nil") "`.")
+                    (u/sym-map subject-id))))
+  (when-not string? secret
+            (throw (ex-info (str "secret must be a string. Got: `"
+                                 (or secret "nil") "`.")
+                            (u/sym-map subject-id))))
+  (au/go
+    (let [creds-k (str creds-key-root subject-id)
+          new-hash (bcrypt/encrypt secret work-factor)
+          subject-info (-> (<get-v ddb-client table-name creds-k
+                                   u/subject-info-schema)
+                           (au/<?)
+                           (assoc :hashed-secret new-hash))
+          si-bytes (l/serialize u/subject-info-schema
+                                subject-info)
+          creds-item {"k" {:S creds-k}
+                      "v" {:B (ba/byte-array->b64 si-bytes)}}]
+      (au/<? (<store-ddb-item ddb-client table-name creds-item))
+      true)))
 
 (defn start-token-expiration-loop
-  [ep bc-client log-error *subject-id->conn-ids]
-  ;; (ca/go-loop []
-  ;;   (try
-  ;;     (doseq [info (au/<? (<get-expired-token-infos bc-client))]
-  ;;       (au/<? (<log-out-subject-id* ep bc-client (:subject-id info)
-  ;;                                    log-error *subject-id->conn-ids)))
-  ;;     (ca/<! (ca/timeout 60000)) ;; 1 minute
-  ;;     (catch Exception e
-  ;;       (log-error (str "Error in token-expriration-loop:\n"
-  ;;                       (u/ex-msg-and-stacktrace e)))))
-  ;;   (recur))
-  )
+  [ep bc-client ddb-client table-name log-error *subject-id->conn-ids]
+  (ca/go-loop []
+    (try
+      (let [token-map (au/<? (<get-token-map ddb-client table-name))
+            now-mins (u/ms->mins (u/current-time-ms))
+            m (reduce-kv
+               (fn [acc token info]
+                 (if (>= now-mins (:expiration-time-mins info))
+                   (update acc :expired-subject-ids conj
+                           (:subject-id info))
+                   (update acc :new-token-map assoc token info)))
+               {:new-token-map {}
+                :expired-subject-ids #{}}
+               token-map)
+            {:keys [new-token-map expired-subject-ids]} m]
+        (when (seq expired-subject-ids)
+          (au/<? (<store-token-map ddb-client table-name new-token-map))
+          (doseq [subject-id expired-subject-ids]
+            (doseq [conn-id (@*subject-id->conn-ids subject-id)]
+              (ep/close-conn ep conn-id))))
+        (ca/<! (ca/timeout 60000))) ;; 1 minute
+      (catch Exception e
+        (log-error (str "Error in token-expriration-loop:\n"
+                        (u/ex-msg-and-stacktrace e)))))
+    (recur)))
 
 (defn on-disconnect
   [*conn-id->info *subject-id->conn-ids *branch->info bc-client
@@ -297,8 +431,7 @@
   ([port repository-name sys-state-schema]
    (vivo-server port repository-name sys-state-schema {}))
   ([port repository-name sys-state-schema opts]
-   (let [{:keys [authentication-fn
-                 authorization-fn
+   (let [{:keys [authorization-fn
                  handle-http
                  http-timeout-ms
                  log-error
@@ -308,24 +441,31 @@
          bc-client (au/<?? (bc/<bristlecone-client
                             repository-name sys-state-schema))
          protocol (u/make-sm-server-protocol sys-state-schema)
-         authenticator (constantly true)
          *conn-id->info (atom {})
          *subject-id->conn-ids (atom {})
          *branch->info (atom {})
          ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
                                           *subject-id->conn-ids *branch->info
                                           bc-client log-error log-info)}
-         ep (ep/endpoint "state-manager" authenticator protocol :server ep-opts)
+         ep (ep/endpoint "state-manager" (constantly true) protocol
+                         :server ep-opts)
          cs-opts (u/sym-map handle-http http-timeout-ms)
-         capsule-server (cs/server [ep] port cs-opts)]
-     (start-token-expiration-loop ep bc-client log-error *subject-id->conn-ids)
+         capsule-server (cs/server [ep] port cs-opts)
+         ddb-client (aws/client {:api :dynamodb})]
+     (start-token-expiration-loop ep bc-client ddb-client repository-name
+                                  log-error *subject-id->conn-ids)
      (ep/set-handler ep :log-in
-                     (partial <handle-log-in ep bc-client
-                              authentication-fn login-lifetime-mins
+                     (partial <handle-log-in ep bc-client ddb-client
+                              repository-name login-lifetime-mins log-error
                               *conn-id->info *subject-id->conn-ids))
+     (ep/set-handler ep :log-in-w-token
+                     (partial <handle-token-log-in ep bc-client ddb-client
+                              repository-name *conn-id->info
+                              *subject-id->conn-ids))
      (ep/set-handler ep :log-out
-                     (partial <handle-log-out ep bc-client log-error
-                              *subject-id->conn-ids *conn-id->info))
+                     (partial <handle-log-out ep bc-client ddb-client
+                              repository-name log-error *subject-id->conn-ids
+                              *conn-id->info))
      (ep/set-handler ep :set-state-source
                      (partial <handle-set-state-source
                               *conn-id->info *branch->info bc-client
