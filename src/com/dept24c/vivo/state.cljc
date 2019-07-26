@@ -39,6 +39,17 @@
   (unsubscribe! [this sub-id])
   (update-state! [this update-cmds cb]))
 
+(defn use-vivo-state
+  "React hook for Vivo"
+  [sm sub-map]
+  #?(:cljs
+     (let [[state update-fn] (.useState React nil)
+           effect (fn []
+                    (let [sub-id (subscribe! sm sub-map state update-fn)]
+                      #(unsubscribe! sm sub-id)))]
+       (.useEffect React effect)
+       state)))
+
 (defn get-login-token []
   #?(:cljs
      (.getItem (.-localStorage js/window) login-token-local-storage-key)))

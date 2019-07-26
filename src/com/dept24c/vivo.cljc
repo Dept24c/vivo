@@ -20,16 +20,10 @@
   [component-name & args]
   (macro-impl/build-component component-name args))
 
-#?(:cljs
-   (defn use-vivo-state
-     "React hook for Vivo"
-     [sm sub-map]
-     (let [[state update-fn] (.useState React nil)
-           effect (fn []
-                    (let [sub-id (state/subscribe! sm sub-map state update-fn)]
-                      #(unsubscribe! sm sub-id)))]
-       (.useEffect React effect)
-       state)))
+(defn use-vivo-state
+  "React hook for Vivo"
+  [sm sub-map]
+  (state/use-vivo-state sm sub-map))
 
 (defn subscribe!
   "Creates a Vivo subscription. When any of the paths in the `sub-map`

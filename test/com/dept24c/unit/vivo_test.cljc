@@ -11,23 +11,31 @@
      (:import
       (clojure.lang ExceptionInfo))))
 
-(deftest test-parse-def-component-args-sequential
-  (let [arglist '[sm a b]
-        args [arglist]
-        expected [nil arglist nil]]
-    (is (= expected (macro-impl/parse-def-component-args 'foo args)))))
-
-(deftest test-parse-def-component-args-map
+(deftest test-parse-def-component-args-no-docstring
   (let [sub-map '{x [:b :c]}
         arglist '[sm a b]
         args [sub-map arglist]
-        expected [sub-map arglist nil]]
+        expected {:docstring nil
+                  :sub-map sub-map
+                  :arglist arglist
+                  :body nil}]
+    (is (= expected (macro-impl/parse-def-component-args 'foo args)))))
+
+(deftest test-parse-def-component-args-with-docstring
+  (let [docstring "This is my component"
+        sub-map '{x [:b :c]}
+        arglist '[sm a b]
+        args [docstring sub-map arglist]
+        expected {:docstring docstring
+                  :sub-map sub-map
+                  :arglist arglist
+                  :body nil}]
     (is (= expected (macro-impl/parse-def-component-args 'foo args)))))
 
 (deftest test-parse-def-component-args-bad-arg
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
-       #"Bad argument to component"
+       #"The sub-map parameter must be a map"
        (macro-impl/parse-def-component-args 'foo nil))))
 
 (deftest test-check-arglist-no-sm
