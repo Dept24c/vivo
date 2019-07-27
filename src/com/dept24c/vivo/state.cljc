@@ -590,7 +590,7 @@
           (do
             (ca/put! subject-id-ch subject-id)
             (log-info "Token-based login succeeded."))
-          (do
+          (when token
             (delete-login-token)
             (log-info "Token-based login failed")))
         (reset! *cur-db-id db-id)
