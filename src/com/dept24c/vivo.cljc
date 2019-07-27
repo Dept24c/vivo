@@ -13,8 +13,8 @@
    (state/state-manager opts)))
 
 (defmacro def-component
-  "Defines a Vivo React component. You may optionally provide a
-   subscription map. The first argument to the constructor must
+  "Defines a Vivo React component.
+  The first argument to the constructor must
    be a parameter named `sm` (a state manager)."
   [component-name & args]
   (macro-impl/build-component component-name args))
@@ -85,7 +85,6 @@
   "Log out from the Vivo server."
   [sm]
   (state/log-out! sm))
-
 
 (defn shutdown!
   "Shutdown the state manager and its connection to the server.
