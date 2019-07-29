@@ -68,6 +68,11 @@
      (set-state! sm path arg cb)
      ch)))
 
+(defn <ssr
+  "Perform a server-side rendering. Returns a string."
+  [sm component-fn]
+  (state/<ssr sm component-fn))
+
 (defn log-in!
   ([sm identifier secret]
    (state/log-in! sm identifier secret nil))

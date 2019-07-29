@@ -1,5 +1,7 @@
 (ns com.dept24c.vivo.state
   (:require
+   #?(:cljs ["react" :as React])
+   #?(:cljs ["react-dom/server" :as ReactDOMServer])
    [clojure.core.async :as ca]
    [clojure.set :as set]
    [clojure.string :as str]
@@ -9,7 +11,7 @@
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
-   #?(:cljs ["react" :as React])
+   #?(:cljs [oops.core :refer [oget ocall]])
    [weavejester.dependency :as dep]))
 
 (def default-sm-opts
@@ -20,13 +22,17 @@
 (def get-state-timeout-ms 30000)
 (def login-token-local-storage-key "login-token")
 (def update-state-timeout-ms 30000)
+(def initial-ssr-info {:resolved {}
+                       :needed #{}})
 
 (defprotocol IStateManager
   (<get-in-sys-state [this db-id path])
   (<handle-sys-and-local-updates [this sys-cmds local-cmds paths cb])
   (<handle-sys-state-changed [this arg metadata])
   (<handle-sys-updates-only [this sys-cmds paths cb])
-  (<make-state-info [this ordered-pairs local-state db-id])
+  (<make-state-info
+    [this sub-map-or-ordered-pairs]
+    [this sub-map-or-ordered-pairs local-state db-id])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
   (handle-local-updates-only [this local-cmds paths cb])
@@ -35,6 +41,9 @@
   (notify-subs [this updated-paths notify-all])
   (set-subject-id [this subject-id])
   (shutdown! [this])
+  (ssr? [this])
+  (<ssr [this component-fn])
+  (ssr-get-state! [this sub-map])
   (start-update-loop [this])
   (subscribe! [this sub-map cur-state update-fn])
   (unsubscribe! [this sub-id])
@@ -44,7 +53,9 @@
   "React hook for Vivo"
   [sm sub-map]
   #?(:cljs
-     (let [[state update-fn] (.useState React nil)
+     (let [initial-state (when (ssr? sm)
+                           (ssr-get-state! sm sub-map))
+           [state update-fn] (.useState React initial-state)
            effect (fn []
                     (let [sub-id (subscribe! sm sub-map state update-fn)]
                       #(unsubscribe! sm sub-id)))]
@@ -318,8 +329,51 @@
 (defrecord StateManager [capsule-client sys-state-schema sys-state-source
                          log-info log-error state-cache sm->op-cache
                          update-ch subject-id-ch *local-state *sub-id->sub
-                         *cur-db-id *last-sub-id *conn-initialized? *stopped?]
+                         *cur-db-id *last-sub-id *conn-initialized? *stopped?
+                         *ssr-info]
   IStateManager
+  (ssr? [this]
+    (boolean @*ssr-info))
+
+  (ssr-get-state! [this sub-map]
+    (or (get (:resolved @*ssr-info) sub-map)
+        (do
+          (swap! *ssr-info update :needed conj sub-map)
+          nil)))
+
+  (<ssr [this component-fn]
+    #?(:cljs
+       (au/go
+         (when-not (ifn? component-fn)
+           (throw (ex-info (str "component-fn must be a function. Got: `"
+                                (or component-fn "nil") "`.")
+                           (u/sym-map component-fn))))
+         (when-not (compare-and-set! *ssr-info nil initial-ssr-info)
+           (throw
+            (ex-info (str "Another SSR is in progress. Try again...") {})))
+         (try
+           (loop []
+             (let [el (component-fn this)
+                   s (ocall ReactDOMServer :renderToString el)
+                   _ (when-not (ocall React :isValidElement el)
+                       (throw (ex-info
+                               (str "component-fn must return a valid React "
+                                    "element. Returned: `" (or el "nil") "`.")
+                               {:returned el})))
+                   {:keys [needed]} @*ssr-info]
+               (if-not (seq needed)
+                 s
+                 (do
+                   (doseq [sub-map needed]
+                     (let [{:keys [state]} (au/<? (<make-state-info
+                                                   this sub-map))]
+                       (swap! *ssr-info update
+                              :resolved assoc sub-map state)))
+                   (swap! *ssr-info assoc :needed #{})
+                   (recur)))))
+           (finally
+             (reset! *ssr-info nil))))))
+
   (set-subject-id [this subject-id]
     (let [k :vivo/subject-id]
       (if subject-id
@@ -365,49 +419,54 @@
     (cc/shutdown capsule-client)
     (log-info "State manager stopped."))
 
-  (<make-state-info
-    [this ordered-pairs local-state db-id]
+  (<make-state-info [this sub-map-or-ordered-pairs]
+    (<make-state-info this sub-map-or-ordered-pairs @*local-state @*cur-db-id))
+
+  (<make-state-info [this sub-map-or-ordered-pairs local-state db-id]
     (au/go
       (let [init {:state {}
                   :paths []}]
-        (if-not (seq ordered-pairs)
+        (if-not (seq sub-map-or-ordered-pairs)
           init
-          (loop [acc init
-                 i 0]
-            (let [[sym path] (nth ordered-pairs i)
-                  resolved-path (mapv (fn [k]
-                                        (if (symbol? k)
-                                          (get-in acc [:state k])
-                                          k))
-                                      path)
-                  v (cond
-                      (local-path? path)
-                      (->> (rest resolved-path)
-                           (get-in-state local-state)
-                           (:val))
+          (let [ordered-pairs (if (map? sub-map-or-ordered-pairs)
+                                (sub-map->ordered-pairs
+                                 sm->op-cache sub-map-or-ordered-pairs)
+                                sub-map-or-ordered-pairs)]
+            ;; Use loop instead of reduce here to stay within the go block
+            (loop [acc init
+                   i 0]
+              (let [[sym path] (nth ordered-pairs i)
+                    resolved-path (mapv (fn [k]
+                                          (if (symbol? k)
+                                            (get-in acc [:state k])
+                                            k))
+                                        path)
+                    v (cond
+                        (local-path? path)
+                        (->> (rest resolved-path)
+                             (get-in-state local-state)
+                             (:val))
 
-                      (sys-path? path)
-                      ;; TODO: Optimize by getting multiple paths in one call
-                      (au/<? (<get-in-sys-state this db-id
-                                                (rest resolved-path))))
-                  new-acc (-> acc
-                              (assoc-in [:state sym] v)
-                              (update :paths conj resolved-path))]
-              (if (= (dec (count ordered-pairs)) i)
-                new-acc
-                (recur new-acc (inc i)))))))))
+                        (sys-path? path)
+                        ;; TODO: Optimize by getting multiple paths in one call
+                        (au/<? (<get-in-sys-state this db-id
+                                                  (rest resolved-path))))
+                    new-acc (-> acc
+                                (assoc-in [:state sym] v)
+                                (update :paths conj resolved-path))]
+                (if (= (dec (count ordered-pairs)) i)
+                  new-acc
+                  (recur new-acc (inc i))))))))))
 
   (subscribe! [this sub-map cur-state update-fn*]
     (let [sub-id (get-sub-id *last-sub-id)
-          opairs (sub-map->ordered-pairs sm->op-cache sub-map)
-          <make-si (partial <make-state-info this opairs)]
+          ordered-pairs (sub-map->ordered-pairs sm->op-cache sub-map)
+          <make-si (partial <make-state-info this ordered-pairs)]
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
         (try
           (when (au/<? (<wait-for-conn-init this))
-            (let [local-state @*local-state
-                  {:keys [paths state]} (au/<? (<make-si local-state
-                                                         @*cur-db-id))
+            (let [{:keys [paths state]} (au/<? (<make-si))
                   update-fn (fn [local-state db-id]
                               (ca/go
                                 (try
@@ -654,6 +713,7 @@
         *last-sub-id (atom 0)
         *conn-initialized? (atom (not get-server-url))
         *stopped? (atom false)
+        *ssr-info (atom nil)
         state-cache (sr/stockroom state-cache-size)
         sm->op-cache (sr/stockroom 500)
         update-ch (ca/chan 50)
@@ -666,9 +726,9 @@
                           subject-id-ch))
         sm (->StateManager capsule-client sys-state-schema sys-state-source
                            log-info log-error state-cache sm->op-cache
-                           update-ch subject-id-ch *local-state *sub-id->sub
-                           *cur-db-id *last-sub-id *conn-initialized?
-                           *stopped?)]
+                           update-ch subject-id-ch *local-state
+                           *sub-id->sub *cur-db-id *last-sub-id
+                           *conn-initialized? *stopped? *ssr-info)]
     (start-update-loop sm)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed

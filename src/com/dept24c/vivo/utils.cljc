@@ -4,7 +4,6 @@
    #?(:clj [clojure.edn :as edn])
    #?(:cljs [clojure.pprint :as pprint])
    [deercreeklabs.async-utils :as au]
-   [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
    #?(:clj [puget.printer :refer [cprint cprint-str]]))
