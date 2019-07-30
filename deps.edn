@@ -3,8 +3,8 @@
                            :sha "186eed56c97faeb11d5c69915f06fc46de098606"}
   crypto-password {:mvn/version "0.2.1"}
   deercreeklabs/capsule {:git/url "https://github.com/deercreeklabs/capsule.git"
-                         :sha "07d826b6ead2449ec522a17211a9e38a95b8e6af"}
-  deercreeklabs/stockroom {:mvn/version "0.2.0"}
+                         :sha "854367e0e8cc0fd5049ef541cedb7bf674c6595f"}
+  deercreeklabs/stockroom {:mvn/version "0.2.1"}
   mvxcvi/puget {:mvn/version "1.1.2"}
   org.clojure/clojure {:mvn/version "1.10.1"}
   org.clojure/clojurescript {:mvn/version "1.10.520"}
