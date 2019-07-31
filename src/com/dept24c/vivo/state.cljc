@@ -390,6 +390,7 @@
                                                               :log-in arg))
               ret (if-not subject-id
                     (do
+                      (delete-login-token)
                       (log-info "Login failed.")
                       false)
                     (do
@@ -412,7 +413,8 @@
           (set-subject-id this nil)
           (log-info (str "Logout " (if ret "succeeded." "failed."))))
         (catch #?(:cljs js/Error :clj Throwable) e
-          (log-error (str "Exception in log-out!" (u/ex-msg-and-stacktrace e)))))))
+          (log-error (str "Exception in log-out!"
+                          (u/ex-msg-and-stacktrace e)))))))
 
   (shutdown! [this]
     (reset! *stopped? true)
