@@ -2,6 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [com.dept24c.vivo.macro-impl :as macro-impl]
+   [com.dept24c.vivo.server :as server]
    [com.dept24c.vivo.state :as state])
   #?(:cljs
      (:require-macros com.dept24c.vivo)))
