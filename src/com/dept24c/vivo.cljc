@@ -96,3 +96,9 @@
    Mostly useful in tests."
   [sm]
   (state/shutdown! sm))
+
+#?(:clj
+   (defn vivo-server
+     "Returns a no-arg fn that stops the server."
+     [port repository-name sys-state-schema opts]
+     (server/vivo-server port repository-name sys-state-schema opts)))
