@@ -474,7 +474,8 @@
                                 (try
                                   (let [si (au/<? (<make-si local-state db-id))
                                         {uf-state :state} si]
-                                    (when-not (= cur-state uf-state)
+                                    (when (and (not= cur-state uf-state)
+                                               (@*sub-id->sub sub-id))
                                       (update-fn* uf-state)))
                                   (catch #?(:cljs js/Error :clj Throwable) e
                                     (log-error
