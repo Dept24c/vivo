@@ -64,15 +64,19 @@
 
 (defn get-login-token []
   #?(:cljs
-     (.getItem (.-localStorage js/window) login-token-local-storage-key)))
+     (when (u/browser?)
+       (.getItem (.-localStorage js/window) login-token-local-storage-key))))
 
 (defn set-login-token [token]
   #?(:cljs
-     (.setItem (.-localStorage js/window) login-token-local-storage-key token)))
+     (when (u/browser?)
+       (.setItem (.-localStorage js/window)
+                 login-token-local-storage-key token))))
 
 (defn delete-login-token []
   #?(:cljs
-     (.removeItem (.-localStorage js/window) login-token-local-storage-key)))
+     (when (u/browser?)
+       (.removeItem (.-localStorage js/window) login-token-local-storage-key))))
 
 (defn local-path? [path]
   (= :local (first path)))
