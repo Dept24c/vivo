@@ -706,6 +706,9 @@
     (cc/client get-server-url get-credentials
                protocol :state-manager opts)))
 
+(defn with-key [element k]
+  #?(:cljs (ocall React :cloneElement element #js {"key" k})))
+
 (defn state-manager [opts]
   (let [{:keys [get-server-url
                 initial-local-state

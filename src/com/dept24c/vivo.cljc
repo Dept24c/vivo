@@ -103,3 +103,8 @@
      "Returns a no-arg fn that stops the server."
      [port repository-name sys-state-schema opts]
      (server/vivo-server port repository-name sys-state-schema opts)))
+
+(defn with-key
+  "Adds the given React key to element."
+  [element k]
+  (state/with-key element k))
