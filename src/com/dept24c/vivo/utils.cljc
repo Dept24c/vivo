@@ -4,12 +4,17 @@
    #?(:clj [clojure.edn :as edn])
    #?(:cljs [clojure.pprint :as pprint])
    [deercreeklabs.async-utils :as au]
+   [deercreeklabs.capsule.logging :as logging]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
    #?(:clj [puget.printer :refer [cprint cprint-str]]))
   #?(:cljs
      (:require-macros
-      [com.dept24c.vivo.utils :refer [sym-map]])))
+      [com.dept24c.vivo.utils :refer [sym-map]])
+     :clj
+     (:import (java.nio ByteBuffer))))
+
+(set! *warn-on-reflection* true)
 
 (defmacro sym-map
   "Builds a map from symbols.
@@ -21,8 +26,32 @@
   [& syms]
   (zipmap (map keyword syms) syms))
 
+(defprotocol IBristleconeClient
+  (<create-branch! [this branch-name db-id temp?])
+  (<delete-branch! [this branch-name])
+  (<get-in [this db-id path])
+  (<get-all-branches [this])
+  (<get-db-id [this branch])
+  (<get-num-commits [this branch])
+  (<get-log [this branch limit])
+  (<merge! [this source-branch target-branch])
+  (<commit! [this branch update-commands msg tx-fns]))
+
+(defprotocol IBristleconeStorage
+  (<allocate-block-num [this])
+  (<read-block [this block-id] [this block-id skip-cache?])
+  (<write-block [this block-id data] [this block-id data skip-cache?])
+  (<delete-block [this block-id]))
+
+(defn configure-capsule-logging
+  ([]
+   (configure-capsule-logging :debug))
+  ([level]
+   (logging/add-log-reporter! :println logging/println-reporter)
+   (logging/set-log-level! level)))
+
 (defn pprint [x]
-  #?(:clj (.write *out* (cprint-str x))
+  #?(:clj (.write *out* ^String (cprint-str x))
      :cljs (pprint/pprint x)))
 
 (defn pprint-str [x]
@@ -50,6 +79,17 @@
 (defn str->edn [s]
   #?(:clj (edn/read-string s)
      :cljs (reader/read-string s)))
+
+(defn long->byte-array [^Long l]
+  (let [bb ^ByteBuffer (ByteBuffer/allocate Long/BYTES)]
+    (.putLong bb l)
+    (.array bb)))
+
+(defn byte-array->long [^bytes ba]
+  (let [bb ^ByteBuffer (ByteBuffer/allocate Long/BYTES)]
+    (.put bb ba)
+    (.flip bb)
+    (.getLong bb)))
 
 (defn ms->mins [ms]
   (int (/ ms 1000 60)))
@@ -121,6 +161,10 @@
 ;;;;;;;;;;;;;;;;;;;; Schemas ;;;;;;;;;;;;;;;;;;;;
 
 (def db-id-schema l/string-schema)
+(def block-num-schema l/long-schema)
+(def fp-schema l/long-schema)
+(def branch-name-schema l/string-schema)
+(def all-branches-schema (l/array-schema branch-name-schema))
 (def subject-id-schema l/string-schema)
 (def valid-ops  [:set :remove :insert-before :insert-after
                  :plus :minus :multiply :divide :mod])
@@ -128,47 +172,47 @@
                               valid-ops))
 (def token-schema l/string-schema)
 
+(def branch-value-schema (l/maybe db-id-schema))
+
+(l/def-record-schema db-info-schema
+  [:data-block-num block-num-schema]
+  [:data-block-fp fp-schema]
+  [:update-commands-block-num block-num-schema]
+  [:update-commands-fp fp-schema]
+  [:msg l/string-schema]
+  [:timestamp-ms l/long-schema]
+  [:num-prev-dbs l/int-schema]
+  [:prev-db-num (l/maybe block-num-schema)])
+
 (l/def-union-schema path-item-schema
   l/keyword-schema
   l/string-schema
-  l/int-schema)
+  l/long-schema)
 
 (l/def-array-schema path-schema
   path-item-schema)
 
-(defn long->non-neg-str [^long l]
-  #?(:cljs (if (.isNegative l)
-             (str "1" (.toString (.negate l)))
-             (str "0" (.toString l)))
-     :clj (if (neg? l)
-            (str "1" (Long/toString (* -1 l) 10))
-            (str "0" (Long/toString l 10)))))
+(l/def-record-schema serialized-value-schema
+  [:fp (l/maybe l/long-schema)]
+  [:bytes (l/maybe l/bytes-schema)])
 
-(defn schema->value-rec-name [value-schema]
-  (str "v-" (long->non-neg-str (l/fingerprint64 value-schema))))
+(l/def-record-schema serializable-update-command-schema
+  [:path (l/maybe path-schema)]
+  [:op op-schema]
+  [:arg (l/maybe serialized-value-schema)])
 
-(defn make-value-rec-schema [value-schema]
-  (let [vr-name (schema->value-rec-name value-schema)]
-    (l/record-schema (keyword "com.dept24c.vivo.utils" vr-name)
-                     [[(keyword vr-name) (l/maybe value-schema)]])))
-
-(defn make-values-union-schema [state-schema]
-  (l/union-schema (mapv make-value-rec-schema (l/sub-schemas state-schema))))
-
-(defn make-update-cmd-schema [state-schema]
-  (l/record-schema ::update-cmd
-                   [[:path (l/maybe path-schema)]
-                    [:op op-schema]
-                    [:arg (l/maybe (make-values-union-schema state-schema))]]))
-
-(defn make-update-state-arg-schema [state-schema]
-  (let [update-cmd-schema (make-update-cmd-schema state-schema)]
-    (l/record-schema ::update-state-arg
-                     [[:update-cmds (l/array-schema update-cmd-schema)]])))
+(def serializable-update-commands-schema
+  (l/array-schema serializable-update-command-schema))
 
 (l/def-record-schema get-state-arg-schema
   [:db-id db-id-schema]
   [:path path-schema])
+
+(l/def-enum-schema unauthorized-schema
+  :vivo/unauthorized)
+
+(def get-state-ret-schema
+  (l/union-schema [l/null-schema unauthorized-schema serialized-value-schema]))
 
 (l/def-record-schema sys-state-change-schema
   [:cur-db-id db-id-schema]
@@ -202,48 +246,31 @@
 (def state-source-schema (l/union-schema [branch-state-source-schema
                                           temp-branch-state-source-schema]))
 
-(defn make-get-state-ret-schema [values-union-schema]
-  (l/record-schema ::get-state-ret
-                   [[:vivo/unauthorized (l/maybe l/boolean-schema)]
-                    [:v (l/maybe values-union-schema)]]))
-
-(defn make-sm-server-protocol [state-schema]
-  (let [values-union-schema (make-values-union-schema state-schema)]
-    {:roles [:state-manager :server]
-     :msgs {:get-state {:arg get-state-arg-schema
-                        :ret (make-get-state-ret-schema values-union-schema)
-                        :sender :state-manager}
-            :log-in {:arg log-in-arg-schema
-                     :ret (l/maybe log-in-ret-schema)
-                     :sender :state-manager}
-            :log-in-w-token {:arg token-schema
-                             :ret (l/maybe subject-id-schema)
-                             :sender :state-manager}
-            :log-out {:arg l/null-schema
+(def sm-server-protocol
+  {:roles [:state-manager :server]
+   :msgs {:get-schema-pcf {:arg l/long-schema
+                           :ret (l/maybe l/string-schema)
+                           :sender :either}
+          :get-state {:arg get-state-arg-schema
+                      :ret get-state-ret-schema
                       :sender :state-manager}
-            :set-state-source {:arg state-source-schema
-                               :ret db-id-schema
-                               :sender :state-manager}
-            :sys-state-changed {:arg sys-state-change-schema
-                                :sender :server}
-            :update-state {:arg (make-update-state-arg-schema state-schema)
-                           :ret (l/union-schema [sys-state-change-schema
-                                                 l/boolean-schema])
-                           :sender :state-manager}}}))
-
-(def schema-at-path (sr/memoize-sr l/schema-at-path 100))
-
-(defn value-rec-key [state-schema path]
-  (let [value-schema (schema-at-path state-schema path)
-        vr-name (schema->value-rec-name value-schema)]
-    (keyword vr-name)))
-
-(defn edn->value-rec [state-schema path v]
-  (let [k (value-rec-key state-schema path)]
-    {k v}))
-
-(defn value-rec->edn [value-rec]
-  (-> value-rec first second))
+          :log-in {:arg log-in-arg-schema
+                   :ret (l/maybe log-in-ret-schema)
+                   :sender :state-manager}
+          :log-in-w-token {:arg token-schema
+                           :ret (l/maybe subject-id-schema)
+                           :sender :state-manager}
+          :log-out {:arg l/null-schema
+                    :sender :state-manager}
+          :set-state-source {:arg state-source-schema
+                             :ret db-id-schema
+                             :sender :state-manager}
+          :sys-state-changed {:arg sys-state-change-schema
+                              :sender :server}
+          :update-state {:arg serializable-update-commands-schema
+                         :ret (l/union-schema [sys-state-change-schema
+                                               l/boolean-schema])
+                         :sender :state-manager}}})
 
 (defn get-undefined-syms [sub-map]
   (let [defined-syms (set (keys sub-map))]

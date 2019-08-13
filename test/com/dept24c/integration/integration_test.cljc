@@ -21,11 +21,7 @@
               :nickname "Bo"})
 (def user-bo-id 1)
 
-(defn configure-logging []
-  (logging/add-log-reporter! :println logging/println-reporter)
-  (logging/set-log-level! :debug))
-
-(configure-logging)
+(u/configure-capsule-logging :info)
 
 (defn join-msgs-and-users [msgs users]
   (reduce (fn [acc {:keys [user-id text] :as msg}]
@@ -106,7 +102,6 @@
            (vivo/shutdown! sm)))))))
 
 ;; TODO: Test combined :sys and :local subs and updates
-
 (deftest test-authentication
   (au/test-async
    10000
@@ -127,6 +122,7 @@
            (vivo/unsubscribe! sm sub-id))
          (finally
            (vivo/shutdown! sm)))))))
+
 
 (deftest test-authorization
   (au/test-async

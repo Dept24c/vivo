@@ -4,14 +4,15 @@
    [clojure.string :as str]
    [cognitect.aws.client.api :as aws]
    [cognitect.aws.client.api.async :as aws-async]
-   [com.dept24c.bristlecone :as bc]
+   [com.dept24c.vivo.bristlecone.client :as bcc]
    [com.dept24c.vivo.utils :as u]
    [crypto.password.bcrypt :as bcrypt]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.endpoint :as ep]
    [deercreeklabs.capsule.server :as cs]
-   [deercreeklabs.lancaster :as l])
+   [deercreeklabs.lancaster :as l]
+   [deercreeklabs.stockroom :as sr])
   (:import
    (clojure.lang ExceptionInfo)
    (java.security SecureRandom)
@@ -43,52 +44,100 @@
 (defn start-state-update-loop
   [ep ch bc-client authorization-fn tx-fns log-error]
   (ca/go-loop []
-    (try
-      (let [{:keys [subject-id branch update-cmds conn-ids ret-ch]} (au/<? ch)
-            authorized? (reduce (fn [acc {:keys [path] :as cmd}]
-                                  (if (authorization-fn subject-id path)
-                                    acc
-                                    (reduced false)))
-                                true update-cmds)]
-        (if-not authorized?
-          (ca/>! ret-ch false)
-          (let [ret (au/<? (bc/<commit! bc-client branch update-cmds ""
-                                        tx-fns))
-                change-info (assoc ret :updated-paths (map :path update-cmds))]
-            (doseq [conn-id conn-ids]
-              (ep/send-msg ep conn-id :sys-state-changed change-info))
-            (ca/>! ret-ch change-info))))
-      (catch Exception e
-        (log-error (str "Error in state-update-loop:\n"
-                        (u/ex-msg-and-stacktrace e)))))
+    (let [{:keys [subject-id branch update-cmds conn-ids ret-ch]} (au/<? ch)]
+      (try
+        (let [authorized? (reduce (fn [acc {:keys [path] :as cmd}]
+                                    (if (authorization-fn subject-id path)
+                                      acc
+                                      (reduced false)))
+                                  true update-cmds)]
+          (if-not authorized?
+            (ca/>! ret-ch false)
+            (let [ret (au/<? (u/<commit! bc-client branch update-cmds ""
+                                         tx-fns))
+                  change-info (assoc ret :updated-paths
+                                     (map :path update-cmds))]
+              (doseq [conn-id conn-ids]
+                (ep/send-msg ep conn-id :sys-state-changed change-info))
+              (ca/>! ret-ch change-info))))
+        (catch Exception e
+          (log-error (str "Error in state-update-loop:\n"
+                          (u/ex-msg-and-stacktrace e)))
+          (ca/>! ret-ch e))))
     (recur)))
 
 (defn <get-temp-branch [bc-client source]
   (au/go
     (let [db-id (:temp-branch/db-id source)
           branch (str "temp-branch-" (rand-int 1e9))]
-      (au/<? (bc/<create-branch! bc-client branch db-id true))
+      (au/<? (u/<create-branch! bc-client branch db-id true))
       branch)))
 
+(defn <fp->schema [ep conn-id *fp->schema fp]
+  (au/go
+    (or (@*fp->schema fp)
+        (let [pcf (au/<? (ep/<send-msg ep conn-id :get-schema-pcf fp))
+              schema (l/json->schema pcf)]
+          (swap! *fp->schema assoc fp schema)
+          schema))))
+
+(defn <xf-update-cmds
+  [ep conn-id state-schema path->schema-cache *fp->schema scmds]
+  (au/go
+    (if-not (seq scmds)
+      []
+      ;; Use loop/recur to stay in single go block
+      (loop [scmd (first scmds)
+             i 0
+             out []]
+        (let [{:keys [path arg]} scmd
+              arg-sch (when arg
+                        (or (sr/get path->schema-cache path)
+                            (let [sch (l/schema-at-path state-schema path)]
+                              (sr/put path->schema-cache path sch)
+                              sch)))
+              writer-arg-sch (when arg
+                               (au/<? (<fp->schema ep conn-id *fp->schema
+                                                   (:fp arg))))
+              cmd (update scmd :arg (fn [arg]
+                                      (when arg
+                                        (l/deserialize arg-sch writer-arg-sch
+                                                       (:bytes arg)))))
+              new-i (inc i)
+              new-out (conj out cmd)]
+          (if (> (count scmds) new-i)
+            (recur (nth scmds new-i) new-i new-out)
+            new-out))))))
+
 (defn <handle-update-state
-  [ep bc-client authorization-fn tx-fns log-error *conn-id->info
-   *branch->info arg metadata]
-  (let [{:keys [conn-id]} metadata
-        {:keys [subject-id branch]} (@*conn-id->info conn-id)
-        xf-cmd #(update % :arg u/value-rec->edn)
-        update-cmds (map xf-cmd (:update-cmds arg))
-        {:keys [update-ch]
-         branch-conn-ids :conn-ids} (@*branch->info branch)
-        conn-ids (disj branch-conn-ids conn-id)
-        ret-ch (ca/chan)
-        ch (or update-ch
-               (let [ch* (ca/chan 100)]
-                 (swap! *branch->info assoc-in [branch :update-ch] ch*)
-                 (start-state-update-loop ep ch* bc-client authorization-fn
-                                          tx-fns log-error)
-                 ch*))]
-    (ca/put! ch (u/sym-map subject-id branch update-cmds conn-ids ret-ch))
-    ret-ch))
+  [ep bc-client state-schema authorization-fn tx-fns log-error
+   path->schema-cache *conn-id->info *branch->info *fp->schema arg metadata]
+  (au/go
+    (let [{:keys [conn-id]} metadata
+          {:keys [subject-id branch]} (@*conn-id->info conn-id)
+          {:keys [update-ch]
+           branch-conn-ids :conn-ids} (@*branch->info branch)
+          ret-ch (ca/chan)
+          conn-ids (disj branch-conn-ids conn-id)
+          update-cmds (au/<? (<xf-update-cmds ep conn-id state-schema
+                                              path->schema-cache *fp->schema
+                                              arg))
+          ch (or update-ch
+                 (let [ch* (ca/chan 100)]
+                   (swap! *branch->info assoc-in [branch :update-ch] ch*)
+                   (start-state-update-loop ep ch* bc-client authorization-fn
+                                            tx-fns log-error)
+                   ch*))]
+      (ca/>! ch (u/sym-map subject-id branch update-cmds conn-ids ret-ch))
+      (au/<? ret-ch))))
+
+(defn handle-get-schema-pcf [log-error *fp->schema fp metadata]
+  (au/go
+    (if-let [schema (@*fp->schema fp)]
+      (l/pcf schema)
+      (do
+        (log-error (str "Could not find PCF for fingerprint `" fp "`."))
+        nil))))
 
 (defn <handle-set-state-source
   [*conn-id->info *branch->info bc-client sys-state-schema source metadata]
@@ -104,18 +153,19 @@
                      (if conn-ids
                        (update info :conn-ids conj conn-id)
                        (assoc info :conn-ids #{conn-id}))))
-          db-id (au/<? (bc/<get-db-id bc-client branch))]
+          db-id (au/<? (u/<get-db-id bc-client branch))]
       (or db-id
           (let [default-data (l/default-data sys-state-schema)
                 update-cmds [{:path []
                               :op :set
                               :arg default-data}]
-                ret (au/<? (bc/<commit! bc-client branch update-cmds
-                                        "Create initial db"))]
+                ret (au/<? (u/<commit! bc-client branch update-cmds
+                                       "Create initial db" []))]
             (:cur-db-id ret))))))
 
 (defn <handle-get-state
-  [bc-client state-schema authorization-fn *conn-id->info arg metadata]
+  [bc-client state-schema authorization-fn path->schema-cache *conn-id->info
+   *fp->schema arg metadata]
   (au/go
     (let [{:keys [conn-id]} metadata
           {:keys [subject-id branch]} (@*conn-id->info conn-id)
@@ -125,10 +175,16 @@
                           (au/<? ret)
                           ret))]
       (if-not authorized?
-        {:vivo/unauthorized true}
-        {:v (->> (bc/<get-in bc-client db-id path)
-                 (au/<?)
-                 (u/edn->value-rec state-schema path))}))))
+        :vivo/unauthorized
+        (when-let [v (au/<? (u/<get-in bc-client db-id path))]
+          (let [schema (or (sr/get path->schema-cache path)
+                           (let [sch (l/schema-at-path state-schema path)]
+                             (sr/put path->schema-cache path sch)
+                             sch))
+                fp (l/fingerprint64 schema)]
+            (swap! *fp->schema assoc fp schema)
+            {:fp fp
+             :bytes (l/serialize schema v)}))))))
 
 (defn generate-token []
   (let [rng (SecureRandom.)
@@ -420,7 +476,7 @@
                      (assoc m subject-id new-conn-ids)
                      (dissoc m subject-id)))))
         (when temp-branch?
-          (au/<? (bc/<delete-branch! bc-client branch)))
+          (au/<? (u/<delete-branch! bc-client branch)))
         (log-info "Client disconnected (conn-info: " conn-info ")."))
       (catch Throwable e
         (log-error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
@@ -428,9 +484,9 @@
 
 (defn vivo-server
   "Returns a no-arg fn that stops the server."
-  ([port repository-name sys-state-schema]
-   (vivo-server port repository-name sys-state-schema {}))
-  ([port repository-name sys-state-schema opts]
+  ([port repository-name state-schema]
+   (vivo-server port repository-name state-schema {}))
+  ([port repository-name state-schema opts]
    (let [{:keys [authorization-fn
                  handle-http
                  http-timeout-ms
@@ -438,16 +494,17 @@
                  log-info
                  login-lifetime-mins
                  transaction-fns]} (merge default-opts opts)
-         bc-client (au/<?? (bc/<bristlecone-client
-                            repository-name sys-state-schema))
-         protocol (u/make-sm-server-protocol sys-state-schema)
+         bc-client (au/<?? (bcc/<bristlecone-client
+                            repository-name state-schema))
          *conn-id->info (atom {})
          *subject-id->conn-ids (atom {})
          *branch->info (atom {})
+         *fp->schema (atom {})
+         path->schema-cache (sr/stockroom 1000)
          ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
                                           *subject-id->conn-ids *branch->info
                                           bc-client log-error log-info)}
-         ep (ep/endpoint "state-manager" (constantly true) protocol
+         ep (ep/endpoint "state-manager" (constantly true) u/sm-server-protocol
                          :server ep-opts)
          cs-opts (u/sym-map handle-http http-timeout-ms)
          capsule-server (cs/server [ep] port cs-opts)
@@ -469,14 +526,18 @@
      (ep/set-handler ep :set-state-source
                      (partial <handle-set-state-source
                               *conn-id->info *branch->info bc-client
-                              sys-state-schema))
+                              state-schema))
      (ep/set-handler ep :get-state
-                     (partial <handle-get-state bc-client sys-state-schema
-                              authorization-fn *conn-id->info))
+                     (partial <handle-get-state bc-client state-schema
+                              authorization-fn path->schema-cache
+                              *conn-id->info *fp->schema))
      (ep/set-handler ep :update-state
-                     (partial <handle-update-state ep bc-client
+                     (partial <handle-update-state ep bc-client state-schema
                               authorization-fn transaction-fns log-error
-                              *conn-id->info *branch->info))
+                              path->schema-cache *conn-id->info *branch->info
+                              *fp->schema))
+     (ep/set-handler ep :get-schema-pcf
+                     (partial handle-get-schema-pcf log-error *fp->schema))
      (cs/start capsule-server)
      (log-info (str "Vivo server started on port " port "."))
      #(cs/stop capsule-server))))

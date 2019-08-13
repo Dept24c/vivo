@@ -5,7 +5,8 @@
    [clojure.core.async :as ca]
    [clojure.set :as set]
    [clojure.string :as str]
-   [com.dept24c.bristlecone.db-ids :as db-ids]
+   [com.dept24c.vivo.bristlecone.db-ids :as db-ids]
+   [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.client :as cc]
@@ -26,6 +27,8 @@
                        :needed #{}})
 
 (defprotocol IStateManager
+  (<deserialize-value [this path ret])
+  (<fp->schema [this value-fp])
   (<get-in-sys-state [this db-id path])
   (<handle-sys-and-local-updates [this sys-cmds local-cmds paths cb])
   (<handle-sys-state-changed [this arg metadata])
@@ -47,6 +50,7 @@
   (start-update-loop [this])
   (subscribe! [this sub-map cur-state update-fn])
   (unsubscribe! [this sub-id])
+  (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
 
 (defn use-vivo-state
@@ -125,138 +129,6 @@
            :paths []}
           update-cmds))
 
-(defn normalize-neg-k
-  "Return the normalized key and the associated value or nil if key does not
-   exist in value."
-  [k v]
-  (if (map? v)
-    [k (v k)]
-    (let [len (count v)
-          norm-k (+ len k)]
-      [norm-k (when (and (pos? len) (nat-int? norm-k) (< norm-k len))
-                (v norm-k))])))
-
-(defn get-in-state
-  "Custom get-in fn that checks types and normalizes negative keys.
-   Returns a map with :norm-path and :val keys."
-  [state path]
-  (reduce (fn [{:keys [norm-path val] :as acc} k]
-            (let [[k* val*] (cond
-                              (or (keyword? k) (nat-int? k) (string? k))
-                              [k (when val
-                                   (val k))]
-
-                              (and (int? k) (neg? k))
-                              (normalize-neg-k k val)
-
-                              :else
-                              (throw-bad-path-key path k))]
-              (-> acc
-                  (update :norm-path conj k*)
-                  (assoc :val val*))))
-          {:norm-path []
-           :val state}
-          path))
-
-(defmulti eval-cmd (fn [state {:keys [op]}]
-                     op))
-
-(defmethod eval-cmd :set
-  [state {:keys [path op arg]}]
-  (let [{:keys [norm-path]} (get-in-state state path)]
-    (if (seq norm-path)
-      (assoc-in state norm-path arg)
-      arg)))
-
-(defmethod eval-cmd :remove
-  [state {:keys [path]}]
-  (let [parent-path (butlast path)
-        k (last path)
-        {:keys [norm-path val]} (get-in-state state parent-path)
-        new-parent (if (map? val)
-                     (dissoc val k)
-                     (let [norm-i (if (nat-int? k)
-                                    k
-                                    (+ (count val) k))
-                           [h t] (split-at norm-i val)]
-                       (if (nat-int? norm-i)
-                         (vec (concat h (rest t)))
-                         val)))]
-    (if (empty? norm-path)
-      new-parent
-      (assoc-in state norm-path new-parent))))
-
-(defn insert* [state path op arg]
-  (let [parent-path (butlast path)
-        i (last path)
-        _ (when-not (int? i)
-            (throw (ex-info
-                    (str "In " op " update expressions, the last element "
-                         "of the path must be an integer, e.g. [:x :y -1] "
-                         " or [:a :b :c 12]. Got: `" i "`.")
-                    (u/sym-map parent-path i path op arg))))
-        {:keys [norm-path val]} (get-in-state state parent-path)
-        _ (when-not (or (vector? val) (nil? val))
-            (throw (ex-info (str "Bad path in " op ". Path `" path "` does not "
-                                 "point to a vector. Got: `" val "`.")
-                            (u/sym-map op path val norm-path))))
-        norm-i (if (nat-int? i)
-                 i
-                 (+ (count val) i))
-        split-i (if (= :insert-before op)
-                  norm-i
-                  (inc norm-i))
-        [h t] (split-at split-i val)
-        new-t (cons arg t)
-        new-parent (vec (concat h new-t))]
-    (if (empty? norm-path)
-      new-parent
-      (assoc-in state norm-path new-parent))))
-
-(defmethod eval-cmd :insert-before
-  [state {:keys [path op arg]}]
-  (insert* state path op arg))
-
-(defmethod eval-cmd :insert-after
-  [state {:keys [path op arg]}]
-  (insert* state path op arg))
-
-(defn eval-math-cmd [state cmd op-fn]
-  (let [{:keys [path op arg]} cmd
-        {:keys [norm-path val]} (get-in-state state path)
-        _ (when-not (number? val)
-            (throw (ex-info (str "Can't do math on non-numeric type. "
-                                 "Value in state at path `"
-                                 path "` is not a number. Got: " val ".")
-                            (u/sym-map path cmd))))
-        _ (when-not (number? arg)
-            (throw (ex-info (str "Can't do math on non-numeric type. "
-                                 "Arg `" arg "` in update command `"
-                                 cmd "` is not a number.")
-                            (u/sym-map path cmd op))))
-        new-val (op-fn val arg)]
-    (assoc-in state norm-path new-val)))
-
-(defmethod eval-cmd :+
-  [state cmd]
-  (eval-math-cmd state cmd +))
-
-(defmethod eval-cmd :-
-  [state cmd]
-  (eval-math-cmd state cmd -))
-
-(defmethod eval-cmd :*
-  [state cmd]
-  (eval-math-cmd state cmd *))
-
-(defmethod eval-cmd :/
-  [state cmd]
-  (eval-math-cmd state cmd /))
-
-(defmethod eval-cmd :mod
-  [state cmd]
-  (eval-math-cmd state cmd mod))
-
 (defn check-path [path sub-syms sub-map]
   (reduce (fn [acc k]
             (when (and (symbol? k) (not (sub-syms k)))
@@ -269,8 +141,8 @@
               (conj acc k)))
           [] path))
 
-(defn sub-map->ordered-pairs [sm->op-cache sub-map]
-  (or (sr/get sm->op-cache sub-map)
+(defn sub-map->ordered-pairs [sub-map->op-cache sub-map]
+  (or (sr/get sub-map->op-cache sub-map)
       (let [sub-syms (set (keys sub-map))
             info (reduce-kv
                   (fn [acc sym path]
@@ -300,7 +172,7 @@
                           []
                           (concat (seq no-dep-syms)
                                   ordered-dep-syms))]
-        (sr/put sm->op-cache sub-map pairs)
+        (sr/put sub-map->op-cache sub-map pairs)
         pairs)))
 
 (defn get-sub-id [*last-sub-id]
@@ -331,11 +203,33 @@
           false sub-paths))
 
 (defrecord StateManager [capsule-client sys-state-schema sys-state-source
-                         log-info log-error state-cache sm->op-cache
-                         update-ch subject-id-ch *local-state *sub-id->sub
-                         *cur-db-id *last-sub-id *conn-initialized? *stopped?
-                         *ssr-info]
+                         log-info log-error state-cache sub-map->op-cache
+                         path->schema-cache update-ch subject-id-ch
+                         *local-state *sub-id->sub *cur-db-id *last-sub-id
+                         *conn-initialized? *stopped? *ssr-info *fp->schema]
   IStateManager
+  (<fp->schema [this fp]
+    (au/go
+      (when-not (int? fp)
+        (throw (ex-info (str "Given `fp` arg is not a `long`. Got `"
+                             fp "`.")
+                        {:given-fp fp})))
+      (or (@*fp->schema fp)
+          (let [pcf (au/<? (cc/<send-msg capsule-client :get-schema-pcf fp))
+                schema (l/json->schema pcf)]
+            (swap! *fp->schema assoc fp schema)
+            schema))))
+
+  (<deserialize-value [this path ret]
+    (au/go
+      (when ret
+        (let [value-sch (or (sr/get path->schema-cache path)
+                            (let [sch (l/schema-at-path sys-state-schema path)]
+                              (sr/put path->schema-cache path sch)
+                              sch))
+              writer-sch (au/<? (<fp->schema this (:fp ret)))]
+          (l/deserialize value-sch writer-sch (:bytes ret))))))
+
   (ssr? [this]
     (boolean @*ssr-info))
 
@@ -400,6 +294,7 @@
                     (do
                       (set-login-token token)
                       (set-subject-id this subject-id)
+                      ;; TODO: Flush the state cache
                       (log-info "Login succeeded.")
                       true))]
           (when cb
@@ -415,6 +310,7 @@
         (delete-login-token)
         (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
           (set-subject-id this nil)
+          ;; TODO: Flush the state cache
           (log-info (str "Logout " (if ret "succeeded." "failed."))))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in log-out!"
@@ -436,7 +332,7 @@
           init
           (let [ordered-pairs (if (map? sub-map-or-ordered-pairs)
                                 (sub-map->ordered-pairs
-                                 sm->op-cache sub-map-or-ordered-pairs)
+                                 sub-map->op-cache sub-map-or-ordered-pairs)
                                 sub-map-or-ordered-pairs)]
             ;; Use loop instead of reduce here to stay within the go block
             (loop [acc init
@@ -450,7 +346,7 @@
                     v (cond
                         (local-path? path)
                         (->> (rest resolved-path)
-                             (get-in-state local-state)
+                             (commands/get-in-state local-state)
                              (:val))
 
                         (sys-path? path)
@@ -466,7 +362,7 @@
 
   (subscribe! [this sub-map cur-state update-fn*]
     (let [sub-id (get-sub-id *last-sub-id)
-          ordered-pairs (sub-map->ordered-pairs sm->op-cache sub-map)
+          ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
           <make-si (partial <make-state-info this ordered-pairs)]
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
@@ -538,7 +434,7 @@
               (cb* false)))))))
 
   (handle-local-updates-only [this local-cmds paths cb]
-    (swap! *local-state #(reduce eval-cmd % local-cmds))
+    (swap! *local-state #(reduce commands/eval-cmd % local-cmds))
     (notify-subs this paths false)
     (when cb
       (cb true)))
@@ -556,7 +452,7 @@
                     (db-ids/earlier? local-db-id cur-db-id))
               (let [paths* (set/union (set paths) (set updated-paths))]
                 (reset! *cur-db-id cur-db-id)
-                (swap! *local-state #(reduce eval-cmd % local-cmds))
+                (swap! *local-state #(reduce commands/eval-cmd % local-cmds))
                 (notify-subs this paths* notify-all?)
                 (cb* true))
               (cb* false)))))))
@@ -603,12 +499,24 @@
     nil)
 
   (<update-sys-state [this sys-cmds]
-    (let [cmds (mapv (fn [cmd]
-                       (update cmd :arg #(u/edn->value-rec sys-state-schema
-                                                           (:path cmd) %)))
-                     sys-cmds)]
-      (cc/<send-msg capsule-client :update-state {:update-cmds cmds}
-                    update-state-timeout-ms)))
+    (cc/<send-msg capsule-client :update-state
+                  (map (partial update-cmd->serializable-update-cmd this)
+                       sys-cmds)
+                  update-state-timeout-ms))
+
+  (update-cmd->serializable-update-cmd [this cmd]
+    (if-not (:arg cmd)
+      cmd
+      (let [{:keys [arg path]} cmd
+            arg-sch (or (sr/get path->schema-cache path)
+                        (let [sch (l/schema-at-path sys-state-schema path)]
+                          (sr/put path->schema-cache path sch)
+                          sch))
+            fp (l/fingerprint64 arg-sch)
+            scmd (assoc cmd :arg {:fp fp
+                                  :bytes (l/serialize arg-sch (:arg cmd))})]
+        (swap! *fp->schema assoc fp arg-sch)
+        scmd)))
 
   (<get-in-sys-state [this db-id path]
     (au/go
@@ -616,9 +524,10 @@
           (let [arg (u/sym-map db-id path)
                 ret (au/<? (cc/<send-msg capsule-client :get-state arg
                                          get-state-timeout-ms))
-                v (if (:vivo/unauthorized ret)
+                v (if (= :vivo/unauthorized ret)
                     :vivo/unauthorized
-                    (u/value-rec->edn (:v ret)))]
+                    (when ret
+                      (au/<? (<deserialize-value this path ret))))]
             (sr/put state-cache [db-id path] v)
             v))))
 
@@ -696,15 +605,14 @@
     (throw (ex-info (str "Missing `:sys-state-schema` option in state-manager "
                          "constructor.")
                     {})))
-  (let [protocol (u/make-sm-server-protocol sys-state-schema)
-        get-credentials (constantly {:subject-id "state-manager"
+  (let [get-credentials (constantly {:subject-id "state-manager"
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect sys-state-source log-error
                                    log-info *cur-db-id *conn-initialized?
                                    subject-id-ch)
               :on-disconnect (partial on-disconnect *conn-initialized?)}]
     (cc/client get-server-url get-credentials
-               protocol :state-manager opts)))
+               u/sm-server-protocol :state-manager opts)))
 
 (defn with-key [element k]
   #?(:cljs (ocall React :cloneElement element #js {"key" k})))
@@ -724,8 +632,10 @@
         *conn-initialized? (atom (not get-server-url))
         *stopped? (atom false)
         *ssr-info (atom nil)
+        *fp->schema (atom {})
+        path->schema-cache (sr/stockroom 100)
         state-cache (sr/stockroom state-cache-size)
-        sm->op-cache (sr/stockroom 500)
+        sub-map->op-cache (sr/stockroom 500)
         update-ch (ca/chan 50)
         subject-id-ch (ca/chan 10)
         capsule-client (when get-server-url
@@ -735,12 +645,21 @@
                           log-error log-info *cur-db-id *conn-initialized?
                           subject-id-ch))
         sm (->StateManager capsule-client sys-state-schema sys-state-source
-                           log-info log-error state-cache sm->op-cache
-                           update-ch subject-id-ch *local-state
-                           *sub-id->sub *cur-db-id *last-sub-id
-                           *conn-initialized? *stopped? *ssr-info)]
+                           log-info log-error state-cache sub-map->op-cache
+                           path->schema-cache update-ch subject-id-ch
+                           *local-state *sub-id->sub *cur-db-id *last-sub-id
+                           *conn-initialized? *stopped? *ssr-info *fp->schema)]
     (start-update-loop sm)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
-                      (partial <handle-sys-state-changed sm)))
+                      (partial <handle-sys-state-changed sm))
+      (cc/set-handler capsule-client :get-schema-pcf
+                      (fn [fp metadata]
+                        (if-let [schema (@*fp->schema fp)]
+                          (l/pcf schema)
+                          (do
+                            (log-error
+                             (str "Could not find PCF for fingerprint `"
+                                  fp "`."))
+                            nil)))))
     sm))

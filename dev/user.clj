@@ -5,7 +5,6 @@
    [com.dept24c.vivo.state-schema :as ss]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
-   [deercreeklabs.capsule.logging :as logging]
    [puget.printer :refer [cprint]]))
 
 (def default-server-port 12345)
@@ -15,10 +14,6 @@
 (defn <authorized? [subject-id path]
   (au/go
     (not= :secret (first path))))
-
-(defn configure-logging []
-  (logging/add-log-reporter! :println logging/println-reporter)
-  (logging/set-log-level! :debug))
 
 (defn stop []
   (if stop-server
@@ -36,16 +31,18 @@
   ([]
    (start default-server-port))
   ([port]
-   (configure-logging)
    (let [tfs [{:sub-map '{msgs [:msgs]}
                :f make-user-id-to-msgs
                :output-path [:user-id-to-msgs]}]
          opts {:authorization-fn <authorized?
                :transaction-fns tfs}]
      (alter-var-root #'stop-server
-                     (constantly (server/vivo-server
-                                  port "vivo-test"
-                                  ss/state-schema opts))))))
+                     (fn [_]
+                       (let [stopper (server/vivo-server
+                                      port "vivo-test"
+                                      ss/state-schema opts)]
+                         (u/configure-capsule-logging :info)
+                         stopper))))))
 
 ;; Note: This has problems due to not having socket address reuse
 (defn restart []
