@@ -10,11 +10,10 @@
    #?(:clj [puget.printer :refer [cprint cprint-str]]))
   #?(:cljs
      (:require-macros
-      [com.dept24c.vivo.utils :refer [sym-map]])
-     :clj
-     (:import (java.nio ByteBuffer))))
+      [com.dept24c.vivo.utils :refer [sym-map]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj
+   (set! *warn-on-reflection* true))
 
 (defmacro sym-map
   "Builds a map from symbols.
@@ -79,17 +78,6 @@
 (defn str->edn [s]
   #?(:clj (edn/read-string s)
      :cljs (reader/read-string s)))
-
-(defn long->byte-array [^Long l]
-  (let [bb ^ByteBuffer (ByteBuffer/allocate Long/BYTES)]
-    (.putLong bb l)
-    (.array bb)))
-
-(defn byte-array->long [^bytes ba]
-  (let [bb ^ByteBuffer (ByteBuffer/allocate Long/BYTES)]
-    (.put bb ba)
-    (.flip bb)
-    (.getLong bb)))
 
 (defn ms->mins [ms]
   (int (/ ms 1000 60)))
