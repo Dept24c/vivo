@@ -33,7 +33,8 @@
      :body "I still haven't found what you're looking for..."}))
 
 (def default-opts
-  {:authorization-fn (fn [subject-id path]
+  {:additional-endpoints []
+   :authorization-fn (fn [subject-id path]
                        false) ;; return true or false
    :handle-http default-health-http-handler
    :http-timeout-ms 60000
@@ -94,7 +95,7 @@
               arg-sch (when arg
                         (or (sr/get path->schema-cache path)
                             (let [sch (l/schema-at-path state-schema path)]
-                              (sr/put path->schema-cache path sch)
+                              (sr/put! path->schema-cache path sch)
                               sch)))
               writer-arg-sch (when arg
                                (au/<? (<fp->schema ep conn-id *fp->schema
@@ -179,7 +180,7 @@
         (when-let [v (au/<? (u/<get-in bc-client db-id path))]
           (let [schema (or (sr/get path->schema-cache path)
                            (let [sch (l/schema-at-path state-schema path)]
-                             (sr/put path->schema-cache path sch)
+                             (sr/put! path->schema-cache path sch)
                              sch))
                 fp (l/fingerprint64 schema)]
             (swap! *fp->schema assoc fp schema)
@@ -487,7 +488,8 @@
   ([port repository-name state-schema]
    (vivo-server port repository-name state-schema {}))
   ([port repository-name state-schema opts]
-   (let [{:keys [authorization-fn
+   (let [{:keys [additional-endpoints
+                 authorization-fn
                  handle-http
                  http-timeout-ms
                  log-error
@@ -507,7 +509,7 @@
          ep (ep/endpoint "state-manager" (constantly true) u/sm-server-protocol
                          :server ep-opts)
          cs-opts (u/sym-map handle-http http-timeout-ms)
-         capsule-server (cs/server [ep] port cs-opts)
+         capsule-server (cs/server (conj additional-endpoints ep) port cs-opts)
          ddb-client (aws/client {:api :dynamodb})]
      (start-token-expiration-loop ep bc-client ddb-client repository-name
                                   log-error *subject-id->conn-ids)

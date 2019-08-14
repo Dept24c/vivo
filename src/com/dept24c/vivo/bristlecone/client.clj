@@ -299,7 +299,7 @@
                               (ba/utf8->byte-array))
                 k (str fp->schema-key-root (str fp))]
             (au/<? (u/<write-block perm-storage k pcf-bytes))
-            (sr/put fp->schema-cache fp sch)
+            (sr/put! fp->schema-cache fp sch)
             fp)))))
 
   (<fp->schema [this fp]
@@ -315,7 +315,7 @@
                                   (au/<?)
                                   (ba/byte-array->utf8)
                                   (l/json->schema))]
-            (sr/put fp->schema-cache fp sch)
+            (sr/put! fp->schema-cache fp sch)
             sch))))
 
   (<make-log-rec [this storage db-info]
@@ -345,7 +345,7 @@
                 arg-sch (when arg
                           (or (sr/get path->schema-cache path)
                               (let [sch (l/schema-at-path storage-schema path)]
-                                (sr/put path->schema-cache path sch)
+                                (sr/put! path->schema-cache path sch)
                                 sch)))
                 scmd (cond-> cmd
                        arg (assoc :arg {:fp (au/<? (<schema->fp this arg-sch))
@@ -368,7 +368,7 @@
                 arg-sch (when arg
                           (or (sr/get path->schema-cache path)
                               (let [sch (l/schema-at-path storage-schema path)]
-                                (sr/put path->schema-cache path sch)
+                                (sr/put! path->schema-cache path sch)
                                 sch)))
                 writer-arg-sch (when arg
                                  (au/<? (<fp->schema this (:fp arg))))
@@ -386,7 +386,7 @@
   (au/go
     ;; TODO: Check that schema matches stored schema
     (let [temp-storage (mem-storage/mem-storage true)
-          fp->schema-cache (sr/stockroom 100)
+          fp->schema-cache (sr/stockroom 1000)
           path->schema-cache (sr/stockroom 1000)]
       (->BristleconeClient perm-storage temp-storage storage-schema
                            fp->schema-cache path->schema-cache))))

@@ -75,7 +75,7 @@
                 ret (au/<? (aws-async/invoke ddb arg))
                 data (some-> ret :Item :v :B slurp ba/b64->byte-array)]
             (when-not skip-cache?
-              (sr/put block-cache block-id data))
+              (sr/put! block-cache block-id data))
             data))))
 
   (<write-block [this block-id data]
@@ -95,7 +95,7 @@
                                   "v" {:B b64}}}}
             ret (au/<? (aws-async/invoke ddb arg))]
         (when-not skip-cache?
-          (sr/put block-cache block-id data))
+          (sr/put! block-cache block-id data))
         (or (= {} ret)
             (throw (ex-info "<write-block failed."
                             (u/sym-map arg block-id ret)))))))
@@ -107,8 +107,7 @@
                  :request {:TableName table-name
                            :Key {"k" {:S block-id}}}}
             ret (au/<? (aws-async/invoke ddb arg))]
-        ;; TODO: Uncomment when implemented
-        ;; (sr/evict block-cache block-id)
+        (sr/evict! block-cache block-id)
         (or (= {} ret)
             (throw (ex-info "<delete-block failed."
                             (u/sym-map arg block-id ret))))))))

@@ -38,6 +38,7 @@
     [this sub-map-or-ordered-pairs local-state db-id])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
+  (get-local-state [this sub-map])
   (handle-local-updates-only [this local-cmds paths cb])
   (log-in! [this identifier secret cb])
   (log-out! [this])
@@ -53,12 +54,21 @@
   (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
 
+(defn local-only? [sub-map]
+  (reduce (fn [acc path]
+            (if (= :local (first path))
+              acc
+              (reduced false)))
+          true (vals sub-map)))
+
 (defn use-vivo-state
   "React hook for Vivo"
   [sm sub-map]
   #?(:cljs
-     (let [initial-state (when (ssr? sm)
-                           (ssr-get-state! sm sub-map))
+     (let [initial-state (cond
+                           (local-only? sub-map) (get-local-state sm sub-map)
+                           (ssr? sm) (ssr-get-state! sm sub-map)
+                           :else nil)
            [state update-fn] (.useState React initial-state)
            effect (fn []
                     (let [sub-id (subscribe! sm sub-map state update-fn)]
@@ -172,7 +182,7 @@
                           []
                           (concat (seq no-dep-syms)
                                   ordered-dep-syms))]
-        (sr/put sub-map->op-cache sub-map pairs)
+        (sr/put! sub-map->op-cache sub-map pairs)
         pairs)))
 
 (defn get-sub-id [*last-sub-id]
@@ -225,7 +235,7 @@
       (when ret
         (let [value-sch (or (sr/get path->schema-cache path)
                             (let [sch (l/schema-at-path sys-state-schema path)]
-                              (sr/put path->schema-cache path sch)
+                              (sr/put! path->schema-cache path sch)
                               sch))
               writer-sch (au/<? (<fp->schema this (:fp ret)))]
           (l/deserialize value-sch writer-sch (:bytes ret))))))
@@ -283,6 +293,7 @@
   (log-in! [this identifier secret cb]
     (ca/go
       (try
+        (sr/flush! state-cache)
         (let [arg (u/sym-map identifier secret)
               {:keys [subject-id token]} (au/<? (cc/<send-msg capsule-client
                                                               :log-in arg))
@@ -294,7 +305,6 @@
                     (do
                       (set-login-token token)
                       (set-subject-id this subject-id)
-                      ;; TODO: Flush the state cache
                       (log-info "Login succeeded.")
                       true))]
           (when cb
@@ -308,9 +318,9 @@
     (ca/go
       (try
         (delete-login-token)
+        (set-subject-id this nil)
+        (sr/flush! state-cache)
         (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
-          (set-subject-id this nil)
-          ;; TODO: Flush the state cache
           (log-info (str "Logout " (if ret "succeeded." "failed."))))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in log-out!"
@@ -359,6 +369,21 @@
                 (if (= (dec (count ordered-pairs)) i)
                   new-acc
                   (recur new-acc (inc i))))))))))
+
+  (get-local-state [this sub-map]
+    (let [ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
+          local-state @*local-state]
+      (reduce (fn [acc [sym path]]
+                (let [resolved-path (mapv (fn [k]
+                                            (if (symbol? k)
+                                              (acc k)
+                                              k))
+                                          path)
+                      v (->> (rest resolved-path)
+                             (commands/get-in-state local-state)
+                             (:val))]
+                  (assoc acc sym v)))
+              {} ordered-pairs)))
 
   (subscribe! [this sub-map cur-state update-fn*]
     (let [sub-id (get-sub-id *last-sub-id)
@@ -510,7 +535,7 @@
       (let [{:keys [arg path]} cmd
             arg-sch (or (sr/get path->schema-cache path)
                         (let [sch (l/schema-at-path sys-state-schema path)]
-                          (sr/put path->schema-cache path sch)
+                          (sr/put! path->schema-cache path sch)
                           sch))
             fp (l/fingerprint64 arg-sch)
             scmd (assoc cmd :arg {:fp fp
@@ -528,7 +553,7 @@
                     :vivo/unauthorized
                     (when ret
                       (au/<? (<deserialize-value this path ret))))]
-            (sr/put state-cache [db-id path] v)
+            (sr/put! state-cache [db-id path] v)
             v))))
 
   (<handle-sys-state-changed [this arg metadata]
