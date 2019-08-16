@@ -262,18 +262,25 @@
 
 (defn get-undefined-syms [sub-map]
   (let [defined-syms (set (keys sub-map))]
-    (vec (reduce-kv (fn [acc sym v]
-                      (if (sequential? v)
+    (vec (reduce-kv (fn [acc sym path]
+                      (cond
+                        (sequential? path)
                         (reduce (fn [acc* k]
                                   (if-not (symbol? k)
                                     acc*
                                     (if (defined-syms k)
                                       acc*
                                       (conj acc* k))))
-                                acc v)
+                                acc path)
+
+                        (= :vivo/subject-id path)
+                        acc
+
+                        :else
                         (throw (ex-info
-                                (str "Bad path. Must be a sequence.")
-                                (sym-map sym v sub-map)))))
+                                (str "Bad path. Must be a sequence or "
+                                     ":vivo/subject-id.")
+                                (sym-map sym path sub-map)))))
                     #{} sub-map))))
 
 (defn check-sub-map

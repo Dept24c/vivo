@@ -257,9 +257,9 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Paths must begin with either :local, :conn, or :sys."
-         (vivo/<update-state! sm [{:path [:not-a-valid-root :x]
-                                   :op :set
-                                   :arg 1}])))))
+         (vivo/update-state! sm [{:path [:not-a-valid-root :x]
+                                  :op :set
+                                  :arg 1}])))))
 
 (deftest test-bad-path-root-in-sub-map
   (let [sm (vivo/state-manager)
@@ -286,9 +286,9 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"is not a valid op. Got: `:not-an-op`."
-         (vivo/<update-state! sm [{:path [:local :x]
-                                   :op :not-an-op
-                                   :arg 1}])))))
+         (vivo/update-state! sm [{:path [:local :x]
+                                  :op :not-an-op
+                                  :arg 1}])))))
 
 (deftest test-remove
   (let [state {:x [:a :b :c]}
@@ -331,53 +331,59 @@
   (au/test-async
    1000
    (ca/go
-     (let [sm (vivo/state-manager)
-           sub-map '{title [:local :msgs 0 :title]}
-           ch (ca/chan 1)
-           update-fn #(ca/put! ch (% 'title))
-           orig-title "Plato"
-           new-title "Socrates"]
-       (is (= true (au/<? (vivo/<update-state!
-                           sm [{:path [:local]
-                                :op :set
-                                :arg {:msgs [{:title orig-title}]}}]))))
-       (vivo/subscribe! sm sub-map update-fn)
-       (is (= orig-title (au/<? ch)))
-       (au/<? (vivo/<update-state! sm
-                                   [{:path [:local :msgs 0]
-                                     :op :insert-before
-                                     :arg {:title orig-title}}
-                                    {:path [:local :msgs 0 :title]
-                                     :op :set
-                                     :arg new-title}]))
-       (is (= new-title (au/<? ch)))
-       (au/<? (vivo/<update-state! sm [{:path [:local :msgs 0 :title]
-                                        :op :set
-                                        :arg new-title}
-                                       {:path [:local :msgs 0]
-                                        :op :insert-before
-                                        :arg {:title orig-title}}]))
-       (is (= orig-title (au/<? ch)))))))
+     (try
+       (let [sm (vivo/state-manager)
+             sub-map '{title [:local :msgs 0 :title]}
+             ch (ca/chan 1)
+             update-fn #(ca/put! ch (% 'title))
+             orig-title "Plato"
+             new-title "Socrates"]
+         (is (= true (au/<? (vivo/<update-state!
+                             sm [{:path [:local]
+                                  :op :set
+                                  :arg {:msgs [{:title orig-title}]}}]))))
+         (vivo/subscribe! sm sub-map update-fn)
+         (is (= orig-title (au/<? ch)))
+         (au/<? (vivo/<update-state! sm
+                                     [{:path [:local :msgs 0]
+                                       :op :insert-before
+                                       :arg {:title orig-title}}
+                                      {:path [:local :msgs 0 :title]
+                                       :op :set
+                                       :arg new-title}]))
+         (is (= new-title (au/<? ch)))
+         (au/<? (vivo/<update-state! sm [{:path [:local :msgs 0 :title]
+                                          :op :set
+                                          :arg new-title}
+                                         {:path [:local :msgs 0]
+                                          :op :insert-before
+                                          :arg {:title orig-title}}]))
+         (is (= orig-title (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
 
 (deftest test-end-relative-sub-map
   (au/test-async
    10000
    (ca/go
-     (let [orig-title "Foo"
-           sm (vivo/state-manager)
-           ch (ca/chan 1)
-           sub-map '{title [:local :msgs -1 :title]}
-           update-fn #(ca/put! ch (% 'title))
-           new-title "Bar"]
-       (au/<? (vivo/<update-state! sm [{:path [:local]
-                                        :op :set
-                                        :arg {:msgs [{:title orig-title}]}}]))
-       (vivo/subscribe! sm sub-map update-fn)
-       (is (= orig-title (au/<? ch)))
-       (au/<? (vivo/<update-state! sm [{:path [:local :msgs -1]
-                                        :op :insert-after
-                                        :arg {:title new-title}}]))
-       (is (= new-title (au/<? ch)))))))
+     (try
+       (let [orig-title "Foo"
+             sm (vivo/state-manager)
+             ch (ca/chan 1)
+             sub-map '{title [:local :msgs -1 :title]}
+             update-fn #(ca/put! ch (% 'title))
+             new-title "Bar"]
+         (au/<? (vivo/<update-state! sm [{:path [:local]
+                                          :op :set
+                                          :arg {:msgs [{:title orig-title}]}}]))
+         (vivo/subscribe! sm sub-map update-fn)
+         (is (= orig-title (au/<? ch)))
+         (au/<? (vivo/<update-state! sm [{:path [:local :msgs -1]
+                                          :op :insert-after
+                                          :arg {:title new-title}}]))
+         (is (= new-title (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
 
 (deftest test-relationship
   (are [ret ks1 ks2] (= ret (u/relationship-info ks1 ks2))

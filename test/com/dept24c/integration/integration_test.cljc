@@ -98,6 +98,8 @@
            (is (= 1 (count (au/<? all-msgs-ch))))
            (is (= {1 [{:text "A msg" :user-id 1}]}
                   (au/<? index-ch))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
          (finally
            (vivo/shutdown! sm)))))))
 
@@ -112,17 +114,18 @@
                subject-id "04df0587-43d7-41d8-af55-f4f6614e17eb"
                identifier "test@tester.com"
                secret "laughable"
-               sub-map '{subject-id [:local :vivo/subject-id]}
+               sub-map '{subject-id :vivo/subject-id}
                sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))]
            (is (= {'subject-id nil} (au/<? state-ch)))
-           (vivo/log-in! sm identifier secret)
+           (au/<? (vivo/<log-in! sm identifier secret))
            (is (= {'subject-id subject-id} (au/<? state-ch)))
            (vivo/log-out! sm)
            (is (= {'subject-id nil} (au/<? state-ch)))
            (vivo/unsubscribe! sm sub-id))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
          (finally
            (vivo/shutdown! sm)))))))
-
 
 (deftest test-authorization
   (au/test-async
@@ -140,5 +143,7 @@
                                'secret :vivo/unauthorized}]
            (is (= expected-state (au/<? state-ch)))
            (vivo/unsubscribe! sm sub-id))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
          (finally
            (vivo/shutdown! sm)))))))

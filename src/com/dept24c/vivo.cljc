@@ -8,6 +8,7 @@
      (:require-macros com.dept24c.vivo)))
 
 (defn state-manager
+  "Creates a Vivo state manager."
   ([]
    (state-manager {}))
   ([opts]

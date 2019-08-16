@@ -18,7 +18,7 @@
 (def default-sm-opts
   {:log-error println
    :log-info println
-   :state-cache-size 100})
+   :state-cache-num-keys 100})
 
 (def get-state-timeout-ms 30000)
 (def login-token-local-storage-key "login-token")
@@ -54,9 +54,17 @@
   (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
 
-(defn local-only? [sub-map]
+(defn local-path? [path]
+  (= :local (first path)))
+
+(defn sys-path? [path]
+  (= :sys (first path)))
+
+(defn local-or-vivo-only? [sub-map]
   (reduce (fn [acc path]
-            (if (= :local (first path))
+            (if (or
+                 (= :vivo/subject-id path)
+                 (= :local (first path)))
               acc
               (reduced false)))
           true (vals sub-map)))
@@ -66,9 +74,14 @@
   [sm sub-map]
   #?(:cljs
      (let [initial-state (cond
-                           (local-only? sub-map) (get-local-state sm sub-map)
-                           (ssr? sm) (ssr-get-state! sm sub-map)
-                           :else nil)
+                           (local-or-vivo-only? sub-map)
+                           (get-local-state sm sub-map)
+
+                           (ssr? sm)
+                           (ssr-get-state! sm sub-map)
+
+                           :else
+                           nil)
            [state update-fn] (.useState React initial-state)
            effect (fn []
                     (let [sub-id (subscribe! sm sub-map state update-fn)]
@@ -92,12 +105,6 @@
      (when (u/browser?)
        (.removeItem (.-localStorage js/window) login-token-local-storage-key))))
 
-(defn local-path? [path]
-  (= :local (first path)))
-
-(defn sys-path? [path]
-  (= :sys (first path)))
-
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
         disp-head (or head "nil")]
@@ -111,6 +118,11 @@
             (str "Illegal key `" disp-k "` in path `" path "`. Only integers, "
                  "keywords, symbols, and strings are valid path keys.")
             (u/sym-map k path)))))
+
+(defn throw-missing-path-key [k path sub-map]
+  (throw (ex-info (str "Could not find a value for key `" k "` in path `"
+                       path "` of sub map `" sub-map "`.")
+                  (u/sym-map k path sub-map))))
 
 (defn make-update-info [update-cmds]
   (reduce (fn [acc cmd]
@@ -140,16 +152,18 @@
           update-cmds))
 
 (defn check-path [path sub-syms sub-map]
-  (reduce (fn [acc k]
-            (when (and (symbol? k) (not (sub-syms k)))
-              (throw (ex-info
-                      (str "Path symbol `" k "` in path `" path
-                           "` is not defined as a key in the subscription map.")
-                      (u/sym-map path k sub-map))))
-            (if-not (or (keyword? k) (int? k) (string? k) (symbol? k))
-              (throw-bad-path-key path k)
-              (conj acc k)))
-          [] path))
+  (if (= :vivo/subject-id path)
+    path
+    (reduce (fn [acc k]
+              (when (and (symbol? k) (not (sub-syms k)))
+                (throw (ex-info
+                        (str "Path symbol `" k "` in path `" path "` is not "
+                             "defined as a key in the subscription map.")
+                        (u/sym-map path k sub-map))))
+              (if-not (or (keyword? k) (int? k) (string? k) (symbol? k))
+                (throw-bad-path-key path k)
+                (conj acc k)))
+            [] path)))
 
 (defn sub-map->ordered-pairs [sub-map->op-cache sub-map]
   (or (sr/get sub-map->op-cache sub-map)
@@ -161,14 +175,17 @@
                               (str "All keys in sub-map must be symbols. Got `"
                                    sym "`.")
                               (u/sym-map sym sub-map))))
-                    (let [[head & tail] (check-path path sub-syms sub-map)
-                          deps (filter symbol? path)]
-                      (when-not (#{:local :conn :sys} head)
-                        (throw-bad-path-root path))
-                      (cond-> (update acc :sym->path assoc sym path)
-                        (seq deps) (update :g #(reduce (fn [g dep]
-                                                         (dep/depend g sym dep))
-                                                       % deps)))))
+                    (if (= :vivo/subject-id path)
+                      (update acc :sym->path assoc sym path)
+                      (let [[head & tail] (check-path path sub-syms sub-map)
+                            deps (filter symbol? path)]
+                        (when-not (#{:local :conn :sys} head)
+                          (throw-bad-path-root path))
+                        (cond-> (update acc :sym->path assoc sym path)
+                          (seq deps) (update :g #(reduce
+                                                  (fn [g dep]
+                                                    (dep/depend g sym dep))
+                                                  % deps))))))
                   {:g (dep/graph)
                    :sym->path {}}
                   sub-map)
@@ -194,8 +211,21 @@
 
 (defn update-sub?* [updated-paths sub-path]
   (reduce (fn [acc updated-path]
-            (if (some number? updated-path) ;; Numeric paths are complex...
+            (cond
+              (= :vivo/subject-id sub-path)
+              (if (= :vivo/subject-id updated-path)
+                (reduced true)
+                false)
+
+              (= :vivo/subject-id updated-path)
+              (if (= :vivo/subject-id sub-path)
+                (reduced true)
+                false)
+
+              (some number? updated-path) ;; Numeric paths are complex...
               (reduced true)
+
+              :else
               (let [[relationship _] (u/relationship-info
                                       (or updated-path [])
                                       (or sub-path []))]
@@ -206,7 +236,8 @@
 
 (defn update-sub? [updated-paths sub-paths]
   (reduce (fn [acc sub-path]
-            (if (or (some number? sub-path) ;; Numeric paths are complex...
+            (if (or (and (sequential? sub-path) ;; Not :vivo/subject-id
+                         (some number? sub-path)) ;; Numeric paths are complex..
                     (update-sub?* updated-paths sub-path))
               (reduced true)
               false))
@@ -216,7 +247,8 @@
                          log-info log-error state-cache sub-map->op-cache
                          path->schema-cache update-ch subject-id-ch
                          *local-state *sub-id->sub *cur-db-id *last-sub-id
-                         *conn-initialized? *stopped? *ssr-info *fp->schema]
+                         *conn-initialized? *stopped? *ssr-info *fp->schema
+                         *subject-id]
   IStateManager
   (<fp->schema [this fp]
     (au/go
@@ -283,12 +315,9 @@
              (reset! *ssr-info nil))))))
 
   (set-subject-id [this subject-id]
-    (let [k :vivo/subject-id]
-      (if subject-id
-        (swap! *local-state assoc k subject-id)
-        (swap! *local-state dissoc k))
-      (notify-subs this [[:local k]] false)
-      nil))
+    (reset! *subject-id subject-id)
+    (notify-subs this [:vivo/subject-id] false)
+    nil)
 
   (log-in! [this identifier secret cb]
     (ca/go
@@ -348,12 +377,18 @@
             (loop [acc init
                    i 0]
               (let [[sym path] (nth ordered-pairs i)
-                    resolved-path (mapv (fn [k]
-                                          (if (symbol? k)
-                                            (get-in acc [:state k])
-                                            k))
-                                        path)
+                    resolved-path (when (sequential? path)
+                                    (mapv (fn [k]
+                                            (if (symbol? k)
+                                              (or (get-in acc [:state k])
+                                                  (throw-missing-path-key
+                                                   k path ordered-pairs))
+                                              k))
+                                          path))
                     v (cond
+                        (= :vivo/subject-id path)
+                        @*subject-id
+
                         (local-path? path)
                         (->> (rest resolved-path)
                              (commands/get-in-state local-state)
@@ -365,7 +400,8 @@
                                                   (rest resolved-path))))
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
-                                (update :paths conj resolved-path))]
+                                (update :paths conj (or resolved-path
+                                                        path)))]
                 (if (= (dec (count ordered-pairs)) i)
                   new-acc
                   (recur new-acc (inc i))))))))))
@@ -374,15 +410,19 @@
     (let [ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
           local-state @*local-state]
       (reduce (fn [acc [sym path]]
-                (let [resolved-path (mapv (fn [k]
-                                            (if (symbol? k)
-                                              (acc k)
-                                              k))
-                                          path)
-                      v (->> (rest resolved-path)
-                             (commands/get-in-state local-state)
-                             (:val))]
-                  (assoc acc sym v)))
+                (if (= :vivo/subject-id path)
+                  (assoc acc sym @*subject-id)
+                  (let [resolved-path (mapv (fn [k]
+                                              (if (symbol? k)
+                                                (or (acc k)
+                                                    (throw-missing-path-key
+                                                     k path sub-map))
+                                                k))
+                                            path)
+                        v (->> (rest resolved-path)
+                               (commands/get-in-state local-state)
+                               (:val))]
+                    (assoc acc sym v))))
               {} ordered-pairs)))
 
   (subscribe! [this sub-map cur-state update-fn*]
@@ -516,11 +556,16 @@
         (recur))))
 
   (update-state! [this update-cmds cb]
-    (when-not (sequential? update-cmds)
-      (throw (ex-info "The update-cmds parameter must be a sequence."
-                      (u/sym-map update-cmds))))
-    (let [update-info (make-update-info update-cmds)]
-      (ca/put! update-ch (assoc update-info :cb cb)))
+    (try
+      (when-not (sequential? update-cmds)
+        (throw (ex-info "The update-cmds parameter must be a sequence."
+                        (u/sym-map update-cmds))))
+      (let [update-info (make-update-info update-cmds)]
+        (ca/put! update-ch (assoc update-info :cb cb)))
+      (catch #?(:clj Exception :cljs js/Error) e
+        (if cb
+          (cb e)
+          (throw e))))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -620,6 +665,9 @@
       (throw (ex-info (str "sys-state-source must be a map. Got `"
                            source "`.")
                       {:sys-state-source source})))
+    ;; State source is either:
+    ;; - {:branch <branch-name>} or
+    ;; - {:temp-branch/db-id <db-id> or nil}
     ;;  TODO check that only valid keys are present
     ))
 
@@ -647,7 +695,7 @@
                 initial-local-state
                 log-error
                 log-info
-                state-cache-size
+                state-cache-num-keys
                 sys-state-source
                 sys-state-schema]} (merge default-sm-opts opts)
         *local-state (atom initial-local-state)
@@ -658,8 +706,9 @@
         *stopped? (atom false)
         *ssr-info (atom nil)
         *fp->schema (atom {})
+        *subject-id (atom nil)
         path->schema-cache (sr/stockroom 100)
-        state-cache (sr/stockroom state-cache-size)
+        state-cache (sr/stockroom state-cache-num-keys)
         sub-map->op-cache (sr/stockroom 500)
         update-ch (ca/chan 50)
         subject-id-ch (ca/chan 10)
@@ -673,7 +722,8 @@
                            log-info log-error state-cache sub-map->op-cache
                            path->schema-cache update-ch subject-id-ch
                            *local-state *sub-id->sub *cur-db-id *last-sub-id
-                           *conn-initialized? *stopped? *ssr-info *fp->schema)]
+                           *conn-initialized? *stopped? *ssr-info *fp->schema
+                           *subject-id)]
     (start-update-loop sm)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
