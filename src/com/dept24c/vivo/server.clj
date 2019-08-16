@@ -212,13 +212,14 @@
                           (u/sym-map arg ret)))))))
 
 (defn <delete-ddb-item [ddb-client table-name k]
-  (let [arg {:op :DeleteItem
-             :request {:TableName table-name
-                       :Key {"k" {:S k}}}}
-        ret (au/<? (aws-async/invoke ddb-client arg))]
-    (or (= {} ret)
-        (throw (ex-info "<delete-ddb-item failed."
-                        (u/sym-map arg ret))))))
+  (au/go
+    (let [arg {:op :DeleteItem
+               :request {:TableName table-name
+                         :Key {"k" {:S k}}}}
+          ret (au/<? (aws-async/invoke ddb-client arg))]
+      (or (= {} ret)
+          (throw (ex-info "<delete-ddb-item failed."
+                          (u/sym-map arg ret)))))))
 
 (defn <get-v [ddb-client table-name k schema]
   (au/go

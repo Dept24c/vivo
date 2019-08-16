@@ -24,6 +24,8 @@
   "Creates a branch from the given db-id. If db-id is nil, creates an
    empty branch. If temp? is true, creates a temporary branch.
    Returns a channel which will yield the result or an exception object."
+  ([client branch-name]
+   (<create-branch! client branch-name nil false))
   ([client branch-name db-id]
    (<create-branch! client branch-name db-id false))
   ([client branch-name db-id temp?]
