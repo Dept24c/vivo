@@ -110,7 +110,9 @@
         (au/<? (<add-branch-name dest-storage branch-name))
         (when (and db-id (not temp-src?) temp-dest?)
           (some->> (u/<read-block perm-storage db-id)
-                   (u/<write-block temp-storage (db-ids/db-id->temp-db-id db-id))
+                   (au/<?)
+                   (u/<write-block temp-storage
+                                   (db-ids/db-id->temp-db-id db-id))
                    (au/<?)))
 
         (let [k (branch->k branch-name)
@@ -163,11 +165,12 @@
                      (l/deserialize-same u/db-info-schema))
             {:keys [data-block-num data-block-fp]} dbi
             data-wschema (au/<? (<fp->schema this data-block-fp))
-            data (->> data-block-num
-                      (db-ids/db-num->db-id)
-                      (u/<read-block storage)
-                      (au/<?)
-                      (l/deserialize storage-schema data-wschema))]
+            data-block-id (db-ids/db-num->db-id data-block-num)
+            data-block-storage (if (db-ids/temp-db-id? data-block-id)
+                                 temp-storage
+                                 perm-storage)
+            data-block (au/<? (u/<read-block data-block-storage data-block-id))
+            data (l/deserialize storage-schema data-wschema data-block)]
         (:val (commands/get-in-state data path)))))
 
   (<get-all-branches [this]
