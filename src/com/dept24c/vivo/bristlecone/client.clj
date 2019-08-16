@@ -394,12 +394,21 @@
       (->BristleconeClient perm-storage temp-storage storage-schema
                            fp->schema-cache path->schema-cache))))
 
-;; TODO: Validate args
 (defn <bristlecone-client [repository-name storage-schema]
   (au/go
+    (when-not (string? repository-name)
+      (throw (ex-info (str "repository-name must be a string. Got `"
+                           (or repository-name "nil") "`.")
+                      {:given-repository-name repository-name})))
+    (when-not (l/schema? storage-schema)
+      (throw (ex-info (str "storage-schema must be a valid Lancaster schema. "
+                           "Got `" (or storage-schema "nil") "`.")
+                      {:given-storage-schema storage-schema})))
     (au/<? (<bristlecone-client*
             (au/<? (ddb/<ddb-storage repository-name))
             storage-schema))))
 
 ;; TODO: Ensure all fp<->schema stuff goes through local cache and DDB cache
-;; TODO: Ensure that more than one client per table works properly
+;; TODO: Ensure that more than one client per table works
+;;       properly - Maybe not allow this? Would mess up subscription
+;;       notifications...
