@@ -72,8 +72,10 @@
 
 (defn <ssr
   "Perform a server-side rendering. Returns a string."
-  [sm component-fn]
-  (state/<ssr sm component-fn))
+  ([sm component-fn]
+   (<ssr sm component-fn nil))
+  ([sm component-fn component-name]
+   (state/<ssr sm component-fn component-name)))
 
 (defn log-in!
   ([sm identifier secret]

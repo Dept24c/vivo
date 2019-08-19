@@ -72,7 +72,7 @@
        (check-constructor-args ~cname '~arglist ~(count arglist))
        (create-element
         (fn [props#]
-          (let [vivo-state# (state/use-vivo-state ~'sm '~sub-map)
+          (let [vivo-state# (state/use-vivo-state ~'sm '~sub-map ~cname)
                 {:syms [~@sub-syms]} vivo-state#]
             (when vivo-state#
               ~@body)))))))

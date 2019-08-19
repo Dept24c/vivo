@@ -34,11 +34,11 @@
   (<handle-sys-state-changed [this arg metadata])
   (<handle-sys-updates-only [this sys-cmds paths cb])
   (<make-state-info
-    [this sub-map-or-ordered-pairs]
-    [this sub-map-or-ordered-pairs local-state db-id])
+    [this sub-map-or-ordered-pairs component-name]
+    [this sub-map-or-ordered-pairs component-name local-state db-id])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
-  (get-local-state [this sub-map])
+  (get-local-state [this sub-map component-name])
   (handle-local-updates-only [this local-cmds paths cb])
   (log-in! [this identifier secret cb])
   (log-out! [this])
@@ -46,10 +46,12 @@
   (set-subject-id [this subject-id])
   (shutdown! [this])
   (ssr? [this])
-  (<ssr [this component-fn])
+  (<ssr [this component-fn component-name])
   (ssr-get-state! [this sub-map])
   (start-update-loop [this])
-  (subscribe! [this sub-map cur-state update-fn])
+  (subscribe!
+    [this sub-map cur-state update-fn]
+    [this sub-map cur-state update-fn component-name])
   (unsubscribe! [this sub-id])
   (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
@@ -71,23 +73,26 @@
 
 (defn use-vivo-state
   "React hook for Vivo"
-  [sm sub-map]
-  #?(:cljs
-     (let [initial-state (cond
-                           (local-or-vivo-only? sub-map)
-                           (get-local-state sm sub-map)
+  ([sm sub-map]
+   (use-vivo-state sm sub-map nil))
+  ([sm sub-map component-name]
+   #?(:cljs
+      (let [initial-state (cond
+                            (local-or-vivo-only? sub-map)
+                            (get-local-state sm sub-map component-name)
 
-                           (ssr? sm)
-                           (ssr-get-state! sm sub-map)
+                            (ssr? sm)
+                            (ssr-get-state! sm sub-map)
 
-                           :else
-                           nil)
-           [state update-fn] (.useState React initial-state)
-           effect (fn []
-                    (let [sub-id (subscribe! sm sub-map state update-fn)]
-                      #(unsubscribe! sm sub-id)))]
-       (.useEffect React effect)
-       state)))
+                            :else
+                            nil)
+            [state update-fn] (.useState React initial-state)
+            effect (fn []
+                     (let [sub-id (subscribe! sm sub-map state update-fn
+                                              component-name)]
+                       #(unsubscribe! sm sub-id)))]
+        (.useEffect React effect)
+        state))))
 
 (defn get-login-token []
   #?(:cljs
@@ -119,10 +124,16 @@
                  "keywords, symbols, and strings are valid path keys.")
             (u/sym-map k path)))))
 
-(defn throw-missing-path-key [k path sub-map]
-  (throw (ex-info (str "Could not find a value for key `" k "` in path `"
-                       path "` of sub map `" sub-map "`.")
-                  (u/sym-map k path sub-map))))
+(defn throw-missing-path-key
+  ([k path sub-map]
+   (throw-missing-path-key k path sub-map nil))
+  ([k path sub-map component-name]
+   (throw (ex-info (str "Could not find a value for key `" k "` in path `"
+                        path "` of " (if component-name
+                                       (str "component `" component-name)
+                                       (str "sub-map `" sub-map))
+                        "`.")
+                   (u/sym-map k path sub-map component-name)))))
 
 (defn make-update-info [update-cmds]
   (reduce (fn [acc cmd]
@@ -281,7 +292,7 @@
           (swap! *ssr-info update :needed conj sub-map)
           nil)))
 
-  (<ssr [this component-fn]
+  (<ssr [this component-fn component-name]
     #?(:cljs
        (au/go
          (when-not (ifn? component-fn)
@@ -306,7 +317,8 @@
                  (do
                    (doseq [sub-map needed]
                      (let [{:keys [state]} (au/<? (<make-state-info
-                                                   this sub-map))]
+                                                   this sub-map
+                                                   component-name))]
                        (swap! *ssr-info update
                               :resolved assoc sub-map state)))
                    (swap! *ssr-info assoc :needed #{})
@@ -360,10 +372,13 @@
     (cc/shutdown capsule-client)
     (log-info "State manager stopped."))
 
-  (<make-state-info [this sub-map-or-ordered-pairs]
-    (<make-state-info this sub-map-or-ordered-pairs @*local-state @*cur-db-id))
+  (<make-state-info
+    [this sub-map-or-ordered-pairs component-name]
+    (<make-state-info this sub-map-or-ordered-pairs component-name
+                      @*local-state @*cur-db-id))
 
-  (<make-state-info [this sub-map-or-ordered-pairs local-state db-id]
+  (<make-state-info
+    [this sub-map-or-ordered-pairs component-name local-state db-id]
     (au/go
       (let [init {:state {}
                   :paths []}]
@@ -382,7 +397,8 @@
                                             (if (symbol? k)
                                               (or (get-in acc [:state k])
                                                   (throw-missing-path-key
-                                                   k path ordered-pairs))
+                                                   k path ordered-pairs
+                                                   component-name))
                                               k))
                                           path))
                     v (cond
@@ -406,7 +422,7 @@
                   new-acc
                   (recur new-acc (inc i))))))))))
 
-  (get-local-state [this sub-map]
+  (get-local-state [this sub-map component-name]
     (let [ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
           local-state @*local-state]
       (reduce (fn [acc [sym path]]
@@ -416,7 +432,8 @@
                                               (if (symbol? k)
                                                 (or (acc k)
                                                     (throw-missing-path-key
-                                                     k path sub-map))
+                                                     k path sub-map
+                                                     component-name))
                                                 k))
                                             path)
                         v (->> (rest resolved-path)
@@ -426,9 +443,12 @@
               {} ordered-pairs)))
 
   (subscribe! [this sub-map cur-state update-fn*]
+    (subscribe! this sub-map cur-state update-fn* nil))
+
+  (subscribe! [this sub-map cur-state update-fn* component-name]
     (let [sub-id (get-sub-id *last-sub-id)
           ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
-          <make-si (partial <make-state-info this ordered-pairs)]
+          <make-si (partial <make-state-info this ordered-pairs component-name)]
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
         (try
