@@ -4,6 +4,7 @@
    [clojure.test :refer [deftest is]]
    [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.state-schema :as ss]
+   [com.dept24c.vivo.test-user :as tu]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.logging :as logging])
@@ -51,6 +52,33 @@
                                   {:text "This is great"
                                    :user {:name "Bo Johnson"
                                           :nickname "Bo"}}]]
+           (vivo/subscribe! sm '{msgs [:sys :msgs]
+                                 users [:sys :users]}
+                            nil
+                            (fn [{:syms [msgs users] :as arg}]
+                              (if-not (seq msgs)
+                                (ca/put! all-msgs-ch :no-msgs)
+                                (let [msgs* (join-msgs-and-users msgs users)]
+                                  (ca/put! all-msgs-ch msgs*)))))
+           (vivo/subscribe! sm '{app-name [:sys :app-name]} nil
+                            (fn [df]
+                              (if-let [app-name (df 'app-name)]
+                                (ca/put! app-name-ch app-name)
+                                (ca/put! app-name-ch :no-name))))
+           (vivo/subscribe! sm '{last-msg [:sys :msgs -1]} nil
+                            (fn [df]
+                              (if-let [last-msg (df 'last-msg)]
+                                (ca/put! last-msg-ch last-msg)
+                                (ca/put! last-msg-ch :no-last))))
+           (vivo/subscribe! sm '{uid->msgs [:sys :user-id-to-msgs]} nil
+                            (fn [{:syms [uid->msgs]}]
+                              (if (seq uid->msgs)
+                                (ca/put! index-ch uid->msgs)
+                                (ca/put! index-ch :no-u->m))))
+           (is (= :no-msgs (au/<? all-msgs-ch))) ; initial subscription result
+           (is (= :no-name (au/<? app-name-ch))) ; initial subscription result
+           (is (= :no-last (au/<? last-msg-ch))) ; initial subscription result
+           (is (= :no-u->m (au/<? index-ch))) ; initial subscription result
            (is (= true (au/<? (vivo/<update-state!
                                sm [{:path [:sys]
                                     :op :set
@@ -63,37 +91,15 @@
                                    {:path [:sys :msgs -1]
                                     :op :insert-after
                                     :arg msg2}]))))
-           (vivo/subscribe! sm '{app-name [:sys :app-name]} nil
-                            (fn [df]
-                              (if-let [app-name (df 'app-name)]
-                                (ca/put! app-name-ch app-name)
-                                (ca/close! app-name-ch))))
-           (vivo/subscribe! sm '{msgs [:sys :msgs]
-                                 users [:sys :users]}
-                            nil
-                            (fn [{:syms [msgs users]}]
-                              (if (seq msgs)
-                                (let [msgs* (join-msgs-and-users msgs users)]
-                                  (ca/put! all-msgs-ch msgs*))
-                                (ca/close! all-msgs-ch))))
-           (vivo/subscribe! sm '{uid->msgs [:sys :user-id-to-msgs]} nil
-                            (fn [{:syms [uid->msgs]}]
-                              (if (seq uid->msgs)
-                                (ca/put! index-ch uid->msgs)
-                                (ca/close! index-ch))))
-           (vivo/subscribe! sm '{last-msg [:sys :msgs -1]} nil
-                            (fn [df]
-                              (if-let [last-msg (df 'last-msg)]
-                                (ca/put! last-msg-ch last-msg)
-                                (ca/close! last-msg-ch))))
+           (is (= expected-all-msgs (au/<? all-msgs-ch)))
            (is (= app-name (au/<? app-name-ch)))
            (is (= msg2 (au/<? last-msg-ch)))
-           (is (= expected-all-msgs (au/<? all-msgs-ch)))
            (is (= {1 [{:text "This is great" :user-id 1}
                       {:text "A msg" :user-id 1}]}
                   (au/<? index-ch)))
-           (is (= true (au/<? (vivo/<update-state! sm [{:path [:sys :msgs -1]
-                                                        :op :remove}]))))
+           (is (= true (au/<? (vivo/<update-state!
+                               sm [{:path [:sys :msgs -1]
+                                    :op :remove}]))))
            (is (= msg (au/<? last-msg-ch)))
            (is (= 1 (count (au/<? all-msgs-ch))))
            (is (= {1 [{:text "A msg" :user-id 1}]}
@@ -103,7 +109,6 @@
          (finally
            (vivo/shutdown! sm)))))))
 
-;; TODO: Test combined :sys and :local subs and updates
 (deftest test-authentication
   (au/test-async
    10000
@@ -111,19 +116,20 @@
      (let [sm (vivo/state-manager sm-opts)]
        (try
          (let [state-ch (ca/chan)
-               subject-id "04df0587-43d7-41d8-af55-f4f6614e17eb"
-               identifier "test@tester.com"
-               secret "laughable"
                sub-map '{subject-id :vivo/subject-id}
-               sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))]
-           (is (= {'subject-id nil} (au/<? state-ch)))
-           (au/<? (vivo/<log-in! sm identifier secret))
-           (is (= {'subject-id subject-id} (au/<? state-ch)))
+               sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))
+               _ (is (= {'subject-id nil} (au/<? state-ch)))
+               login-ret (au/<? (vivo/<log-in! sm tu/test-identifier
+                                               tu/test-secret))]
+           (when-not login-ret
+             (throw (ex-info "Login failed. This is unexpected."
+                             (u/sym-map login-ret))))
+           (is (string? ('subject-id (au/<? state-ch))))
            (vivo/log-out! sm)
            (is (= {'subject-id nil} (au/<? state-ch)))
            (vivo/unsubscribe! sm sub-id))
          (catch #?(:clj Exception :cljs js/Error) e
-           (is (= :unexpected e)))
+           (is (= :unexpected (u/ex-msg e))))
          (finally
            (vivo/shutdown! sm)))))))
 

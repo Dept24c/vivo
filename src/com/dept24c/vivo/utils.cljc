@@ -50,7 +50,7 @@
    (logging/set-log-level! level)))
 
 (defn pprint [x]
-  #?(:clj (.write *out* ^String (cprint-str x))
+  #?(:clj (.write *out* ^String (str (cprint-str x) "\n"))
      :cljs (pprint/pprint x)))
 
 (defn pprint-str [x]

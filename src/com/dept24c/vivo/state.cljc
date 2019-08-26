@@ -9,10 +9,11 @@
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
+   [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
-   #?(:cljs [oops.core :refer [oget ocall]])
+   #?(:cljs [oops.core :refer [ocall]])
    [weavejester.dependency :as dep]))
 
 (def default-sm-opts
@@ -603,8 +604,8 @@
                           (sr/put! path->schema-cache path sch)
                           sch))
             fp (l/fingerprint64 arg-sch)
-            scmd (assoc cmd :arg {:fp fp
-                                  :bytes (l/serialize arg-sch (:arg cmd))})]
+            bytes (l/serialize arg-sch (:arg cmd))
+            scmd (assoc cmd :arg (u/sym-map fp bytes))]
         (swap! *fp->schema assoc fp arg-sch)
         scmd)))
 

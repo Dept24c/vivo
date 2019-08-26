@@ -229,6 +229,7 @@
              (:B)
              (slurp)
              (ba/b64->byte-array)
+             ;; TODO: Use reader and writer schema
              (l/deserialize-same schema))))
 
 ;; TODO: Replace before 1,000 users

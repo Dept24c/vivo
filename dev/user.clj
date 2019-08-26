@@ -1,14 +1,17 @@
 (ns user
   (:require
    [clojure.tools.namespace.repl :refer [refresh refresh-all]]
+   [cognitect.aws.client.api :as aws]
+   [com.dept24c.vivo.bristlecone.ddb-storage :as ddb]
    [com.dept24c.vivo.server :as server]
    [com.dept24c.vivo.state-schema :as ss]
+   [com.dept24c.vivo.test-user :as tu]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [puget.printer :refer [cprint]]))
 
 (def default-server-port 12345)
-
+(def repository-name "vivo-test")
 (def stop-server nil)
 
 (defn <authorized? [subject-id path]
@@ -27,6 +30,12 @@
             (update acc user-id conj msg))
           {} msgs))
 
+(defn populate-test-user [ddb]
+  (println "Adding test subject.")
+  (let [sid (au/<?? (server/<add-subject ddb repository-name
+                                         [tu/test-identifier] tu/test-secret))]
+    (println (str "New subject-id: " sid))))
+
 (defn start
   ([]
    (start default-server-port))
@@ -36,13 +45,18 @@
                :output-path [:user-id-to-msgs]}]
          opts {:authorization-fn <authorized?
                :transaction-fns tfs}]
-     (alter-var-root #'stop-server
-                     (fn [_]
-                       (let [stopper (server/vivo-server
-                                      port "vivo-test"
-                                      ss/state-schema opts)]
-                         (u/configure-capsule-logging :info)
-                         stopper))))))
+     (alter-var-root
+      #'stop-server
+      (fn [_]
+        (let [ddb (aws/client {:api :dynamodb})
+              _ (when-not (au/<?? (ddb/<active-table? ddb repository-name))
+                  (au/<?? (ddb/<create-table ddb repository-name))
+                  (populate-test-user ddb))
+              stopper (server/vivo-server
+                       port repository-name
+                       ss/state-schema opts)]
+          (u/configure-capsule-logging :info)
+          stopper))))))
 
 ;; Note: This has problems due to not having socket address reuse
 (defn restart []
