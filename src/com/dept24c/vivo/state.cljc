@@ -57,12 +57,6 @@
   (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
 
-(defn local-path? [path]
-  (= :local (first path)))
-
-(defn sys-path? [path]
-  (= :sys (first path)))
-
 (defn local-or-vivo-only? [sub-map]
   (reduce (fn [acc path]
             (if (or
@@ -255,6 +249,15 @@
               false))
           false sub-paths))
 
+(defn resolve-path [acc ordered-pairs component-name path]
+  (when (sequential? path)
+    (mapv (fn [k]
+            (if (symbol? k)
+              (or (get-in acc [:state k])
+                  (throw-missing-path-key k path ordered-pairs component-name))
+              k))
+          path)))
+
 (defrecord StateManager [capsule-client sys-state-schema sys-state-source
                          log-info log-error state-cache sub-map->op-cache
                          path->schema-cache update-ch subject-id-ch
@@ -381,6 +384,8 @@
   (<make-state-info
     [this sub-map-or-ordered-pairs component-name local-state db-id]
     (au/go
+      ;; TODO: Optimize by doing <get-in-sys-state calls in parallel
+      ;;       where possible (non-dependent)
       (let [init {:state {}
                   :paths []}]
         (if-not (seq sub-map-or-ordered-pairs)
@@ -393,28 +398,19 @@
             (loop [acc init
                    i 0]
               (let [[sym path] (nth ordered-pairs i)
-                    resolved-path (when (sequential? path)
-                                    (mapv (fn [k]
-                                            (if (symbol? k)
-                                              (or (get-in acc [:state k])
-                                                  (throw-missing-path-key
-                                                   k path ordered-pairs
-                                                   component-name))
-                                              k))
-                                          path))
+                    resolved-path (resolve-path acc ordered-pairs component-name
+                                                path)
+                    [path-head & path-tail] resolved-path
                     v (cond
                         (= :vivo/subject-id path)
                         @*subject-id
 
-                        (local-path? path)
-                        (->> (rest resolved-path)
-                             (commands/get-in-state local-state)
-                             (:val))
+                        (= :local path-head)
+                        (-> (commands/get-in-state local-state path-tail)
+                            (:val))
 
-                        (sys-path? path)
-                        ;; TODO: Optimize by getting multiple paths in one call
-                        (au/<? (<get-in-sys-state this db-id
-                                                  (rest resolved-path))))
+                        (= :sys path-head)
+                        (au/<? (<get-in-sys-state this db-id path-tail)))
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
                                 (update :paths conj (or resolved-path

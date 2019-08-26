@@ -404,3 +404,29 @@
     [:sibling nil] [:a :b] [:b :c]
     [:sibling nil] [:a :b] [:a :c]
     [:sibling nil] [:a :c :d] [:a :b :d]))
+
+#_
+(deftest test-collection-join
+  (au/test-async
+   10000
+   (ca/go
+     (try
+       (let [my-deal-ids [42 911 1024]
+             deals {1 "deal1"
+                    2 "deal2"
+                    42 "deal42"
+                    911 "deal911"
+                    1024 "deal1024"}
+             sm (vivo/state-manager)
+             ch (ca/chan 1)
+             sub-map '{my-deal-ids [:local :my-deal-ids]
+                       my-deals [:local :deals my-deal-ids]}
+             update-fn #(ca/put! ch %)
+             expected (select-keys deals my-deal-ids)]
+         (au/<? (vivo/<update-state! sm [{:path [:local]
+                                          :op :set
+                                          :arg (u/sym-map my-deal-ids deals)}]))
+         (vivo/subscribe! sm sub-map update-fn)
+         (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
