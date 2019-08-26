@@ -645,10 +645,8 @@
       (let [token (get-login-token)
             login-ch (when token
                        (cc/<send-msg capsule-client :log-in-w-token token))
-            source* (or sys-state-source
-                        {:temp-branch/db-id nil})
             set-source-ch (cc/<send-msg capsule-client
-                                        :set-state-source source*)
+                                        :set-state-source sys-state-source)
             subject-id (when login-ch
                          (au/<? login-ch))
             db-id (au/<? set-source-ch)]
@@ -680,17 +678,31 @@
 (defn on-disconnect [*conn-initialized? capsule-client]
   (reset! *conn-initialized? false))
 
-(defn check-sys-state-source [source]
-  (when source
-    (when-not (map? source)
-      (throw (ex-info (str "sys-state-source must be a map. Got `"
-                           source "`.")
-                      {:sys-state-source source})))
-    ;; State source is either:
-    ;; - {:branch <branch-name>} or
-    ;; - {:temp-branch/db-id <db-id> or nil}
-    ;;  TODO check that only valid keys are present
-    ))
+(defn check-sys-state-source [sys-state-source]
+  ;; sys-state-source must be either:
+  ;; - {:branch/name <branch-name>}
+  ;; - {:temp-branch/db-id <db-id> or nil}
+  (when-not (map? sys-state-source)
+    (throw (ex-info (str "sys-state-source must be a map. Got `"
+                         sys-state-source "`.")
+                    (u/sym-map sys-state-source))))
+  (if-let [branch-name (:branch/name sys-state-source)]
+    (when-not (string? branch-name)
+      (throw (ex-info (str "Bad :branch/name value in :sys-state-source. "
+                           "Expected a string, got `" branch-name "`.")
+                      (u/sym-map sys-state-source branch-name))))
+    (if (contains? sys-state-source :temp-branch/db-id)
+      (let [db-id (:temp-branch/db-id sys-state-source)]
+        (when-not (or (nil? db-id)
+                      (string? db-id))
+          (throw (ex-info
+                  (str "Bad :temp-branch/db-id value in :sys-state-source. "
+                       "Expected a string or nil, got `" db-id "`.")
+                  (u/sym-map sys-state-source db-id)))))
+      (throw (ex-info
+              (str ":sys-state-source must contain either a :branch/name key "
+                   "or a :temp-branch/db-id key. Got `" sys-state-source "`.")
+              (u/sym-map sys-state-source))))))
 
 (defn make-capsule-client
   [get-server-url sys-state-schema sys-state-source log-error log-info

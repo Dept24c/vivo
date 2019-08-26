@@ -16,7 +16,8 @@
   "ws://localhost:12345/state-manager")
 
 (def sm-opts {:get-server-url get-server-url
-              :sys-state-schema ss/state-schema})
+              :sys-state-schema ss/state-schema
+              :sys-state-source {:temp-branch/db-id nil}})
 
 (def user-bo {:name "Bo Johnson"
               :nickname "Bo"})
