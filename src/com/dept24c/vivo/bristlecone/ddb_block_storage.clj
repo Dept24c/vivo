@@ -1,9 +1,9 @@
-(ns com.dept24c.vivo.bristlecone.ddb-storage
+(ns com.dept24c.vivo.bristlecone.ddb-block-storage
   (:require
    [clojure.core.async :as ca]
    [cognitect.aws.client.api :as aws]
    [cognitect.aws.client.api.async :as aws-async]
-   [com.dept24c.vivo.bristlecone.db-ids :as db-ids]
+   [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
@@ -14,22 +14,21 @@
 (def default-client-options
   {:block-cache-size 1000
    :create-table-if-absent true})
-
 (def last-block-num-key "_LAST_BLOCK_NUM")
+(def max-data-block-bytes (- (* 400 1024) 10))
 
 (defn check-block-id [block-id]
   (when-not (string? block-id)
-    (throw (ex-info (str "Block-id must be a string. Got `"
+    (throw (ex-info (str "block-id must be a string. Got `"
                          (or block-id "nil") "`.")
                     {:given-block-id block-id})))
-  (when (db-ids/temp-db-id? block-id)
-    (throw (ex-info (str "Attempt to delete temp block in "
-                         "permanent storage.")
+  (when (block-ids/temp-block-id? block-id)
+    (throw (ex-info (str "block-id `" block-id "` is a temporary id.")
                     (u/sym-map block-id)))))
 
-(defrecord DDBStorage [ddb table-name block-cache]
-  u/IBristleconeStorage
-  (<allocate-block-num [this]
+(defrecord DDBBlockStorage [ddb table-name block-cache]
+  u/IBlockStorage
+  (<allocate-block-id [this]
     ;; TODO: Optimize this by pre-allocating a block of 100 at a time,
     ;; then issuing as needed.
     (au/go
@@ -49,7 +48,8 @@
                                    "#ResourceNotFoundException")
                               "com.amazon.coral.validate#ValidationException"}
                             (:__type ret)))
-                (-> ret :Attributes :v :N Long/parseLong)
+                (-> ret :Attributes :v :N Long/parseLong
+                    block-ids/block-num->block-id)
                 (let [arg {:op :PutItem
                            :request {:TableName table-name
                                      :Item {"k" {:S last-block-num-key}
@@ -60,29 +60,57 @@
                                  " attempts.")
                             (u/sym-map num-tries table-name))))))))
 
+  (<compare-and-set-bytes! [this reference old-bytes new-bytes]
+    (au/go
+      (let [old-b64 (ba/byte-array->b64 old-bytes)
+            new-b64 (ba/byte-array->b64 new-bytes)
+            arg {:op :UpdateItem
+                 :request {:TableName table-name
+                           :Key {"k" {:S reference}}
+                           :ExpressionAttributeValues {":old-v" {:B old-b64}
+                                                       ":new-v" {:B new-b64}}
+                           :UpdateExpression "SET v = :new-v"
+                           :ConditionExpression "v = :old-v"
+                           :ReturnValues "UPDATED_NEW"}}
+            ret  (au/<? (aws-async/invoke ddb arg))]
+        (if (and (= :cognitect.anomalies/incorrect
+                    (:cognitect.anomalies/category ret))
+                 (#{(str "com.amazonaws.dynamodb.v20120810"
+                         "#ResourceNotFoundException")
+                    "com.amazon.coral.validate#ValidationException"}
+                  (:__type ret)))
+          (au/<? (u/<write-block this reference new-bytes true))
+          (= new-b64 (-> ret :Attributes :v :B))))))
+
   (<read-block [this block-id]
     (u/<read-block this block-id false))
 
   (<read-block [this block-id skip-cache?]
-    (check-block-id block-id)
     (au/go
-      (or (when-not skip-cache?
-            (sr/get block-cache block-id))
-          (let [arg {:op :GetItem
-                     :request {:TableName table-name
-                               :Key {"k" {:S block-id}}
-                               :AttributesToGet ["v"]}}
-                ret (au/<? (aws-async/invoke ddb arg))
-                data (some-> ret :Item :v :B slurp ba/b64->byte-array)]
-            (when-not skip-cache?
-              (sr/put! block-cache block-id data))
-            data))))
+      (when block-id
+        (check-block-id block-id)
+        (or (when-not skip-cache?
+              (sr/get block-cache block-id))
+            (let [arg {:op :GetItem
+                       :request {:TableName table-name
+                                 :Key {"k" {:S block-id}}
+                                 :AttributesToGet ["v"]}}
+                  ret (au/<? (aws-async/invoke ddb arg))
+                  data (some-> ret :Item :v :B slurp ba/b64->byte-array)]
+              (when (and data
+                         (not skip-cache?))
+                (sr/put! block-cache block-id data))
+              data)))))
 
   (<write-block [this block-id data]
     (u/<write-block this block-id data false))
 
   (<write-block [this block-id data skip-cache?]
     (check-block-id block-id)
+    (when (> (count data) max-data-block-bytes)
+      (throw (ex-info "Data is too big to be written in one block."
+                      {:data-size (count data)
+                       :max-data-size max-data-block-bytes})))
     (when-not (ba/byte-array? data)
       (throw (ex-info (str "Data must be a byte array. Got `"
                            (or data "nil") "`.")
@@ -138,9 +166,9 @@
               (ca/<! (ca/timeout 1000))
               (recur (dec attempts-left))))))))
 
-(defn <ddb-storage
+(defn <ddb-block-storage
   ([table-name]
-   (<ddb-storage table-name {}))
+   (<ddb-block-storage table-name {}))
   ([table-name options]
    (au/go
      (when-not (string? table-name)
@@ -154,4 +182,4 @@
        (when (and create-table-if-absent
                   (not (au/<? (<active-table? ddb table-name))))
          (au/<? (<create-table ddb table-name)))
-       (->DDBStorage ddb table-name block-cache)))))
+       (->DDBBlockStorage ddb table-name block-cache)))))

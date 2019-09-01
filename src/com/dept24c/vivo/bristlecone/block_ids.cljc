@@ -1,4 +1,4 @@
-(ns com.dept24c.vivo.bristlecone.db-ids
+(ns com.dept24c.vivo.bristlecone.block-ids
   (:require
    [clojure.string :as string]
    #?(:cljs [goog.math :as gm])))
@@ -82,6 +82,10 @@
   #?(:clj (Long/parseLong s)
      :cljs (gm/Long.fromString s)))
 
+(defn long->str [l]
+  #?(:clj (str l)
+     :cljs (.toString ^Long l)))
+
 (defn long-mod [a b]
   #?(:clj (mod a b)
      :cljs (.modulo ^Long a ^Long b)))
@@ -134,7 +138,7 @@
   #?(:clj (> a b)
      :cljs (.greaterThan ^Long (ensure-long a) ^Long (ensure-long b))))
 
-;; Encoding for db-ids
+;; Encoding for block-ids
 ;; - Designed to work w/ allowed DDB name characters while leaving
 ;;   non-alphanumeric characters for other uses.
 ;; - Left-most character changes most, spreading block ids across
@@ -186,43 +190,43 @@
           new-l
           (recur (inc i) new-l))))))
 
-(defn temp-db-id? [db-id]
-  (when-not (string? db-id)
-    (throw (ex-info (str "db-id must be a string. Got `"
-                         (or db-id "nil") "`.")
-                    {:db-id db-id})))
-  (string/starts-with? db-id "-"))
+(defn temp-block-id? [block-id]
+  (when-not (string? block-id)
+    (throw (ex-info (str "block-id must be a string. Got `"
+                         (or block-id "nil") "`.")
+                    {:block-id block-id})))
+  (string/starts-with? block-id "-"))
 
-(defn db-id->temp-db-id [db-id]
-  (when db-id
-    (if (temp-db-id? db-id)
-      db-id
-      (str "-" db-id))))
+(defn block-id->temp-block-id [block-id]
+  (when block-id
+    (if (temp-block-id? block-id)
+      block-id
+      (str "-" block-id))))
 
-(defn db-num->db-id [db-num]
-  (if (long-neg? db-num)
-    (db-id->temp-db-id (ulong->b62 (* -1 db-num)))
-    (ulong->b62 db-num)))
+(defn block-num->block-id [block-num]
+  (if (long-neg? block-num)
+    (block-id->temp-block-id (ulong->b62 (* -1 block-num)))
+    (ulong->b62 block-num)))
 
-(defn db-id->db-num [db-id]
-  (if (temp-db-id? db-id)
-    (* -1 (b62->ulong (subs db-id 1)))
-    (b62->ulong db-id)))
+(defn block-id->block-num [block-id]
+  (if (temp-block-id? block-id)
+    (* -1 (b62->ulong (subs block-id 1)))
+    (b62->ulong block-id)))
 
-(defn earlier? [db-id1 db-id2]
-  (let [db-num1 (db-id->db-num db-id1)
-        db-num2 (db-id->db-num db-id2)
-        db-type #(if (temp-db-id? %) "temporary" "permanent")]
+(defn earlier? [block-id1 block-id2]
+  (let [block-num1 (block-id->block-num block-id1)
+        block-num2 (block-id->block-num block-id2)
+        block-type #(if (temp-block-id? %) "temporary" "permanent")]
     (cond
-      (and (long-pos? db-num1) (long-pos? db-num2))
-      (long-lt db-num1 db-num2)
+      (and (long-pos? block-num1) (long-pos? block-num2))
+      (long-lt block-num1 block-num2)
 
-      (and (long-neg? db-num1) (long-neg? db-num2))
-      (long-gt db-num1 db-num2)
+      (and (long-neg? block-num1) (long-neg? block-num2))
+      (long-gt block-num1 block-num2)
 
       :else
       (throw (ex-info
-              (str "Mismatched db-ids. db-id1 is " (db-type db-id1)
-                   " but db-id2 is " (db-type db-id2) ".")
-              {:db-id1 db-id1
-               :db-id2 db-id2})))))
+              (str "Mismatched block-ids. block-id1 is " (block-type block-id1)
+                   " but block-id2 is " (block-type block-id2) ".")
+              {:block-id1 block-id1
+               :block-id2 block-id2})))))

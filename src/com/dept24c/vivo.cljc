@@ -95,6 +95,12 @@
   [sm]
   (state/log-out! sm))
 
+(defn <add-subject!
+  ([sm identifier secret]
+   (<add-subject! sm identifier secret nil))
+  ([sm identifier secret subject-id]
+   (state/<add-subject! sm identifier secret subject-id)))
+
 (defn shutdown!
   "Shutdown the state manager and its connection to the server.
    Mostly useful in tests."
@@ -104,8 +110,8 @@
 #?(:clj
    (defn vivo-server
      "Returns a no-arg fn that stops the server."
-     [port repository-name sys-state-schema opts]
-     (server/vivo-server port repository-name sys-state-schema opts)))
+     [config]
+     (server/vivo-server config)))
 
 (defn with-key
   "Adds the given React key to element."

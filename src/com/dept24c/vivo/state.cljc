@@ -5,7 +5,7 @@
    [clojure.core.async :as ca]
    [clojure.set :as set]
    [clojure.string :as str]
-   [com.dept24c.vivo.bristlecone.db-ids :as db-ids]
+   [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
@@ -28,6 +28,9 @@
                        :needed #{}})
 
 (defprotocol IStateManager
+  (<add-subject!
+    [this identifier secret]
+    [this identifier secret subject-id])
   (<deserialize-value [this path ret])
   (<fp->schema [this value-fp])
   (<get-in-sys-state [this db-id path])
@@ -508,7 +511,7 @@
                 local-db-id @*cur-db-id
                 notify-all? (not= prev-db-id local-db-id)]
             (if (or (nil? local-db-id)
-                    (db-ids/earlier? local-db-id cur-db-id))
+                    (block-ids/earlier? local-db-id cur-db-id))
               (do
                 (reset! *cur-db-id cur-db-id)
                 (notify-subs this updated-paths notify-all?)
@@ -531,7 +534,7 @@
                 local-db-id @*cur-db-id
                 notify-all? (not= prev-db-id local-db-id)]
             (if (or (nil? local-db-id)
-                    (db-ids/earlier? local-db-id cur-db-id))
+                    (block-ids/earlier? local-db-id cur-db-id))
               (let [paths* (set/union (set paths) (set updated-paths))]
                 (reset! *cur-db-id cur-db-id)
                 (swap! *local-state #(reduce commands/eval-cmd % local-cmds))
@@ -626,12 +629,19 @@
               local-db-id @*cur-db-id
               notify-all? (not= prev-db-id local-db-id)]
           (when (or (nil? local-db-id)
-                    (db-ids/earlier? local-db-id cur-db-id))
+                    (block-ids/earlier? local-db-id cur-db-id))
             (reset! *cur-db-id cur-db-id)
             (notify-subs this updated-paths notify-all?)))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in <handle-sys-state-changed: "
-                          (u/ex-msg-and-stacktrace e))))))))
+                          (u/ex-msg-and-stacktrace e)))))))
+
+  (<add-subject! [this identifier secret]
+    <add-subject! this identifier secret nil)
+
+  (<add-subject! [this identifier secret subject-id]
+    (cc/<send-msg capsule-client :add-subject
+                  (u/sym-map identifier secret subject-id))))
 
 (defn <init-conn
   [capsule-client sys-state-source log-error log-info *cur-db-id

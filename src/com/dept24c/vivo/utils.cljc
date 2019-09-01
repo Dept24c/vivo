@@ -3,6 +3,7 @@
    #?(:cljs [cljs.reader :as reader])
    #?(:clj [clojure.edn :as edn])
    #?(:cljs [clojure.pprint :as pprint])
+   [clojure.string :as str]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.logging :as logging]
    [deercreeklabs.lancaster :as l]
@@ -15,6 +16,14 @@
 #?(:clj
    (set! *warn-on-reflection* true))
 
+(def all-branches-reference "_ALL_BRANCHES")
+(def alphanumeric-chars-w-hyphen
+  (-> (seq "-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+      (set)))
+(def branch-reference-root "_BRANCH_")
+(def fp-to-schema-reference-root "_FP_")
+(def max-branch-name-len 64)
+
 (defmacro sym-map
   "Builds a map from symbols.
    Symbol names are turned into keywords and become the map's keys.
@@ -25,22 +34,38 @@
   [& syms]
   (zipmap (map keyword syms) syms))
 
-(defprotocol IBristleconeClient
-  (<create-branch! [this branch-name db-id temp?])
-  (<delete-branch! [this branch-name])
-  (<get-in [this db-id path])
-  (<get-all-branches [this])
-  (<get-db-id [this branch])
-  (<get-num-commits [this branch])
-  (<get-log [this branch limit])
-  (<merge! [this source-branch target-branch])
-  (<commit! [this branch update-commands msg tx-fns]))
+(defprotocol IDataStorage
+  (<delete-reference! [this reference])
+  (<get-in [this data-id schema path])
+  (<get-in-reference [this reference schema path])
+  (<update
+    [this data-id schema update-commands]
+    [this data-id schema update-commands tx-fns])
+  (<update-reference!
+    [this reference schema update-commands]
+    [this reference schema update-commands tx-fns]))
 
-(defprotocol IBristleconeStorage
-  (<allocate-block-num [this])
-  (<read-block [this block-id] [this block-id skip-cache?])
-  (<write-block [this block-id data] [this block-id data skip-cache?])
-  (<delete-block [this block-id]))
+(defprotocol IDataBlockStorage
+  (<schema->fp [this schema])
+  (<fp->schema [this fp])
+  (<allocate-data-block-id [this])
+  (<compare-and-set! [this reference schema old new])
+  (<read-data-block [this block-id schema])
+  (<write-data-block [this block-id schema data])
+  (<delete-data-block [this block-id])
+  (<set-reference! [this reference data-id])
+  (<get-data-id [this reference]))
+
+(defprotocol IBlockStorage
+  (<allocate-block-id [this])
+  (<compare-and-set-bytes! [this reference old-bytes new-bytes])
+  (<delete-block [this block-id])
+  (<read-block
+    [this block-id]
+    [this block-id skip-cache?])
+  (<write-block
+    [this block-id bytes]
+    [this block-id bytes skip-cache?]))
 
 (defn configure-capsule-logging
   ([]
@@ -146,31 +171,51 @@
       b-tail? [:parent (drop divergence-i ksb)]
       :else [:equal nil])))
 
+(defn check-reference [reference]
+  (when (or (not (string? reference))
+            (not (str/starts-with? reference "_")))
+    (throw (ex-info (str "Bad reference: `" reference "`. References must "
+                         "be strings that start with an underscore.")
+                    {:given-reference reference}))))
+
+(defn check-data-id [id]
+  (when (or (not (string? id))
+            (not (alphanumeric-chars-w-hyphen (first id))))
+    (throw (ex-info (str "Bad data-id `" id "`. All data-ids must "
+                         "be strings that start with a letter, a number, "
+                         "or a hyphen (for temp data-ids)")
+                    {:given-data-id id}))))
+
 ;;;;;;;;;;;;;;;;;;;; Schemas ;;;;;;;;;;;;;;;;;;;;
 
-(def db-id-schema l/string-schema)
 (def block-num-schema l/long-schema)
-(def fp-schema l/long-schema)
 (def branch-name-schema l/string-schema)
-(def all-branches-schema (l/array-schema branch-name-schema))
+(def data-id-schema l/string-schema)
+(def fp-schema l/long-schema)
+(def identifier-schema l/string-schema)
+(def secret-schema l/string-schema)
 (def subject-id-schema l/string-schema)
+(def token-schema l/string-schema)
 (def valid-ops  [:set :remove :insert-before :insert-after
                  :plus :minus :multiply :divide :mod])
+
+(def all-branches-schema (l/array-schema branch-name-schema))
 (def op-schema (l/enum-schema :com.dept24c.vivo.utils/op
                               valid-ops))
-(def token-schema l/string-schema)
 
-(def branch-value-schema (l/maybe db-id-schema))
+(l/def-map-schema string-map-schema
+  l/string-schema)
 
 (l/def-record-schema db-info-schema
-  [:data-block-num block-num-schema]
-  [:data-block-fp fp-schema]
-  [:update-commands-block-num block-num-schema]
-  [:update-commands-fp fp-schema]
+  [:data-id data-id-schema]
+  [:subject-id-to-hashed-secret-data-id data-id-schema]
+  [:identifier-to-subject-id-data-id data-id-schema]
+  [:token-to-token-info-data-id data-id-schema]
+  [:subject-id-to-tokens-data-id data-id-schema]
   [:msg l/string-schema]
   [:timestamp-ms l/long-schema]
   [:num-prev-dbs l/int-schema]
-  [:prev-db-num (l/maybe block-num-schema)])
+  [:prev-db-id data-id-schema])
 
 (l/def-union-schema path-item-schema
   l/keyword-schema
@@ -192,6 +237,8 @@
 (def serializable-update-commands-schema
   (l/array-schema serializable-update-command-schema))
 
+(def db-id-schema l/string-schema)
+
 (l/def-record-schema get-state-arg-schema
   [:db-id db-id-schema]
   [:path path-schema])
@@ -208,35 +255,56 @@
   [:updated-paths (l/array-schema (l/maybe path-schema))])
 
 (l/def-record-schema log-in-arg-schema
-  [:identifier l/string-schema]
-  [:secret l/string-schema])
+  [:identifier identifier-schema]
+  [:secret secret-schema])
 
 (l/def-record-schema log-in-ret-schema
   [:subject-id subject-id-schema]
   [:token token-schema])
 
-(l/def-record-schema branch-state-source-schema
-  [:branch l/string-schema])
-
-(l/def-record-schema temp-branch-state-source-schema
-  [:temp-branch/db-id (l/maybe db-id-schema)])
+(l/def-record-schema add-subject-arg-schema
+  [:identifier identifier-schema]
+  [:secret secret-schema]
+  [:subject-id subject-id-schema])
 
 (l/def-record-schema token-info-schema
   [:expiration-time-mins l/long-schema]
   [:subject-id subject-id-schema])
 
+(def token-map-schema (l/map-schema token-info-schema))
+
+(def subject-id-to-tokens-schema
+  (l/map-schema (l/array-schema token-schema)))
+
 (l/def-record-schema subject-info-schema
   [:hashed-secret l/string-schema]
   [:identifiers (l/array-schema l/string-schema)])
 
-(def token-map-schema (l/map-schema token-info-schema))
+(l/def-record-schema branch-state-source-schema
+  [:branch/name l/string-schema])
+
+(l/def-record-schema temp-branch-state-source-schema
+  [:temp-branch/db-id (l/maybe db-id-schema)])
 
 (def state-source-schema (l/union-schema [branch-state-source-schema
                                           temp-branch-state-source-schema]))
 
+(l/def-record-schema create-branch-arg-schema
+  [:branch branch-name-schema]
+  [:db-id db-id-schema])
+
 (def sm-server-protocol
   {:roles [:state-manager :server]
-   :msgs {:get-schema-pcf {:arg l/long-schema
+   :msgs {:add-subject {:arg add-subject-arg-schema
+                        :ret subject-id-schema
+                        :sender :state-manager}
+          :add-subject-identifier {:arg l/string-schema
+                                   :ret l/boolean-schema
+                                   :sender :state-manager}
+          :change-secret {:arg l/string-schema
+                          :ret l/boolean-schema
+                          :sender :state-manager}
+          :get-schema-pcf {:arg l/long-schema
                            :ret (l/maybe l/string-schema)
                            :sender :either}
           :get-state {:arg get-state-arg-schema
@@ -255,10 +323,20 @@
                              :sender :state-manager}
           :sys-state-changed {:arg sys-state-change-schema
                               :sender :server}
+          ;; We need to return the state change so sys+local updates
+          ;; remain transactional
           :update-state {:arg serializable-update-commands-schema
-                         :ret (l/union-schema [sys-state-change-schema
-                                               l/boolean-schema])
+                         :ret (l/maybe sys-state-change-schema)
                          :sender :state-manager}}})
+
+(def admin-client-server-protocol
+  {:roles [:admin-client :server]
+   :msgs {:create-branch {:arg create-branch-arg-schema
+                          :ret l/boolean-schema
+                          :sender :admin-client}
+          :delete-branch {:arg branch-name-schema
+                          :ret l/boolean-schema
+                          :sender :admin-client}}})
 
 (defn get-undefined-syms [sub-map]
   (let [defined-syms (set (keys sub-map))]

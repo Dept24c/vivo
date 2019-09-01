@@ -116,7 +116,10 @@
    (ca/go
      (let [sm (vivo/state-manager sm-opts)]
        (try
-         (let [state-ch (ca/chan)
+         (let [ret (au/<? (vivo/<add-subject! sm tu/test-identifier
+                                              tu/test-secret
+                                              tu/test-subject-id))
+               state-ch (ca/chan)
                sub-map '{subject-id :vivo/subject-id}
                sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))
                _ (is (= {'subject-id nil} (au/<? state-ch)))
@@ -125,7 +128,7 @@
            (when-not login-ret
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))
-           (is (string? ('subject-id (au/<? state-ch))))
+           (is (= tu/test-subject-id ('subject-id (au/<? state-ch))))
            (vivo/log-out! sm)
            (is (= {'subject-id nil} (au/<? state-ch)))
            (vivo/unsubscribe! sm sub-id))
@@ -141,7 +144,8 @@
      (let [sm (vivo/state-manager sm-opts)]
        (try
          (let [app-name "test-app"
-               _ (au/<? (vivo/<set-state! sm [:sys :app-name] app-name))
+               ret (au/<? (vivo/<set-state! sm [:sys :app-name] app-name))
+               _ (is (= true ret))
                state-ch (ca/chan)
                sub-map '{app-name [:sys :app-name]
                          secret [:sys :secret]}
