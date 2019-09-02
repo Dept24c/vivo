@@ -643,26 +643,26 @@
     (cc/<send-msg capsule-client :add-subject
                   (u/sym-map identifier secret subject-id))))
 
+(defn <log-in-w-token [capsule-client subject-id-ch log-info token]
+  (au/go
+    (if-let [subject-id (au/<? (cc/<send-msg capsule-client
+                                             :log-in-w-token token))]
+      (do
+        (ca/put! subject-id-ch subject-id)
+        (log-info "Token-based login succeeded."))
+      (when token
+        (delete-login-token)
+        (log-info "Token-based login failed")))))
+
 (defn <init-conn
   [capsule-client sys-state-source log-error log-info *cur-db-id
    *conn-initialized? subject-id-ch]
   (ca/go
     (try
-      (let [token (get-login-token)
-            login-ch (when token
-                       (cc/<send-msg capsule-client :log-in-w-token token))
-            set-source-ch (cc/<send-msg capsule-client
-                                        :set-state-source sys-state-source)
-            subject-id (when login-ch
-                         (au/<? login-ch))
-            db-id (au/<? set-source-ch)]
-        (if subject-id
-          (do
-            (ca/put! subject-id-ch subject-id)
-            (log-info "Token-based login succeeded."))
-          (when token
-            (delete-login-token)
-            (log-info "Token-based login failed")))
+      (let [db-id (au/<? (cc/<send-msg capsule-client
+                                       :set-state-source sys-state-source))]
+        (when-let [token (get-login-token)]
+          (au/<? (<log-in-w-token capsule-client subject-id-ch log-info token)))
         (reset! *cur-db-id db-id)
         (reset! *conn-initialized? true)
         (log-info "State manager connection initialized."))

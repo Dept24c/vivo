@@ -463,9 +463,10 @@
             db-id (au/<? (u/<get-data-id storage branch-reference))
             db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil))
             {:keys [token-to-token-info-data-id]} db-info
-            info (au/<? (u/<get-in storage token-to-token-info-data-id
-                                   u/token-map-schema
-                                   [token]))
+            info (when token-to-token-info-data-id
+                   (au/<? (u/<get-in storage token-to-token-info-data-id
+                                     u/token-map-schema
+                                     [token])))
             {:keys [expiration-time-mins subject-id]} info
             now-mins (-> (u/current-time-ms)
                          (u/ms->mins))]
