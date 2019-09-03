@@ -70,14 +70,6 @@
   (au/go
     (let [{:keys [identifier-to-subject-id-data-id
                   subject-id-to-hashed-secret-data-id]} dbi]
-      (when (and subject-id-to-hashed-secret-data-id
-                 (au/<? (u/<get-in storage
-                                   subject-id-to-hashed-secret-data-id
-                                   u/string-map-schema
-                                   [requested-subject-id])))
-        (throw (ex-info (str "Requested subject-id `" requested-subject-id
-                             "` already exists.")
-                        (u/sym-map requested-subject-id identifier))))
       (assoc dbi
              :subject-id-to-hashed-secret-data-id
              (au/<? (u/<update storage

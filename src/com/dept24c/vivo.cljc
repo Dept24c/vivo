@@ -32,10 +32,8 @@
    is a low-level function that generally should not be called directly.
    Prefer `def-component` or `use-vivo-state`.
    Returns a subscription id."
-  ([sm sub-map update-fn]
-   (subscribe! sm sub-map nil update-fn))
-  ([sm sub-map cur-state update-fn]
-   (state/subscribe! sm sub-map cur-state update-fn)))
+  [sm sub-map cur-state update-fn subscriber-name]
+  (state/subscribe! sm sub-map cur-state update-fn subscriber-name))
 
 (defn unsubscribe!
   "Removes a Vivo subscription. Returns nil."

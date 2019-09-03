@@ -38,11 +38,11 @@
   (<handle-sys-state-changed [this arg metadata])
   (<handle-sys-updates-only [this sys-cmds paths cb])
   (<make-state-info
-    [this sub-map-or-ordered-pairs component-name]
-    [this sub-map-or-ordered-pairs component-name local-state db-id])
+    [this sub-map-or-ordered-pairs subscriber-name]
+    [this sub-map-or-ordered-pairs subscriber-name local-state db-id])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
-  (get-local-state [this sub-map component-name])
+  (get-local-state [this sub-map subscriber-name])
   (handle-local-updates-only [this local-cmds paths cb])
   (log-in! [this identifier secret cb])
   (log-out! [this])
@@ -50,12 +50,10 @@
   (set-subject-id [this subject-id])
   (shutdown! [this])
   (ssr? [this])
-  (<ssr [this component-fn component-name])
+  (<ssr [this component-fn subscriber-name])
   (ssr-get-state! [this sub-map])
   (start-update-loop [this])
-  (subscribe!
-    [this sub-map cur-state update-fn]
-    [this sub-map cur-state update-fn component-name])
+  (subscribe! [this sub-map cur-state update-fn subscriber-name])
   (unsubscribe! [this sub-id])
   (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
@@ -73,11 +71,11 @@
   "React hook for Vivo"
   ([sm sub-map]
    (use-vivo-state sm sub-map nil))
-  ([sm sub-map component-name]
+  ([sm sub-map subscriber-name]
    #?(:cljs
       (let [initial-state (cond
                             (local-or-vivo-only? sub-map)
-                            (get-local-state sm sub-map component-name)
+                            (get-local-state sm sub-map subscriber-name)
 
                             (ssr? sm)
                             (ssr-get-state! sm sub-map)
@@ -87,9 +85,9 @@
             [state update-fn] (.useState React initial-state)
             effect (fn []
                      (let [sub-id (subscribe! sm sub-map state update-fn
-                                              component-name)]
+                                              subscriber-name)]
                        #(unsubscribe! sm sub-id)))]
-        (.useEffect React effect)
+        (.useEffect React effect #js [])
         state))))
 
 (defn get-login-token []
@@ -125,13 +123,13 @@
 (defn throw-missing-path-key
   ([k path sub-map]
    (throw-missing-path-key k path sub-map nil))
-  ([k path sub-map component-name]
+  ([k path sub-map subscriber-name]
    (throw (ex-info (str "Could not find a value for key `" k "` in path `"
-                        path "` of " (if component-name
-                                       (str "component `" component-name)
+                        path "` of " (if subscriber-name
+                                       (str "component `" subscriber-name)
                                        (str "sub-map `" sub-map))
                         "`.")
-                   (u/sym-map k path sub-map component-name)))))
+                   (u/sym-map k path sub-map subscriber-name)))))
 
 (defn make-update-info [update-cmds]
   (reduce (fn [acc cmd]
@@ -252,12 +250,12 @@
               false))
           false sub-paths))
 
-(defn resolve-path [acc ordered-pairs component-name path]
+(defn resolve-path [acc ordered-pairs subscriber-name path]
   (when (sequential? path)
     (mapv (fn [k]
             (if (symbol? k)
               (or (get-in acc [:state k])
-                  (throw-missing-path-key k path ordered-pairs component-name))
+                  (throw-missing-path-key k path ordered-pairs subscriber-name))
               k))
           path)))
 
@@ -299,7 +297,7 @@
           (swap! *ssr-info update :needed conj sub-map)
           nil)))
 
-  (<ssr [this component-fn component-name]
+  (<ssr [this component-fn subscriber-name]
     #?(:cljs
        (au/go
          (when-not (ifn? component-fn)
@@ -325,7 +323,7 @@
                    (doseq [sub-map needed]
                      (let [{:keys [state]} (au/<? (<make-state-info
                                                    this sub-map
-                                                   component-name))]
+                                                   subscriber-name))]
                        (swap! *ssr-info update
                               :resolved assoc sub-map state)))
                    (swap! *ssr-info assoc :needed #{})
@@ -380,12 +378,12 @@
     (log-info "State manager stopped."))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs component-name]
-    (<make-state-info this sub-map-or-ordered-pairs component-name
+    [this sub-map-or-ordered-pairs subscriber-name]
+    (<make-state-info this sub-map-or-ordered-pairs subscriber-name
                       @*local-state @*cur-db-id))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs component-name local-state db-id]
+    [this sub-map-or-ordered-pairs subscriber-name local-state db-id]
     (au/go
       ;; TODO: Optimize by doing <get-in-sys-state calls in parallel
       ;;       where possible (non-dependent)
@@ -401,7 +399,7 @@
             (loop [acc init
                    i 0]
               (let [[sym path] (nth ordered-pairs i)
-                    resolved-path (resolve-path acc ordered-pairs component-name
+                    resolved-path (resolve-path acc ordered-pairs subscriber-name
                                                 path)
                     [path-head & path-tail] resolved-path
                     v (cond
@@ -422,7 +420,7 @@
                   new-acc
                   (recur new-acc (inc i))))))))))
 
-  (get-local-state [this sub-map component-name]
+  (get-local-state [this sub-map subscriber-name]
     (let [ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
           local-state @*local-state]
       (reduce (fn [acc [sym path]]
@@ -433,7 +431,7 @@
                                                 (or (acc k)
                                                     (throw-missing-path-key
                                                      k path sub-map
-                                                     component-name))
+                                                     subscriber-name))
                                                 k))
                                             path)
                         v (->> (rest resolved-path)
@@ -442,16 +440,15 @@
                     (assoc acc sym v))))
               {} ordered-pairs)))
 
-  (subscribe! [this sub-map cur-state update-fn*]
-    (subscribe! this sub-map cur-state update-fn* nil))
-
-  (subscribe! [this sub-map cur-state update-fn* component-name]
+  (subscribe! [this sub-map cur-state update-fn* subscriber-name]
     (let [sub-id (get-sub-id *last-sub-id)
           ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
-          <make-si (partial <make-state-info this ordered-pairs component-name)]
+          <make-si (partial <make-state-info this ordered-pairs subscriber-name)]
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
         (try
+          (println (str "#### Sub   #" sub-id " for "
+                        subscriber-name))
           (when (au/<? (<wait-for-conn-init this))
             (let [{:keys [paths state]} (au/<? (<make-si))
                   update-fn (fn [local-state db-id]
@@ -476,7 +473,8 @@
       sub-id))
 
   (unsubscribe! [this sub-id]
-    (swap! *sub-id->sub dissoc sub-id)
+    (let [m (swap! *sub-id->sub dissoc sub-id)]
+      (println (str "$$$$ Unsub #" sub-id " (" (count m) " total subs)")))
     nil)
 
   (notify-subs [this updated-paths notify-all?]
@@ -650,7 +648,7 @@
       (do
         (ca/put! subject-id-ch subject-id)
         (log-info "Token-based login succeeded."))
-      (when token
+      (do
         (delete-login-token)
         (log-info "Token-based login failed")))))
 
