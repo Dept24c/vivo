@@ -1,8 +1,8 @@
 (ns com.dept24c.vivo.macro-impl
   (:require
-   #?(:cljs ["react" :as React])
    [clojure.core.async :as ca]
    [clojure.set :as set]
+   #?(:cljs [com.dept24c.vivo.react :as react])
    [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au])
@@ -10,9 +10,9 @@
      (:import
       (clojure.lang ExceptionInfo))))
 
-#?(:cljs
-   (defn create-element [& args]
-     (apply (.-createElement React) args)))
+(defn create-element [& args]
+  #?(:cljs
+     (apply react/create-element args)))
 
 (defn check-arglist [component-name arglist]
   (when-not (vector? arglist)
@@ -106,7 +106,8 @@
        (create-element
         (fn ~component-name [props#]
           (let [vivo-state# (state/use-vivo-state ~'sm '~sub-map ~cname)
-                [cstate# set-cstate#] (state/use-state '~initial-cstate)
+                [cstate# set-cstate#] (com.dept24c.vivo.react/use-state
+                                       '~initial-cstate)
                 {:syms [~@sub-syms]} vivo-state#
                 {:syms [~@cstate-syms]} cstate#
                 ~'set-component-state! (fn [sym# v#]

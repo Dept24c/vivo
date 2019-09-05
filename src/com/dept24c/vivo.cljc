@@ -2,6 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [com.dept24c.vivo.macro-impl :as macro-impl]
+   #?(:cljs [com.dept24c.vivo.react :as react])
    #?(:clj [com.dept24c.vivo.server :as server])
    [com.dept24c.vivo.state :as state])
   #?(:cljs
@@ -113,7 +114,8 @@
      [config]
      (server/vivo-server config)))
 
-(defn with-key
-  "Adds the given React key to element."
-  [element k]
-  (state/with-key element k))
+#?(:cljs
+   (defn with-key
+     "Adds the given React key to element."
+     [element k]
+     (react/with-key element k)))

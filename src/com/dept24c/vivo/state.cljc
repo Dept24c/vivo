@@ -1,19 +1,17 @@
 (ns com.dept24c.vivo.state
   (:require
-   #?(:cljs ["react" :as React])
-   #?(:cljs ["react-dom/server" :as ReactDOMServer])
    [clojure.core.async :as ca]
    [clojure.set :as set]
    [clojure.string :as str]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.commands :as commands]
+   #?(:cljs [com.dept24c.vivo.react :as react])
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
-   #?(:cljs [oops.core :refer [ocall]])
    [weavejester.dependency :as dep]))
 
 (def default-sm-opts
@@ -67,10 +65,6 @@
               (reduced false)))
           true (vals sub-map)))
 
-(defn use-state [initial-state]
-  #?(:cljs
-     (.useState React initial-state)))
-
 (defn use-vivo-state
   "React hook for Vivo"
   [sm sub-map subscriber-name]
@@ -84,12 +78,12 @@
 
                            :else
                            nil)
-           [state update-fn] (use-state initial-state)
+           [state update-fn] (react/use-state initial-state)
            effect (fn []
                     (let [sub-id (subscribe! sm sub-map state update-fn
                                              subscriber-name)]
                       #(unsubscribe! sm sub-id)))]
-       (.useEffect React effect #js [])
+       (react/use-effect effect #js [])
        state)))
 
 (defn get-login-token []
@@ -312,12 +306,13 @@
          (try
            (loop []
              (let [el (component-fn this)
-                   s (ocall ReactDOMServer :renderToString el)
-                   _ (when-not (ocall React :isValidElement el)
+                   _ (when-not (react/is-valid-element? el)
                        (throw (ex-info
                                (str "component-fn must return a valid React "
                                     "element. Returned: `" (or el "nil") "`.")
                                {:returned el})))
+                   ;; This has side effects (populates *ssr-info)
+                   s (react/render-to-string el)
                    {:keys [needed]} @*ssr-info]
                (if-not (seq needed)
                  s
@@ -724,9 +719,6 @@
               :on-disconnect (partial on-disconnect *conn-initialized?)}]
     (cc/client get-server-url get-credentials
                u/sm-server-protocol :state-manager opts)))
-
-(defn with-key [element k]
-  #?(:cljs (ocall React :cloneElement element #js {"key" k})))
 
 (defn state-manager [opts]
   (let [{:keys [get-server-url
