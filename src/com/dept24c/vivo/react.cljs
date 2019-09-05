@@ -3,27 +3,30 @@
    ["react" :as React]
    ["react-dom/server" :as ReactDOMServer]
    [com.dept24c.vivo.utils :as u]
-   [oops.core :refer [ocall]]))
+   [oops.core :refer [oapply ocall]]))
 
 (defn create-element [& args]
-  (apply (.-createElement React) args))
+  (oapply React :createElement args))
 
-(defn use-state [initial-state]
-  (.useState React initial-state))
+(defn is-valid-element? [el]
+  (ocall React :isValidElement el))
+
+(defn render-to-string [el]
+  (ocall ReactDOMServer :renderToString el))
 
 (defn use-effect
   ([effect]
    (use-effect effect nil))
   ([effect dependencies]
    (if dependencies
-     (.useEffect React effect dependencies)
-     (.useEffect React effect))))
+     (ocall React :useEffect effect dependencies)
+     (ocall React :useEffect effect))))
 
-(defn render-to-string [el]
-  (ocall ReactDOMServer :renderToString el))
+(defn use-ref [initial-value]
+  (ocall React :useRef initial-value))
 
-(defn is-valid-element? [el]
-  (ocall React :isValidElement el))
+(defn use-state [initial-state]
+  (ocall React :useState initial-state))
 
 (defn with-key [element k]
   (ocall React :cloneElement element (clj->js {"key" k})))
