@@ -449,8 +449,6 @@
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
         (try
-          #_(println (str "#### Sub   #" sub-id " for "
-                          subscriber-name))
           (when (au/<? (<wait-for-conn-init this))
             (let [{:keys [paths state]} (au/<? (<make-si))
                   update-fn (fn [local-state db-id]
@@ -475,15 +473,9 @@
       sub-id))
 
   (unsubscribe! [this sub-id]
-    (let [m (swap! *sub-id->sub
-                   (fn [m]
-                     (when-not (m sub-id)
-                       (println (str "********** Winner WCD! sub-id:" sub-id)))
-                     (dissoc m sub-id)))]
-      #_(println (str "$$$$ Unsub #" sub-id " (" (count m) " total subs)")))
-    #_
-    (let [m (swap! *sub-id->sub dissoc sub-id)]
-      (println (str "$$$$ Unsub #" sub-id " (" (count m) " total subs)")))
+    (swap! *sub-id->sub
+           (fn [m]
+             (dissoc m sub-id)))
     nil)
 
   (notify-subs [this updated-paths notify-all?]

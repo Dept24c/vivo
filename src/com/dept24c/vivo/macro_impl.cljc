@@ -110,8 +110,15 @@
                 {:syms [~@sub-syms]} vivo-state#
                 {:syms [~@cstate-syms]} cstate#
                 ~'set-component-state! (fn [sym# v#]
+                                         (when-not (symbol? sym#)
+                                           (throw
+                                            (ex-info
+                                             (str
+                                              "First arg to "
+                                              "set-component-state! must be a "
+                                              "symbol. Got `" sym# "`.")
+                                             {:args [sym# v#]})))
                                          (-> (assoc cstate# sym# v#)
                                              (set-cstate#)))]
             (when vivo-state#
-              (println (str "******* Rendering " ~cname))
               ~@body)))))))
