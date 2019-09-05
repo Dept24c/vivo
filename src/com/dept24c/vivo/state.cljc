@@ -67,28 +67,30 @@
               (reduced false)))
           true (vals sub-map)))
 
+(defn use-state [initial-state]
+  #?(:cljs
+     (.useState React initial-state)))
+
 (defn use-vivo-state
   "React hook for Vivo"
-  ([sm sub-map]
-   (use-vivo-state sm sub-map nil))
-  ([sm sub-map subscriber-name]
-   #?(:cljs
-      (let [initial-state (cond
-                            (local-or-vivo-only? sub-map)
-                            (get-local-state sm sub-map subscriber-name)
+  [sm sub-map subscriber-name]
+  #?(:cljs
+     (let [initial-state (cond
+                           (local-or-vivo-only? sub-map)
+                           (get-local-state sm sub-map subscriber-name)
 
-                            (ssr? sm)
-                            (ssr-get-state! sm sub-map)
+                           (ssr? sm)
+                           (ssr-get-state! sm sub-map)
 
-                            :else
-                            nil)
-            [state update-fn] (.useState React initial-state)
-            effect (fn []
-                     (let [sub-id (subscribe! sm sub-map state update-fn
-                                              subscriber-name)]
-                       #(unsubscribe! sm sub-id)))]
-        (.useEffect React effect #js [])
-        state))))
+                           :else
+                           nil)
+           [state update-fn] (use-state initial-state)
+           effect (fn []
+                    (let [sub-id (subscribe! sm sub-map state update-fn
+                                             subscriber-name)]
+                      #(unsubscribe! sm sub-id)))]
+       (.useEffect React effect #js [])
+       state)))
 
 (defn get-login-token []
   #?(:cljs
@@ -447,8 +449,8 @@
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
         (try
-          (println (str "#### Sub   #" sub-id " for "
-                        subscriber-name))
+          #_(println (str "#### Sub   #" sub-id " for "
+                          subscriber-name))
           (when (au/<? (<wait-for-conn-init this))
             (let [{:keys [paths state]} (au/<? (<make-si))
                   update-fn (fn [local-state db-id]
@@ -473,6 +475,13 @@
       sub-id))
 
   (unsubscribe! [this sub-id]
+    (let [m (swap! *sub-id->sub
+                   (fn [m]
+                     (when-not (m sub-id)
+                       (println (str "********** Winner WCD! sub-id:" sub-id)))
+                     (dissoc m sub-id)))]
+      #_(println (str "$$$$ Unsub #" sub-id " (" (count m) " total subs)")))
+    #_
     (let [m (swap! *sub-id->sub dissoc sub-id)]
       (println (str "$$$$ Unsub #" sub-id " (" (count m) " total subs)")))
     nil)

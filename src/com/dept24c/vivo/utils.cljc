@@ -149,7 +149,7 @@
 
 (defn relationship-info
   "Given two key sequences, return a vector of [relationship tail].
-   Relationsip is one of :sibling, :parent, :child, or :equal.
+   Relationship is one of :sibling, :parent, :child, or :equal.
    Tail is the keypath between the parent and child. Only defined when
    relationship is :parent."
   [ksa ksb]

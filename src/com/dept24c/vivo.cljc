@@ -23,8 +23,10 @@
 
 (defn use-vivo-state
   "React hook for Vivo"
-  [sm sub-map]
-  (state/use-vivo-state sm sub-map))
+  ([sm sub-map]
+   (use-vivo-state sm sub-map nil))
+  ([sm sub-map component-name]
+   (state/use-vivo-state sm sub-map component-name)))
 
 (defn subscribe!
   "Creates a Vivo subscription. When any of the paths in the `sub-map`
