@@ -37,19 +37,20 @@
 ;; Custom Hooks
 
 (defn use-on-outside-click
-  "Calls the given callback when a click outside the referenced element.
+  "Calls the given callback when a click happens outside the referenced element.
    Returns a reference which should be added as a `ref` property to the
    referenced element, e.g. `{:ref (react/use-on-outside-click close-menu)}"
   [cb]
   (let [el-ref (use-ref)
-        handle-outside-click (fn [e]
-                               (when-not (ocall el-ref "current.contains"
-                                                (oget e :target))
-                                 (cb)))
+        handle-click (fn [e]
+                       (when-not (ocall el-ref "current.contains"
+                                        (oget e :target))
+                         (cb)))
+        events ["mousedown" "touchstart"]
         effect (fn []
-                 (ocall js/document :addEventListener "mousedown"
-                        handle-outside-click)
-                 #(ocall js/document :removeEventListener "mousedown"
-                         handle-outside-click))]
+                 (doseq [e events]
+                   (ocall js/document :addEventListener e handle-click))
+                 #(doseq [e events]
+                    (ocall js/document :removeEventListener e handle-click)))]
     (use-effect effect #js [])
     el-ref))
