@@ -12,6 +12,13 @@
    [deercreeklabs.stockroom :as sr]))
 
 (defrecord DataStorage [data-block-storage]
+  u/ISchemaStore
+  (<schema->fp [this schema]
+    (u/<schema->fp data-block-storage schema))
+
+  (<fp->schema [this fp]
+    (u/<fp->schema data-block-storage fp))
+
   u/IDataStorage
   (<delete-reference! [this reference]
     (u/check-reference reference)
@@ -75,12 +82,6 @@
   (<compare-and-set! [this reference schema old new]
     (u/check-reference reference)
     (u/<compare-and-set! data-block-storage reference schema old new))
-
-  (<schema->fp [this schema]
-    (u/<schema->fp data-block-storage schema))
-
-  (<fp->schema [this fp]
-    (u/<fp->schema data-block-storage fp))
 
   (<set-reference! [this reference data-id]
     (u/check-reference reference)

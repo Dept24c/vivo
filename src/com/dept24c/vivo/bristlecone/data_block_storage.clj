@@ -16,6 +16,34 @@
   (str u/fp-to-schema-reference-root (block-ids/long->str fp)))
 
 (defrecord DataBlockStorage [block-storage fp->schema-cache]
+  u/ISchemaStore
+  (<schema->fp [this schema]
+    (when-not schema
+      (throw (ex-info "schema must not be nil." {})))
+    (au/go
+      (let [fp (l/fingerprint64 schema)]
+        (if (sr/get fp->schema-cache fp)
+          fp
+          (let [k (fp->key fp)
+                bytes (l/serialize l/string-schema (l/pcf schema))]
+            (au/<? (u/<write-block block-storage k bytes))
+            (sr/put! fp->schema-cache fp schema)
+            fp)))))
+
+  (<fp->schema [this fp]
+    (when-not fp
+      (throw (ex-info "fp must not be nil." {})))
+    (au/go
+      (or (sr/get fp->schema-cache fp)
+          (let [k (fp->key fp)
+                schema (some->> (u/<read-block block-storage k)
+                                (au/<?)
+                                (l/deserialize-same l/string-schema)
+                                (l/json->schema))]
+            (when schema
+              (sr/put! fp->schema-cache fp schema))
+            schema))))
+
   u/IDataBlockStorage
   (<allocate-data-block-id [this]
     (u/<allocate-block-id block-storage))
@@ -66,34 +94,7 @@
                       (l/serialize schema old))
           new-bytes (l/serialize schema new)]
       (u/<compare-and-set-bytes! block-storage reference
-                                 old-bytes new-bytes)))
-
-  (<schema->fp [this schema]
-    (when-not schema
-      (throw (ex-info "schema must not be nil." {})))
-    (au/go
-      (let [fp (l/fingerprint64 schema)]
-        (if (sr/get fp->schema-cache fp)
-          fp
-          (let [k (fp->key fp)
-                bytes (l/serialize l/string-schema (l/pcf schema))]
-            (au/<? (u/<write-block block-storage k bytes))
-            (sr/put! fp->schema-cache fp schema)
-            fp)))))
-
-  (<fp->schema [this fp]
-    (when-not fp
-      (throw (ex-info "fp must not be nil." {})))
-    (au/go
-      (or (sr/get fp->schema-cache fp)
-          (let [k (fp->key fp)
-                schema (some->> (u/<read-block block-storage k)
-                                (au/<?)
-                                (l/deserialize-same l/string-schema)
-                                (l/json->schema))]
-            (when schema
-              (sr/put! fp->schema-cache fp schema))
-            schema)))))
+                                 old-bytes new-bytes))))
 
 (defn data-block-storage
   ([block-storage]

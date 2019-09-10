@@ -34,6 +34,37 @@
   [& syms]
   (zipmap (map keyword syms) syms))
 
+(defprotocol ISchemaStore
+  (<schema->fp [this schema])
+  (<fp->schema [this fp]))
+
+(defprotocol IStateManager
+  (<add-subject!
+    [this identifier secret]
+    [this identifier secret subject-id])
+  (<deserialize-value [this path ret])
+  (<get-in-sys-state [this db-id path])
+  (<handle-sys-and-local-updates [this sys-cmds local-cmds paths cb])
+  (<handle-sys-state-changed [this arg metadata])
+  (<handle-sys-updates-only [this sys-cmds paths cb])
+  (<make-state-info
+    [this sub-map-or-ordered-pairs subscriber-name]
+    [this sub-map-or-ordered-pairs subscriber-name local-state db-id])
+  (<update-sys-state [this update-commands])
+  (<wait-for-conn-init [this])
+  (get-local-state [this sub-map subscriber-name])
+  (handle-local-updates-only [this local-cmds paths cb])
+  (log-in! [this identifier secret cb])
+  (log-out! [this])
+  (notify-subs [this updated-paths notify-all])
+  (set-subject-id [this subject-id])
+  (shutdown! [this])
+  (start-update-loop [this])
+  (subscribe! [this sub-map cur-state update-fn subscriber-name])
+  (unsubscribe! [this sub-id])
+  (update-cmd->serializable-update-cmd [this cmds])
+  (update-state! [this update-cmds cb]))
+
 (defprotocol IDataStorage
   (<delete-reference! [this reference])
   (<get-in [this data-id schema path])
@@ -46,8 +77,6 @@
     [this reference schema update-commands tx-fns]))
 
 (defprotocol IDataBlockStorage
-  (<schema->fp [this schema])
-  (<fp->schema [this fp])
   (<allocate-data-block-id [this])
   (<compare-and-set! [this reference schema old new])
   (<read-data-block [this block-id schema])
@@ -226,13 +255,13 @@
   path-item-schema)
 
 (l/def-record-schema serialized-value-schema
-  [:fp (l/maybe l/long-schema)]
-  [:bytes (l/maybe l/bytes-schema)])
+  [:fp :required l/long-schema]
+  [:bytes :required l/bytes-schema])
 
 (l/def-record-schema serializable-update-command-schema
-  [:path (l/maybe path-schema)]
+  [:path path-schema]
   [:op op-schema]
-  [:arg (l/maybe serialized-value-schema)])
+  [:arg serialized-value-schema])
 
 (def serializable-update-commands-schema
   (l/array-schema serializable-update-command-schema))
@@ -284,7 +313,7 @@
   [:branch/name l/string-schema])
 
 (l/def-record-schema temp-branch-state-source-schema
-  [:temp-branch/db-id (l/maybe db-id-schema)])
+  [:temp-branch/db-id db-id-schema])
 
 (def state-source-schema (l/union-schema [branch-state-source-schema
                                           temp-branch-state-source-schema]))
@@ -377,6 +406,16 @@
              " " subscriber-name "`. These symbols are used in subscription "
              "keypaths, but are not defined: " undefined-syms)
         (sym-map undefined-syms sub-map))))))
+
+(defn local-or-vivo-only? [sub-map]
+  (reduce (fn [acc path]
+            (if (or
+                 (= :vivo/subject-id path)
+                 (= :local (first path)))
+              acc
+              (reduced false)))
+          true (vals sub-map)))
+
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

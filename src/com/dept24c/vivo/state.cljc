@@ -5,7 +5,6 @@
    [clojure.string :as str]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.commands :as commands]
-   #?(:cljs [com.dept24c.vivo.react :as react])
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
@@ -22,69 +21,6 @@
 (def get-state-timeout-ms 30000)
 (def login-token-local-storage-key "login-token")
 (def update-state-timeout-ms 30000)
-(def initial-ssr-info {:resolved {}
-                       :needed #{}})
-
-(defprotocol IStateManager
-  (<add-subject!
-    [this identifier secret]
-    [this identifier secret subject-id])
-  (<deserialize-value [this path ret])
-  (<fp->schema [this value-fp])
-  (<get-in-sys-state [this db-id path])
-  (<handle-sys-and-local-updates [this sys-cmds local-cmds paths cb])
-  (<handle-sys-state-changed [this arg metadata])
-  (<handle-sys-updates-only [this sys-cmds paths cb])
-  (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name]
-    [this sub-map-or-ordered-pairs subscriber-name local-state db-id])
-  (<update-sys-state [this update-commands])
-  (<wait-for-conn-init [this])
-  (get-local-state [this sub-map subscriber-name])
-  (handle-local-updates-only [this local-cmds paths cb])
-  (log-in! [this identifier secret cb])
-  (log-out! [this])
-  (notify-subs [this updated-paths notify-all])
-  (set-subject-id [this subject-id])
-  (shutdown! [this])
-  (ssr? [this])
-  (<ssr [this component-fn subscriber-name])
-  (ssr-get-state! [this sub-map])
-  (start-update-loop [this])
-  (subscribe! [this sub-map cur-state update-fn subscriber-name])
-  (unsubscribe! [this sub-id])
-  (update-cmd->serializable-update-cmd [this cmds])
-  (update-state! [this update-cmds cb]))
-
-(defn local-or-vivo-only? [sub-map]
-  (reduce (fn [acc path]
-            (if (or
-                 (= :vivo/subject-id path)
-                 (= :local (first path)))
-              acc
-              (reduced false)))
-          true (vals sub-map)))
-
-(defn use-vivo-state
-  "React hook for Vivo"
-  [sm sub-map subscriber-name]
-  #?(:cljs
-     (let [initial-state (cond
-                           (local-or-vivo-only? sub-map)
-                           (get-local-state sm sub-map subscriber-name)
-
-                           (ssr? sm)
-                           (ssr-get-state! sm sub-map)
-
-                           :else
-                           nil)
-           [state update-fn] (react/use-state initial-state)
-           effect (fn []
-                    (let [sub-id (subscribe! sm sub-map state update-fn
-                                             subscriber-name)]
-                      #(unsubscribe! sm sub-id)))]
-       (react/use-effect effect #js [])
-       state)))
 
 (defn get-login-token []
   #?(:cljs
@@ -261,7 +197,7 @@
                          *local-state *sub-id->sub *cur-db-id *last-sub-id
                          *conn-initialized? *stopped? *ssr-info *fp->schema
                          *subject-id]
-  IStateManager
+  u/ISchemaStore
   (<fp->schema [this fp]
     (au/go
       (when-not (int? fp)
@@ -274,6 +210,7 @@
             (swap! *fp->schema assoc fp schema)
             schema))))
 
+  u/IStateManager
   (<deserialize-value [this path ret]
     (au/go
       (when ret
@@ -281,56 +218,12 @@
                             (let [sch (l/schema-at-path sys-state-schema path)]
                               (sr/put! path->schema-cache path sch)
                               sch))
-              writer-sch (au/<? (<fp->schema this (:fp ret)))]
+              writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
           (l/deserialize value-sch writer-sch (:bytes ret))))))
-
-  (ssr? [this]
-    (boolean @*ssr-info))
-
-  (ssr-get-state! [this sub-map]
-    (or (get (:resolved @*ssr-info) sub-map)
-        (do
-          (swap! *ssr-info update :needed conj sub-map)
-          nil)))
-
-  (<ssr [this component-fn subscriber-name]
-    #?(:cljs
-       (au/go
-         (when-not (ifn? component-fn)
-           (throw (ex-info (str "component-fn must be a function. Got: `"
-                                (or component-fn "nil") "`.")
-                           (u/sym-map component-fn))))
-         (when-not (compare-and-set! *ssr-info nil initial-ssr-info)
-           (throw
-            (ex-info (str "Another SSR is in progress. Try again...") {})))
-         (try
-           (loop []
-             (let [el (component-fn this)
-                   _ (when-not (react/is-valid-element? el)
-                       (throw (ex-info
-                               (str "component-fn must return a valid React "
-                                    "element. Returned: `" (or el "nil") "`.")
-                               {:returned el})))
-                   ;; This has side effects (populates *ssr-info)
-                   s (react/render-to-string el)
-                   {:keys [needed]} @*ssr-info]
-               (if-not (seq needed)
-                 s
-                 (do
-                   (doseq [sub-map needed]
-                     (let [{:keys [state]} (au/<? (<make-state-info
-                                                   this sub-map
-                                                   subscriber-name))]
-                       (swap! *ssr-info update
-                              :resolved assoc sub-map state)))
-                   (swap! *ssr-info assoc :needed #{})
-                   (recur)))))
-           (finally
-             (reset! *ssr-info nil))))))
 
   (set-subject-id [this subject-id]
     (reset! *subject-id subject-id)
-    (notify-subs this [:vivo/subject-id] false)
+    (u/notify-subs this [:vivo/subject-id] false)
     nil)
 
   (log-in! [this identifier secret cb]
@@ -347,7 +240,7 @@
                       false)
                     (do
                       (set-login-token token)
-                      (set-subject-id this subject-id)
+                      (u/set-subject-id this subject-id)
                       (log-info "Login succeeded.")
                       true))]
           (when cb
@@ -361,7 +254,7 @@
     (ca/go
       (try
         (delete-login-token)
-        (set-subject-id this nil)
+        (u/set-subject-id this nil)
         (sr/flush! state-cache)
         (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
           (log-info (str "Logout " (if ret "succeeded." "failed."))))
@@ -376,8 +269,8 @@
 
   (<make-state-info
     [this sub-map-or-ordered-pairs subscriber-name]
-    (<make-state-info this sub-map-or-ordered-pairs subscriber-name
-                      @*local-state @*cur-db-id))
+    (u/<make-state-info this sub-map-or-ordered-pairs subscriber-name
+                        @*local-state @*cur-db-id))
 
   (<make-state-info
     [this sub-map-or-ordered-pairs subscriber-name local-state db-id]
@@ -408,7 +301,7 @@
                             (:val))
 
                         (= :sys path-head)
-                        (au/<? (<get-in-sys-state this db-id path-tail)))
+                        (au/<? (u/<get-in-sys-state this db-id path-tail)))
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
                                 (update :paths conj (or resolved-path
@@ -440,11 +333,12 @@
   (subscribe! [this sub-map cur-state update-fn* subscriber-name]
     (let [sub-id (get-sub-id *last-sub-id)
           ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
-          <make-si (partial <make-state-info this ordered-pairs subscriber-name)]
+          <make-si (partial u/<make-state-info this ordered-pairs
+                            subscriber-name)]
       (u/check-sub-map sub-id "subscriber" sub-map)
       (ca/go
         (try
-          (when (au/<? (<wait-for-conn-init this))
+          (when (au/<? (u/<wait-for-conn-init this))
             (let [{:keys [paths state]} (au/<? (<make-si))
                   update-fn (fn [local-state db-id]
                               (ca/go
@@ -497,7 +391,7 @@
 
   (<handle-sys-updates-only [this sys-cmds paths cb]
     (au/go
-      (let [ret (au/<? (<update-sys-state this sys-cmds))
+      (let [ret (au/<? (u/<update-sys-state this sys-cmds))
             cb* (or cb (constantly nil))]
         (if-not ret
           (cb* false)
@@ -508,19 +402,19 @@
                     (block-ids/earlier? local-db-id cur-db-id))
               (do
                 (reset! *cur-db-id cur-db-id)
-                (notify-subs this updated-paths notify-all?)
+                (u/notify-subs this updated-paths notify-all?)
                 (cb* true))
               (cb* false)))))))
 
   (handle-local-updates-only [this local-cmds paths cb]
     (swap! *local-state #(reduce commands/eval-cmd % local-cmds))
-    (notify-subs this paths false)
+    (u/notify-subs this paths false)
     (when cb
       (cb true)))
 
   (<handle-sys-and-local-updates [this sys-cmds local-cmds paths cb]
     (au/go
-      (let [ret (au/<? (<update-sys-state this sys-cmds))
+      (let [ret (au/<? (u/<update-sys-state this sys-cmds))
             cb* (or cb (constantly nil))]
         (if-not ret
           (cb* false)
@@ -532,28 +426,28 @@
               (let [paths* (set/union (set paths) (set updated-paths))]
                 (reset! *cur-db-id cur-db-id)
                 (swap! *local-state #(reduce commands/eval-cmd % local-cmds))
-                (notify-subs this paths* notify-all?)
+                (u/notify-subs this paths* notify-all?)
                 (cb* true))
               (cb* false)))))))
 
   (start-update-loop [this]
     (ca/go-loop []
       (try
-        (when (au/<? (<wait-for-conn-init this))
+        (when (au/<? (u/<wait-for-conn-init this))
           (let [[update ch] (ca/alts! [update-ch subject-id-ch])]
             (if (= subject-id-ch ch)
-              (set-subject-id this update)
+              (u/set-subject-id this update)
               (try
                 (let [{:keys [sys-cmds local-cmds paths cb]} update]
                   (case [(boolean (seq sys-cmds)) (boolean (seq local-cmds))]
                     [false true]
-                    (handle-local-updates-only this local-cmds paths cb)
+                    (u/handle-local-updates-only this local-cmds paths cb)
 
                     [true false]
-                    (au/<? (<handle-sys-updates-only this sys-cmds paths cb))
+                    (au/<? (u/<handle-sys-updates-only this sys-cmds paths cb))
 
                     [true true]
-                    (au/<? (<handle-sys-and-local-updates
+                    (au/<? (u/<handle-sys-and-local-updates
                             this sys-cmds local-cmds paths cb))
 
                     [false false] ;; No cmds
@@ -566,7 +460,7 @@
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in update loop: "
                           (u/ex-msg-and-stacktrace e)))))
-      (when (au/<? (<wait-for-conn-init this)) ;; If stopped, exit loop
+      (when (au/<? (u/<wait-for-conn-init this)) ;; If stopped, exit loop
         (recur))))
 
   (update-state! [this update-cmds cb]
@@ -584,7 +478,7 @@
 
   (<update-sys-state [this sys-cmds]
     (cc/<send-msg capsule-client :update-state
-                  (map (partial update-cmd->serializable-update-cmd this)
+                  (map (partial u/update-cmd->serializable-update-cmd this)
                        sys-cmds)
                   update-state-timeout-ms))
 
@@ -611,7 +505,7 @@
                 v (if (= :vivo/unauthorized ret)
                     :vivo/unauthorized
                     (when ret
-                      (au/<? (<deserialize-value this path ret))))]
+                      (au/<? (u/<deserialize-value this path ret))))]
             (sr/put! state-cache [db-id path] v)
             v))))
 
@@ -625,13 +519,13 @@
           (when (or (nil? local-db-id)
                     (block-ids/earlier? local-db-id cur-db-id))
             (reset! *cur-db-id cur-db-id)
-            (notify-subs this updated-paths notify-all?)))
+            (u/notify-subs this updated-paths notify-all?)))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in <handle-sys-state-changed: "
                           (u/ex-msg-and-stacktrace e)))))))
 
   (<add-subject! [this identifier secret]
-    <add-subject! this identifier secret nil)
+    (u/<add-subject! this identifier secret) nil)
 
   (<add-subject! [this identifier secret subject-id]
     (cc/<send-msg capsule-client :add-subject
@@ -754,10 +648,10 @@
                            *local-state *sub-id->sub *cur-db-id *last-sub-id
                            *conn-initialized? *stopped? *ssr-info *fp->schema
                            *subject-id)]
-    (start-update-loop sm)
+    (u/start-update-loop sm)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
-                      (partial <handle-sys-state-changed sm))
+                      (partial u/<handle-sys-state-changed sm))
       (cc/set-handler capsule-client :get-schema-pcf
                       (fn [fp metadata]
                         (if-let [schema (@*fp->schema fp)]
