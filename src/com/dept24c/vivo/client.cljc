@@ -144,11 +144,11 @@
         pairs)))
 
 (defn get-sub-id [*last-sub-id]
-  (swap! *last-sub-id (fn [sub-id]
-                        (let [new-sub-id (inc sub-id)]
-                          (if (> new-sub-id 1e9)
-                            0
-                            new-sub-id)))))
+  (str (swap! *last-sub-id (fn [sub-id]
+                             (let [new-sub-id (inc sub-id)]
+                               (if (> new-sub-id 1e9)
+                                 0
+                                 new-sub-id))))))
 
 (defn update-sub?* [updated-paths sub-path]
   (reduce (fn [acc updated-path]
@@ -177,10 +177,16 @@
 
 (defn update-sub? [updated-paths sub-paths]
   (reduce (fn [acc sub-path]
-            (if (or (and (sequential? sub-path) ;; Not :vivo/subject-id
-                         (some number? sub-path)) ;; Numeric paths are complex..
-                    (update-sub?* updated-paths sub-path))
+            (cond
+              (#{:vivo/subject-id :vivo/component-id} sub-path)
+              false
+
+              (or (and (sequential? sub-path) ;; Not :vivo/subject-id, etc.
+                       (some number? sub-path)) ;; Numeric paths are complex..
+                  (update-sub?* updated-paths sub-path))
               (reduced true)
+
+              :else
               false))
           false sub-paths))
 

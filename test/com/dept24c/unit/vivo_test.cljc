@@ -155,6 +155,17 @@
            sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")]
        (is (= sub-id (get (au/<? ch) 'sub-id)))))))
 
+(deftest test-subscribe!-component-id
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch %)
+           sub-map '{cid :vivo/component-id}
+           cid (vivo/subscribe! vc sub-map nil update-fn "test-cid")]
+       (is (= cid (get (au/<? ch) 'cid)))))))
+
 (deftest test-register-subscriber-id!
   (au/test-async
    1000
