@@ -34,64 +34,31 @@
                 (u/sym-map subscriber-name args num-args-passed
                            num-args-defined))))))
 
-(defn check-initial-cstate [initial-cstate]
-  (doseq [[k v] initial-cstate]
-    (when-not (symbol? k)
-      (throw (ex-info (str "Bad key `" k "` in initial component state. "
-                           "Keys must be symbols.")
-                      {:bad-key k
-                       :initial-component-state initial-cstate})))))
-
-(defn check-repeated-syms
-  [component-name sub-map initial-component-state arglist]
-  (let [pairs [[(set (keys sub-map)) "subscription map"]
-               [(set (keys initial-component-state)) "initial component state"]
-               [(set arglist) "argument list"]]]
-    (doseq [[a b] [[0 1] [0 2] [1 2]]]
-      (let [[a-syms a-description] (nth pairs a)
-            [b-syms b-description] (nth pairs b)
-            repeated-syms (seq (set/intersection a-syms b-syms))]
-        (when repeated-syms
-          (throw (ex-info
-                  (str "Illegal repeated symbol(s) in component `"
-                       component-name "`. The same symbol may not appear in "
-                       "both the " a-description " and the " b-description ". "
-                       "Repeated symbols: " repeated-syms)
-                  (u/sym-map repeated-syms sub-map initial-component-state
-                             arglist component-name))))))))
-
 (defn parse-def-component-args [component-name args]
-  (let [docstring (when (string? (first args))
-                    (first args))
-        sub-map (nth args (if docstring 1 0))
-        initial-cstate (if docstring
-                         (when (map? (nth args 2))
-                           (nth args 2))
-                         (when (map? (nth args 1))
-                           (nth args 1)))
-        arglist-i (case [(boolean docstring) (boolean initial-cstate)]
-                    [true true] 3
-                    [true false] 2
-                    [false true] 2
-                    [false false] 1)
-        arglist (nth args arglist-i)
-        body (seq (drop (inc arglist-i) args))
-        parts (u/sym-map docstring sub-map initial-cstate arglist body)
+  (let [parts (if (string? (first args))
+                (let [[docstring sub-map arglist & body] args]
+                  (u/sym-map docstring sub-map arglist body))
+                (let [docstring nil
+                      [sub-map arglist & body] args]
+                  (u/sym-map docstring sub-map arglist body)))
+        {:keys [docstring sub-map arglist body]} parts
         repeated-syms (vec (set/intersection (set (keys sub-map))
-                                             (set (keys initial-cstate))
                                              (set arglist)))]
     (u/check-sub-map component-name "component" sub-map)
-    (when initial-cstate
-      (check-initial-cstate initial-cstate))
     (check-arglist component-name arglist)
-    (check-repeated-syms component-name sub-map initial-cstate arglist)
+    (when (seq repeated-syms)
+      (throw
+       (ex-info (str "Illegal repeated symbol(s) in component "
+                     component-name "`. The same symbol may not appear in "
+                     "both the subscription map and the argument list. "
+                     "Repeated symbols: " repeated-syms)
+                (u/sym-map repeated-syms sub-map arglist component-name))))
     parts))
 
 (defn build-component [component-name args]
   (let [parts (parse-def-component-args component-name args)
-        {:keys [docstring sub-map initial-cstate arglist body]} parts
+        {:keys [docstring sub-map arglist body]} parts
         sub-syms (keys sub-map)
-        cstate-syms (keys initial-cstate)
         cname (name component-name)]
     `(defn ~component-name
        {:doc ~docstring}
@@ -101,20 +68,5 @@
         (fn ~component-name [props#]
           (let [vivo-state# (com.dept24c.vivo.react/use-vivo-state
                              ~'vc '~sub-map ~cname)
-                [cstate# set-cstate#] (com.dept24c.vivo.react/use-state
-                                       '~initial-cstate)
-                {:syms [~@sub-syms]} vivo-state#
-                {:syms [~@cstate-syms]} cstate#
-                ~'set-component-state! (fn [sym# v#]
-                                         (when-not (symbol? sym#)
-                                           (throw
-                                            (ex-info
-                                             (str
-                                              "First arg to "
-                                              "set-component-state! must be a "
-                                              "symbol. Got `" sym# "`.")
-                                             {:args [sym# v#]})))
-                                         (-> (assoc cstate# sym# v#)
-                                             (set-cstate#)))]
-            (when vivo-state#
-              ~@body)))))))
+                {:syms [~@sub-syms]} vivo-state#]
+            ~@body))))))

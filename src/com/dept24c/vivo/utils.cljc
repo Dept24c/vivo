@@ -48,15 +48,16 @@
   (<handle-sys-state-changed [this arg metadata])
   (<handle-sys-updates-only [this sys-cmds paths cb])
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name]
-    [this sub-map-or-ordered-pairs subscriber-name local-state db-id])
+    [this sub-map-or-ordered-pairs subscriber-name sub-id]
+    [this sub-map-or-ordered-pairs subscriber-name sub-id local-state db-id])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
-  (get-local-state [this sub-map subscriber-name])
+  (get-subscriber-id [this custom-id])
   (handle-local-updates-only [this local-cmds paths cb])
   (log-in! [this identifier secret cb])
   (log-out! [this])
   (notify-subs [this updated-paths notify-all])
+  (register-subscriber-id! [this custom-id subscriber-id])
   (set-subject-id [this subject-id])
   (shutdown! [this])
   (start-update-loop [this])
@@ -383,13 +384,17 @@
                                       (conj acc* k))))
                                 acc path)
 
-                        (= :vivo/subject-id path)
+                        (#{:vivo/subject-id
+                           :vivo/subscriber-id
+                           :vivo/component-id} path)
                         acc
 
                         :else
                         (throw (ex-info
-                                (str "Bad path. Must be a sequence or "
-                                     ":vivo/subject-id.")
+                                (str "Bad path. Paths must be a sequence or  "
+                                     "one of the special :vivo keywords. ("
+                                     ":vivo/subject-id, :vivo/subscriber-id, "
+                                     "or :vivo/component-id)")
                                 (sym-map sym path sub-map)))))
                     #{} sub-map))))
 

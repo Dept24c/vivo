@@ -114,7 +114,9 @@
                               (str "All keys in sub-map must be symbols. Got `"
                                    sym "`.")
                               (u/sym-map sym sub-map))))
-                    (if (= :vivo/subject-id path)
+                    (if (#{:vivo/subject-id
+                           :vivo/subscriber-id
+                           :vivo/component-id} path)
                       (update acc :sym->path assoc sym path)
                       (let [[head & tail] (check-path path sub-syms sub-map)
                             deps (filter symbol? path)]
@@ -196,7 +198,8 @@
                        path->schema-cache update-ch subject-id-ch
                        *local-state *sub-id->sub *cur-db-id *last-sub-id
                        *conn-initialized? *stopped? *ssr-info *fp->schema
-                       *subject-id]
+                       *subject-id *custom-id->subscriber-id
+                       *subscriber-id->custom-id]
   u/ISchemaStore
   (<fp->schema [this fp]
     (when-not (int? fp)
@@ -282,12 +285,12 @@
     (log-info "Vivo client stopped."))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name]
-    (u/<make-state-info this sub-map-or-ordered-pairs subscriber-name
+    [this sub-map-or-ordered-pairs subscriber-name sub-id]
+    (u/<make-state-info this sub-map-or-ordered-pairs subscriber-name sub-id
                         @*local-state @*cur-db-id))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name local-state db-id]
+    [this sub-map-or-ordered-pairs subscriber-name sub-id local-state db-id]
     (au/go
       ;; TODO: Optimize by doing <get-in-sys-state calls in parallel
       ;;       where possible (non-dependent)
@@ -303,12 +306,16 @@
             (loop [acc init
                    i 0]
               (let [[sym path] (nth ordered-pairs i)
-                    resolved-path (resolve-path acc ordered-pairs subscriber-name
-                                                path)
+                    resolved-path (resolve-path acc ordered-pairs
+                                                subscriber-name path)
                     [path-head & path-tail] resolved-path
                     v (cond
                         (= :vivo/subject-id path)
                         @*subject-id
+
+                        (#{:vivo/subscriber-id
+                           :vivo/component-id} path)
+                        sub-id
 
                         (= :local path-head)
                         (-> (commands/get-in-state local-state path-tail)
@@ -324,32 +331,12 @@
                   new-acc
                   (recur new-acc (inc i))))))))))
 
-  (get-local-state [this sub-map subscriber-name]
-    (let [ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
-          local-state @*local-state]
-      (reduce (fn [acc [sym path]]
-                (if (= :vivo/subject-id path)
-                  (assoc acc sym @*subject-id)
-                  (let [resolved-path (mapv (fn [k]
-                                              (if (symbol? k)
-                                                (or (acc k)
-                                                    (throw-missing-path-key
-                                                     k path sub-map
-                                                     subscriber-name))
-                                                k))
-                                            path)
-                        v (->> (rest resolved-path)
-                               (commands/get-in-state local-state)
-                               (:val))]
-                    (assoc acc sym v))))
-              {} ordered-pairs)))
-
   (subscribe! [this sub-map cur-state update-fn* subscriber-name]
+    (u/check-sub-map subscriber-name "subscriber" sub-map)
     (let [sub-id (get-sub-id *last-sub-id)
           ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
           <make-si (partial u/<make-state-info this ordered-pairs
-                            subscriber-name)]
-      (u/check-sub-map sub-id "subscriber" sub-map)
+                            subscriber-name sub-id)]
       (ca/go
         (try
           (when (au/<? (u/<wait-for-conn-init this))
@@ -379,6 +366,9 @@
     (swap! *sub-id->sub
            (fn [m]
              (dissoc m sub-id)))
+    (when-let [custom-id (@*subscriber-id->custom-id sub-id)]
+      (swap! *subscriber-id->custom-id dissoc sub-id)
+      (swap! *custom-id->subscriber-id dissoc custom-id))
     nil)
 
   (notify-subs [this updated-paths notify-all?]
@@ -543,7 +533,15 @@
 
   (<add-subject! [this identifier secret subject-id]
     (cc/<send-msg capsule-client :add-subject
-                  (u/sym-map identifier secret subject-id))))
+                  (u/sym-map identifier secret subject-id)))
+
+  (register-subscriber-id! [this custom-id subscriber-id]
+    (swap! *subscriber-id->custom-id assoc subscriber-id custom-id)
+    (swap! *custom-id->subscriber-id assoc custom-id subscriber-id)
+    nil)
+
+  (get-subscriber-id [this custom-id]
+    (@*custom-id->subscriber-id custom-id)))
 
 (defn <log-in-w-token [capsule-client subject-id-ch log-info token]
   (au/go
@@ -645,6 +643,8 @@
         *ssr-info (atom nil)
         *fp->schema (atom {})
         *subject-id (atom nil)
+        *custom-id->subscriber-id (atom {})
+        *subscriber-id->custom-id (atom {})
         path->schema-cache (sr/stockroom 100)
         state-cache (sr/stockroom state-cache-num-keys)
         sub-map->op-cache (sr/stockroom 500)
@@ -661,7 +661,8 @@
                          path->schema-cache update-ch subject-id-ch
                          *local-state *sub-id->sub *cur-db-id *last-sub-id
                          *conn-initialized? *stopped? *ssr-info *fp->schema
-                         *subject-id)]
+                         *subject-id *custom-id->subscriber-id
+                         *subscriber-id->custom-id)]
     (u/start-update-loop vc)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed

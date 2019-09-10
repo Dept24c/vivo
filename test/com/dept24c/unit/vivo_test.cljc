@@ -17,7 +17,6 @@
         args [sub-map arglist]
         expected {:docstring nil
                   :sub-map sub-map
-                  :initial-cstate nil
                   :arglist arglist
                   :body nil}]
     (is (= expected (macro-impl/parse-def-component-args 'foo args)))))
@@ -29,7 +28,6 @@
         args [docstring sub-map arglist]
         expected {:docstring docstring
                   :sub-map sub-map
-                  :initial-cstate nil
                   :arglist arglist
                   :body nil}]
     (is (= expected (macro-impl/parse-def-component-args 'foo args)))))
@@ -64,27 +62,6 @@
        #"Illegal repeated symbol"
        (macro-impl/parse-def-component-args
         'foo ['{a [:local :a]} '[vc a]]))))
-
-(deftest test-repeat-symbol-init-cstate
-  (is (thrown-with-msg?
-       #?(:clj ExceptionInfo :cljs js/Error)
-       #"Illegal repeated symbol"
-       (macro-impl/parse-def-component-args
-        'foo ['{a [:local :a]} '{a 1} '[vc a]]))))
-
-(deftest test-parse-sub-map-component-state
-  (let [sub-map '{a [:component :a]}
-        initial-component-state '{hovering? false
-                                  editing? false}
-        arglist '[vc]
-        body '(body)
-        args [sub-map initial-component-state arglist body]
-        parts (macro-impl/parse-def-component-args
-               'my-c args)]
-    (is (= sub-map (:sub-map parts)))
-    (is (= initial-component-state (:initial-cstate parts)))
-    (is (= arglist (:arglist parts)))
-    (is (= [body] (:body parts)))))
 
 (deftest test-check-sub-map-undefined-sym
   (is (thrown-with-msg?
@@ -142,7 +119,7 @@
         bad-sub-map '{user-id [:local a-symbol-which-is-not-defined]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"is not defined"
+         #"Undefined symbol"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-subscribe!
@@ -166,6 +143,33 @@
                                         :arg user-id}]))
        (vivo/subscribe! vc sub-map nil update-fn "test")
        (is (= expected (au/<? ch)))))))
+
+(deftest test-subscribe!-subscriber-id
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch %)
+           sub-map '{sub-id :vivo/subscriber-id}
+           sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")]
+       (is (= sub-id (get (au/<? ch) 'sub-id)))))))
+
+(deftest test-register-subscriber-id!
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch %)
+           sub-map '{sub-id :vivo/subscriber-id}
+           sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")
+           custom-id "AAA"]
+       (vivo/register-subscriber-id! vc custom-id sub-id)
+       (is (= sub-id (get (au/<? ch) 'sub-id)))
+       (is (= sub-id (vivo/get-subscriber-id vc custom-id)))
+       (vivo/unsubscribe! vc sub-id)
+       (is (= nil (vivo/get-subscriber-id vc custom-id)))))))
 
 (deftest test-subscribe!-single-entry
   (au/test-async

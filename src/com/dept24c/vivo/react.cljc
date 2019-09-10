@@ -58,7 +58,7 @@
 (defmacro def-component
   "Defines a Vivo React component.
   The first argument to the constructor must
-   be a parameter named `sm` (a state manager)."
+   be a parameter named `vc` (the vivo client)."
   [component-name & args]
   (macro-impl/build-component component-name args))
 
@@ -67,11 +67,11 @@
 (def initial-ssr-info {:resolved {}
                        :needed #{}})
 
-(defn ssr? [sm]
-  (boolean @(:*ssr-info sm)))
+(defn ssr? [vc]
+  (boolean @(:*ssr-info vc)))
 
-(defn ssr-get-state! [sm sub-map]
-  (let [{:keys [*ssr-info]} sm]
+(defn ssr-get-state! [vc sub-map]
+  (let [{:keys [*ssr-info]} vc]
     (or (get (:resolved @*ssr-info) sub-map)
         (do
           (swap! *ssr-info update :needed conj sub-map)
@@ -79,20 +79,20 @@
 
 (defn <ssr
   "Perform a server-side rendering. Returns a string."
-  [sm component-fn component-name]
+  [vc component-fn component-name]
   (when-not (ifn? component-fn)
     (throw (ex-info (str "component-fn must be a function. Got: `"
                          (or component-fn "nil") "`.")
                     (u/sym-map component-fn))))
   (ca/go
     (try
-      (let [{:keys [*ssr-info]} sm]
+      (let [{:keys [*ssr-info]} vc]
         (when-not (compare-and-set! *ssr-info nil initial-ssr-info)
           (throw
            (ex-info (str "Another SSR is in progress. Try again...") {})))
         (try
           (loop []
-            (let [el (component-fn sm)
+            (let [el (component-fn vc)
                   _ (when-not (is-valid-element? el)
                       (throw (ex-info
                               (str "component-fn must return a valid React "
@@ -106,8 +106,8 @@
                 (do
                   (doseq [sub-map needed]
                     (let [{:keys [state]} (au/<? (u/<make-state-info
-                                                  sm sub-map
-                                                  component-name))]
+                                                  vc sub-map
+                                                  component-name nil))]
                       (swap! *ssr-info update
                              :resolved assoc sub-map state)))
                   (swap! *ssr-info assoc :needed #{})
@@ -121,22 +121,13 @@
 
 (defn use-vivo-state
   "React hook for Vivo"
-  [sm sub-map subscriber-name]
+  [vc sub-map component-name]
   #?(:cljs
-     (let [initial-state (cond
-                           (u/local-or-vivo-only? sub-map)
-                           (u/get-local-state sm sub-map subscriber-name)
-
-                           (ssr? sm)
-                           (ssr-get-state! sm sub-map)
-
-                           :else
-                           nil)
-           [state update-fn] (use-state initial-state)
+     (let [[state update-fn] (use-state nil)
            effect (fn []
-                    (let [sub-id (u/subscribe! sm sub-map state update-fn
-                                               subscriber-name)]
-                      #(u/unsubscribe! sm sub-id)))]
+                    (let [sub-id (u/subscribe! vc sub-map state update-fn
+                                               component-name)]
+                      #(u/unsubscribe! vc sub-id)))]
        (use-effect effect #js [])
        state)))
 
@@ -144,7 +135,7 @@
 (defn use-on-outside-click
   "Calls the given callback when a click happens outside the referenced element.
    Returns a reference which should be added as a `ref` property to the
-   referenced element, e.g. `{:ref (react/use-on-outside-click close-menu)}"
+   referenced element, e.g. `{:ref (react/use-on-outside-click close-menu)}`"
   [cb]
   #?(:cljs
      (let [el-ref (use-ref)
