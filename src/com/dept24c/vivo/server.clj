@@ -256,7 +256,8 @@
                                             prev-db-id cur-db-id))
               (let [change-info (u/sym-map cur-db-id prev-db-id updated-paths)]
                 (doseq [conn-id* (disj (set conn-ids) conn-id)]
-                  (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
+                  (ep/send-msg sm-ep conn-id* :sys-state-changed
+                               change-info))
                 change-info)
               (if (zero? num-tries-left)
                 (throw (ex-info (str "Failed to commit to branch `" branch
@@ -327,7 +328,8 @@
   (<fp->schema [this fp conn-id]
     (au/go
       (or (au/<? (u/<fp->schema perm-storage fp))
-          (let [pcf (au/<? (ep/<send-msg sm-ep conn-id :get-schema-pcf fp))]
+          (let [pcf (au/<? (ep/<send-msg sm-ep conn-id
+                                         :get-schema-pcf fp))]
             (l/json->schema pcf)))))
 
   (<get-all-branches [this]
@@ -667,20 +669,28 @@
                                   *conn-id->info
                                   *subject-id->conn-ids
                                   *branch->info)]
-    (ep/set-handler sm-ep :add-subject (partial <add-subject vivo-server))
+    (ep/set-handler sm-ep :add-subject
+                    (partial <add-subject vivo-server))
     (ep/set-handler sm-ep :add-subject-identifier
                     (partial <add-subject-identifier vivo-server))
-    (ep/set-handler sm-ep :change-secret (partial <change-secret vivo-server))
-    (ep/set-handler sm-ep :get-schema-pcf (partial <get-schema-pcf vivo-server))
-    (ep/set-handler sm-ep :store-schema-pcf (partial <store-schema-pcf
-                                                     vivo-server))
-    (ep/set-handler sm-ep :get-state (partial <get-state vivo-server))
-    (ep/set-handler sm-ep :log-in (partial <log-in vivo-server))
-    (ep/set-handler sm-ep :log-in-w-token (partial <log-in-w-token vivo-server))
-    (ep/set-handler sm-ep :log-out (partial <log-out vivo-server))
-    (ep/set-handler sm-ep :set-state-source (partial <set-state-source
-                                                     vivo-server))
-    (ep/set-handler sm-ep :update-state (partial <update-state vivo-server))
+    (ep/set-handler sm-ep :change-secret
+                    (partial <change-secret vivo-server))
+    (ep/set-handler sm-ep :get-schema-pcf
+                    (partial <get-schema-pcf vivo-server))
+    (ep/set-handler sm-ep :store-schema-pcf
+                    (partial <store-schema-pcf vivo-server))
+    (ep/set-handler sm-ep :get-state
+                    (partial <get-state vivo-server))
+    (ep/set-handler sm-ep :log-in
+                    (partial <log-in vivo-server))
+    (ep/set-handler sm-ep :log-in-w-token
+                    (partial <log-in-w-token vivo-server))
+    (ep/set-handler sm-ep :log-out
+                    (partial <log-out vivo-server))
+    (ep/set-handler sm-ep :set-state-source
+                    (partial <set-state-source vivo-server))
+    (ep/set-handler sm-ep :update-state
+                    (partial <update-state vivo-server))
     (cs/start capsule-server)
     (log-info (str "Vivo server started on port " port "."))
     #(cs/stop capsule-server)))

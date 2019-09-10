@@ -205,7 +205,8 @@
                       {:given-fp fp})))
     (au/go
       (or (@*fp->schema fp)
-          (let [pcf (au/<? (cc/<send-msg capsule-client :get-schema-pcf fp))
+          (let [pcf (au/<? (cc/<send-msg capsule-client
+                                         :get-schema-pcf fp))
                 schema (l/json->schema pcf)]
             (swap! *fp->schema assoc fp schema)
             schema))))
@@ -560,8 +561,8 @@
    *conn-initialized? subject-id-ch]
   (ca/go
     (try
-      (let [db-id (au/<? (cc/<send-msg capsule-client
-                                       :set-state-source sys-state-source))]
+      (let [db-id (au/<? (cc/<send-msg capsule-client :set-state-source
+                                       sys-state-source))]
         (when-let [token (get-login-token)]
           (au/<? (<log-in-w-token capsule-client subject-id-ch log-info token)))
         (reset! *cur-db-id db-id)

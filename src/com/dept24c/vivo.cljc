@@ -78,6 +78,12 @@
   [vc]
   (u/log-out! vc))
 
+(defn <add-subject!
+  ([vc identifier secret]
+   (<add-subject! vc identifier secret nil))
+  ([vc identifier secret subject-id]
+   (u/<add-subject! vc identifier secret subject-id)))
+
 (defn <schema->fp
   "Get the fingerprint for the given schema and durably store the schema
    for future use by <fp->schema.
@@ -91,12 +97,6 @@
    is unknown."
   [vc fp]
   (u/<fp->schema vc fp))
-
-(defn <add-subject!
-  ([vc identifier secret]
-   (<add-subject! vc identifier secret nil))
-  ([vc identifier secret subject-id]
-   (u/<add-subject! vc identifier secret subject-id)))
 
 (defn shutdown!
   "Shutdown the vivo client and its connection to the server.
