@@ -45,6 +45,7 @@
   (<log-out [this arg metadata])
   (<modify-db [this <update-fn msg updated-paths metadata])
   (<set-state-source [this arg metadata])
+  (<store-schema-pcf [this arg metadata])
   (<update-state [this arg metadata])
   (<scmds->cmds [this scmds conn-id])
   (get-storage [this branch]))
@@ -561,6 +562,11 @@
           (log-error (str "Could not find PCF for fingerprint `" fp "`."))
           nil))))
 
+  (<store-schema-pcf [this pcf metadata]
+    (au/go
+      (au/<? (u/<schema->fp perm-storage (l/json->schema pcf)))
+      true))
+
   (get-storage [this branch]
     (if (str/starts-with? branch "-")
       temp-storage
@@ -666,6 +672,8 @@
                     (partial <add-subject-identifier vivo-server))
     (ep/set-handler sm-ep :change-secret (partial <change-secret vivo-server))
     (ep/set-handler sm-ep :get-schema-pcf (partial <get-schema-pcf vivo-server))
+    (ep/set-handler sm-ep :store-schema-pcf (partial <store-schema-pcf
+                                                     vivo-server))
     (ep/set-handler sm-ep :get-state (partial <get-state vivo-server))
     (ep/set-handler sm-ep :log-in (partial <log-in vivo-server))
     (ep/set-handler sm-ep :log-in-w-token (partial <log-in-w-token vivo-server))

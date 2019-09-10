@@ -199,16 +199,29 @@
                        *subject-id]
   u/ISchemaStore
   (<fp->schema [this fp]
+    (when-not (int? fp)
+      (throw (ex-info (str "Given `fp` arg is not a `long`. Got `"
+                           fp "`.")
+                      {:given-fp fp})))
     (au/go
-      (when-not (int? fp)
-        (throw (ex-info (str "Given `fp` arg is not a `long`. Got `"
-                             fp "`.")
-                        {:given-fp fp})))
       (or (@*fp->schema fp)
           (let [pcf (au/<? (cc/<send-msg capsule-client :get-schema-pcf fp))
                 schema (l/json->schema pcf)]
             (swap! *fp->schema assoc fp schema)
             schema))))
+
+  (<schema->fp [this schema]
+    (when-not (l/schema? schema)
+      (throw (ex-info (str "Schema arg must be a Lancaster schema. Got `"
+                           schema "`.")
+                      {:given-schema schema})))
+    (au/go
+      (let [fp (l/fingerprint64 schema)]
+        (when-not (@*fp->schema fp)
+          (swap! *fp->schema assoc fp schema)
+          (au/<? (cc/<send-msg capsule-client :store-schema-pcf
+                               (l/pcf schema))))
+        fp)))
 
   u/IVivoClient
   (<deserialize-value [this path ret]

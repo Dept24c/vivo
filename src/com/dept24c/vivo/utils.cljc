@@ -255,7 +255,7 @@
   path-item-schema)
 
 (l/def-record-schema serialized-value-schema
-  [:fp :required l/long-schema]
+  [:fp :required fp-schema]
   [:bytes :required l/bytes-schema])
 
 (l/def-record-schema serializable-update-command-schema
@@ -336,6 +336,9 @@
           :get-schema-pcf {:arg l/long-schema
                            :ret (l/maybe l/string-schema)
                            :sender :either}
+          :store-schema-pcf {:arg l/string-schema
+                             :ret l/boolean-schema
+                             :sender :client}
           :get-state {:arg get-state-arg-schema
                       :ret get-state-ret-schema
                       :sender :client}

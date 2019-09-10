@@ -7,7 +7,8 @@
    [com.dept24c.vivo.test-user :as tu]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
-   [deercreeklabs.capsule.logging :as logging])
+   [deercreeklabs.capsule.logging :as logging]
+   [deercreeklabs.lancaster :as l])
   #?(:clj
      (:import
       (clojure.lang ExceptionInfo))))
@@ -164,3 +165,33 @@
            (is (= :unexpected e)))
          (finally
            (vivo/shutdown! vc)))))))
+
+(l/def-record-schema complex-num-schema
+  [:real-part l/double-schema]
+  [:imaginary-part l/double-schema])
+
+(deftest test-schema<->fp
+  (au/test-async
+   10000
+   (ca/go
+     (let [vc1 (vivo/vivo-client vc-opts)
+           ;; Make a separate vc to get around local cache and test
+           ;; server-side durability
+           vc2 (vivo/vivo-client vc-opts)]
+       (try
+         (let [fp (au/<? (vivo/<schema->fp vc1 complex-num-schema))
+               expected-fp (l/fingerprint64 complex-num-schema)
+               _ (is (= expected-fp fp))
+               rt-schema (au/<? (vivo/<fp->schema vc2 fp))
+               _ (is (= (l/pcf complex-num-schema)
+                        (l/pcf rt-schema)))
+               data {:real-part 10.6
+                     :imaginary-part 42.7}
+               encoded (l/serialize rt-schema data)
+               decoded (l/deserialize complex-num-schema rt-schema encoded)]
+           (is (= data decoded)))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc1)
+           (vivo/shutdown! vc2)))))))
