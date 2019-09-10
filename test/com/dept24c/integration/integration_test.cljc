@@ -60,22 +60,26 @@
                               (if-not (seq msgs)
                                 (ca/put! all-msgs-ch :no-msgs)
                                 (let [msgs* (join-msgs-and-users msgs users)]
-                                  (ca/put! all-msgs-ch msgs*)))))
+                                  (ca/put! all-msgs-ch msgs*))))
+                            "test1")
            (vivo/subscribe! sm '{app-name [:sys :app-name]} nil
                             (fn [df]
                               (if-let [app-name (df 'app-name)]
                                 (ca/put! app-name-ch app-name)
-                                (ca/put! app-name-ch :no-name))))
+                                (ca/put! app-name-ch :no-name)))
+                            "test2")
            (vivo/subscribe! sm '{last-msg [:sys :msgs -1]} nil
                             (fn [df]
                               (if-let [last-msg (df 'last-msg)]
                                 (ca/put! last-msg-ch last-msg)
-                                (ca/put! last-msg-ch :no-last))))
+                                (ca/put! last-msg-ch :no-last)))
+                            "test3")
            (vivo/subscribe! sm '{uid->msgs [:sys :user-id-to-msgs]} nil
                             (fn [{:syms [uid->msgs]}]
                               (if (seq uid->msgs)
                                 (ca/put! index-ch uid->msgs)
-                                (ca/put! index-ch :no-u->m))))
+                                (ca/put! index-ch :no-u->m)))
+                            "test4")
            (is (= :no-msgs (au/<? all-msgs-ch))) ; initial subscription result
            (is (= :no-name (au/<? app-name-ch))) ; initial subscription result
            (is (= :no-last (au/<? last-msg-ch))) ; initial subscription result
@@ -121,7 +125,8 @@
                                               tu/test-subject-id))
                state-ch (ca/chan)
                sub-map '{subject-id :vivo/subject-id}
-               sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))
+               sub-id (vivo/subscribe! sm sub-map nil #(ca/put! state-ch %)
+                                       "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
                login-ret (au/<? (vivo/<log-in! sm tu/test-identifier
                                                tu/test-secret))]
@@ -149,7 +154,8 @@
                state-ch (ca/chan)
                sub-map '{app-name [:sys :app-name]
                          secret [:sys :secret]}
-               sub-id (vivo/subscribe! sm sub-map #(ca/put! state-ch %))
+               sub-id (vivo/subscribe! sm sub-map nil #(ca/put! state-ch %)
+                                       "test")
                expected-state {'app-name app-name
                                'secret :vivo/unauthorized}]
            (is (= expected-state (au/<? state-ch)))
