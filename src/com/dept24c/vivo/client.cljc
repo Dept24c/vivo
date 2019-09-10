@@ -1,4 +1,4 @@
-(ns com.dept24c.vivo.state
+(ns com.dept24c.vivo.client
   (:require
    [clojure.core.async :as ca]
    [clojure.set :as set]
@@ -13,7 +13,7 @@
    [deercreeklabs.stockroom :as sr]
    [weavejester.dependency :as dep]))
 
-(def default-sm-opts
+(def default-vc-opts
   {:log-error println
    :log-info println
    :state-cache-num-keys 100})
@@ -191,12 +191,12 @@
               k))
           path)))
 
-(defrecord StateManager [capsule-client sys-state-schema sys-state-source
-                         log-info log-error state-cache sub-map->op-cache
-                         path->schema-cache update-ch subject-id-ch
-                         *local-state *sub-id->sub *cur-db-id *last-sub-id
-                         *conn-initialized? *stopped? *ssr-info *fp->schema
-                         *subject-id]
+(defrecord VivoClient [capsule-client sys-state-schema sys-state-source
+                       log-info log-error state-cache sub-map->op-cache
+                       path->schema-cache update-ch subject-id-ch
+                       *local-state *sub-id->sub *cur-db-id *last-sub-id
+                       *conn-initialized? *stopped? *ssr-info *fp->schema
+                       *subject-id]
   u/ISchemaStore
   (<fp->schema [this fp]
     (au/go
@@ -210,7 +210,7 @@
             (swap! *fp->schema assoc fp schema)
             schema))))
 
-  u/IStateManager
+  u/IVivoClient
   (<deserialize-value [this path ret]
     (au/go
       (when ret
@@ -265,7 +265,7 @@
   (shutdown! [this]
     (reset! *stopped? true)
     (cc/shutdown capsule-client)
-    (log-info "State manager stopped."))
+    (log-info "Vivo client stopped."))
 
   (<make-state-info
     [this sub-map-or-ordered-pairs subscriber-name]
@@ -553,9 +553,9 @@
           (au/<? (<log-in-w-token capsule-client subject-id-ch log-info token)))
         (reset! *cur-db-id db-id)
         (reset! *conn-initialized? true)
-        (log-info "State manager connection initialized."))
+        (log-info "Vivo client connection initialized."))
       (catch #?(:cljs js/Error :clj Throwable) e
-        (log-error (str "Error initializing state manager client:\n"
+        (log-error (str "Error initializing vivo client:\n"
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn <on-connect
@@ -602,26 +602,26 @@
   [get-server-url sys-state-schema sys-state-source log-error log-info
    *cur-db-id *conn-initialized? subject-id-ch]
   (when-not sys-state-schema
-    (throw (ex-info (str "Missing `:sys-state-schema` option in state-manager "
+    (throw (ex-info (str "Missing `:sys-state-schema` option in vivo-client "
                          "constructor.")
                     {})))
-  (let [get-credentials (constantly {:subject-id "state-manager"
+  (let [get-credentials (constantly {:subject-id "vivo-client"
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect sys-state-source log-error
                                    log-info *cur-db-id *conn-initialized?
                                    subject-id-ch)
               :on-disconnect (partial on-disconnect *conn-initialized?)}]
     (cc/client get-server-url get-credentials
-               u/sm-server-protocol :state-manager opts)))
+               u/client-server-protocol :client opts)))
 
-(defn state-manager [opts]
+(defn vivo-client [opts]
   (let [{:keys [get-server-url
                 initial-local-state
                 log-error
                 log-info
                 state-cache-num-keys
                 sys-state-source
-                sys-state-schema]} (merge default-sm-opts opts)
+                sys-state-schema]} (merge default-vc-opts opts)
         *local-state (atom initial-local-state)
         *sub-id->sub (atom {})
         *cur-db-id (atom nil)
@@ -642,16 +642,16 @@
                           get-server-url sys-state-schema sys-state-source
                           log-error log-info *cur-db-id *conn-initialized?
                           subject-id-ch))
-        sm (->StateManager capsule-client sys-state-schema sys-state-source
-                           log-info log-error state-cache sub-map->op-cache
-                           path->schema-cache update-ch subject-id-ch
-                           *local-state *sub-id->sub *cur-db-id *last-sub-id
-                           *conn-initialized? *stopped? *ssr-info *fp->schema
-                           *subject-id)]
-    (u/start-update-loop sm)
+        vc (->VivoClient capsule-client sys-state-schema sys-state-source
+                         log-info log-error state-cache sub-map->op-cache
+                         path->schema-cache update-ch subject-id-ch
+                         *local-state *sub-id->sub *cur-db-id *last-sub-id
+                         *conn-initialized? *stopped? *ssr-info *fp->schema
+                         *subject-id)]
+    (u/start-update-loop vc)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
-                      (partial u/<handle-sys-state-changed sm))
+                      (partial u/<handle-sys-state-changed vc))
       (cc/set-handler capsule-client :get-schema-pcf
                       (fn [fp metadata]
                         (if-let [schema (@*fp->schema fp)]
@@ -661,4 +661,4 @@
                              (str "Could not find PCF for fingerprint `"
                                   fp "`."))
                             nil)))))
-    sm))
+    vc))

@@ -642,8 +642,8 @@
         sm-ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
                                             *subject-id->conn-ids *branch->info
                                             temp-storage log-error log-info)}
-        sm-ep (ep/endpoint "state-manager" (constantly true)
-                           u/sm-server-protocol :server sm-ep-opts)
+        sm-ep (ep/endpoint "vivo-client" (constantly true)
+                           u/client-server-protocol :server sm-ep-opts)
         cs-opts (u/sym-map handle-http http-timeout-ms)
         capsule-server (cs/server (conj additional-endpoints sm-ep)
                                   port cs-opts)

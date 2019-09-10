@@ -1,15 +1,21 @@
 (ns com.dept24c.vivo
   (:require
    [clojure.core.async :as ca]
-   [com.dept24c.vivo.state :as state]
+   [com.dept24c.vivo.client :as client]
+   [com.dept24c.vivo.server :as server]
    [com.dept24c.vivo.utils :as u]))
 
-(defn state-manager
-  "Creates a Vivo state manager."
+(defn vivo-server
+  "Returns a no-arg fn that stops the server."
+  [config]
+  (server/vivo-server config))
+
+(defn vivo-client
+  "Creates a Vivo client."
   ([]
-   (state-manager {}))
+   (vivo-client {}))
   ([opts]
-   (state/state-manager opts)))
+   (client/vivo-client opts)))
 
 (defn subscribe!
   "Creates a Vivo subscription. When any of the paths in the `sub-map`

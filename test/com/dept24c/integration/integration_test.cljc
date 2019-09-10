@@ -13,9 +13,9 @@
       (clojure.lang ExceptionInfo))))
 
 (defn get-server-url []
-  "ws://localhost:12345/state-manager")
+  "ws://localhost:12345/vivo-client")
 
-(def sm-opts {:get-server-url get-server-url
+(def vc-opts {:get-server-url get-server-url
               :sys-state-schema ss/state-schema
               :sys-state-source {:temp-branch/db-id nil}})
 
@@ -37,7 +37,7 @@
   (au/test-async
    10000
    (ca/go
-     (let [sm (vivo/state-manager sm-opts)]
+     (let [vc (vivo/vivo-client vc-opts)]
        (try
          (let [app-name "test-app"
                msg {:user-id user-bo-id
@@ -53,7 +53,7 @@
                                   {:text "This is great"
                                    :user {:name "Bo Johnson"
                                           :nickname "Bo"}}]]
-           (vivo/subscribe! sm '{msgs [:sys :msgs]
+           (vivo/subscribe! vc '{msgs [:sys :msgs]
                                  users [:sys :users]}
                             nil
                             (fn [{:syms [msgs users] :as arg}]
@@ -62,19 +62,19 @@
                                 (let [msgs* (join-msgs-and-users msgs users)]
                                   (ca/put! all-msgs-ch msgs*))))
                             "test1")
-           (vivo/subscribe! sm '{app-name [:sys :app-name]} nil
+           (vivo/subscribe! vc '{app-name [:sys :app-name]} nil
                             (fn [df]
                               (if-let [app-name (df 'app-name)]
                                 (ca/put! app-name-ch app-name)
                                 (ca/put! app-name-ch :no-name)))
                             "test2")
-           (vivo/subscribe! sm '{last-msg [:sys :msgs -1]} nil
+           (vivo/subscribe! vc '{last-msg [:sys :msgs -1]} nil
                             (fn [df]
                               (if-let [last-msg (df 'last-msg)]
                                 (ca/put! last-msg-ch last-msg)
                                 (ca/put! last-msg-ch :no-last)))
                             "test3")
-           (vivo/subscribe! sm '{uid->msgs [:sys :user-id-to-msgs]} nil
+           (vivo/subscribe! vc '{uid->msgs [:sys :user-id-to-msgs]} nil
                             (fn [{:syms [uid->msgs]}]
                               (if (seq uid->msgs)
                                 (ca/put! index-ch uid->msgs)
@@ -85,7 +85,7 @@
            (is (= :no-last (au/<? last-msg-ch))) ; initial subscription result
            (is (= :no-u->m (au/<? index-ch))) ; initial subscription result
            (is (= true (au/<? (vivo/<update-state!
-                               sm [{:path [:sys]
+                               vc [{:path [:sys]
                                     :op :set
                                     :arg {:app-name app-name
                                           :msgs []
@@ -103,7 +103,7 @@
                       {:text "A msg" :user-id 1}]}
                   (au/<? index-ch)))
            (is (= true (au/<? (vivo/<update-state!
-                               sm [{:path [:sys :msgs -1]
+                               vc [{:path [:sys :msgs -1]
                                     :op :remove}]))))
            (is (= msg (au/<? last-msg-ch)))
            (is (= 1 (count (au/<? all-msgs-ch))))
@@ -112,55 +112,55 @@
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
-           (vivo/shutdown! sm)))))))
+           (vivo/shutdown! vc)))))))
 
 (deftest test-authentication
   (au/test-async
    10000
    (ca/go
-     (let [sm (vivo/state-manager sm-opts)]
+     (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ret (au/<? (vivo/<add-subject! sm tu/test-identifier
+         (let [ret (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
                state-ch (ca/chan)
                sub-map '{subject-id :vivo/subject-id}
-               sub-id (vivo/subscribe! sm sub-map nil #(ca/put! state-ch %)
+               sub-id (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
-               login-ret (au/<? (vivo/<log-in! sm tu/test-identifier
+               login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
                                                tu/test-secret))]
            (when-not login-ret
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))
            (is (= tu/test-subject-id ('subject-id (au/<? state-ch))))
-           (vivo/log-out! sm)
+           (vivo/log-out! vc)
            (is (= {'subject-id nil} (au/<? state-ch)))
-           (vivo/unsubscribe! sm sub-id))
+           (vivo/unsubscribe! vc sub-id))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected (u/ex-msg e))))
          (finally
-           (vivo/shutdown! sm)))))))
+           (vivo/shutdown! vc)))))))
 
 (deftest test-authorization
   (au/test-async
    10000
    (ca/go
-     (let [sm (vivo/state-manager sm-opts)]
+     (let [vc (vivo/vivo-client vc-opts)]
        (try
          (let [app-name "test-app"
-               ret (au/<? (vivo/<set-state! sm [:sys :app-name] app-name))
+               ret (au/<? (vivo/<set-state! vc [:sys :app-name] app-name))
                _ (is (= true ret))
                state-ch (ca/chan)
                sub-map '{app-name [:sys :app-name]
                          secret [:sys :secret]}
-               sub-id (vivo/subscribe! sm sub-map nil #(ca/put! state-ch %)
+               sub-id (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                expected-state {'app-name app-name
                                'secret :vivo/unauthorized}]
            (is (= expected-state (au/<? state-ch)))
-           (vivo/unsubscribe! sm sub-id))
+           (vivo/unsubscribe! vc sub-id))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
-           (vivo/shutdown! sm)))))))
+           (vivo/shutdown! vc)))))))

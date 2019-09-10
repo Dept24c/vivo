@@ -2,7 +2,6 @@
   (:require
    [clojure.core.async :as ca]
    [clojure.set :as set]
-   [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au])
   #?(:clj
@@ -18,11 +17,11 @@
               (u/sym-map arglist component-name))))
   (let [first-arg (first arglist)]
     (when (or (nil? first-arg)
-              (not= "sm" (name first-arg)))
+              (not= "vc" (name first-arg)))
       (throw
        (ex-info (str "Bad constructor arglist for component `" component-name
-                     "`. First argument must be `sm`"
-                     " (the state manager). Got: `" first-arg "`.")
+                     "`. First argument must be `vc`"
+                     " (the vivo client). Got: `" first-arg "`.")
                 (u/sym-map component-name first-arg arglist))))))
 
 (defn check-constructor-args [subscriber-name args num-args-defined]
@@ -101,7 +100,7 @@
        (com.dept24c.vivo.react/create-element
         (fn ~component-name [props#]
           (let [vivo-state# (com.dept24c.vivo.react/use-vivo-state
-                             ~'sm '~sub-map ~cname)
+                             ~'vc '~sub-map ~cname)
                 [cstate# set-cstate#] (com.dept24c.vivo.react/use-state
                                        '~initial-cstate)
                 {:syms [~@sub-syms]} vivo-state#

@@ -38,7 +38,7 @@
   (<schema->fp [this schema])
   (<fp->schema [this fp]))
 
-(defprotocol IStateManager
+(defprotocol IVivoClient
   (<add-subject!
     [this identifier secret]
     [this identifier secret subject-id])
@@ -322,41 +322,41 @@
   [:branch branch-name-schema]
   [:db-id db-id-schema])
 
-(def sm-server-protocol
-  {:roles [:state-manager :server]
+(def client-server-protocol
+  {:roles [:client :server]
    :msgs {:add-subject {:arg add-subject-arg-schema
                         :ret subject-id-schema
-                        :sender :state-manager}
+                        :sender :client}
           :add-subject-identifier {:arg l/string-schema
                                    :ret l/boolean-schema
-                                   :sender :state-manager}
+                                   :sender :client}
           :change-secret {:arg l/string-schema
                           :ret l/boolean-schema
-                          :sender :state-manager}
+                          :sender :client}
           :get-schema-pcf {:arg l/long-schema
                            :ret (l/maybe l/string-schema)
                            :sender :either}
           :get-state {:arg get-state-arg-schema
                       :ret get-state-ret-schema
-                      :sender :state-manager}
+                      :sender :client}
           :log-in {:arg log-in-arg-schema
                    :ret (l/maybe log-in-ret-schema)
-                   :sender :state-manager}
+                   :sender :client}
           :log-in-w-token {:arg token-schema
                            :ret (l/maybe subject-id-schema)
-                           :sender :state-manager}
+                           :sender :client}
           :log-out {:arg l/null-schema
-                    :sender :state-manager}
+                    :sender :client}
           :set-state-source {:arg state-source-schema
                              :ret db-id-schema
-                             :sender :state-manager}
+                             :sender :client}
           :sys-state-changed {:arg sys-state-change-schema
                               :sender :server}
           ;; We need to return the state change so sys+local updates
           ;; remain transactional
           :update-state {:arg serializable-update-commands-schema
                          :ret (l/maybe sys-state-change-schema)
-                         :sender :state-manager}}})
+                         :sender :client}}})
 
 (def admin-client-server-protocol
   {:roles [:admin-client :server]

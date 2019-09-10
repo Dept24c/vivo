@@ -5,7 +5,6 @@
    [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.macro-impl :as macro-impl]
-   [com.dept24c.vivo.state :as state]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au])
   #?(:clj
@@ -14,7 +13,7 @@
 
 (deftest test-parse-def-component-args-no-docstring
   (let [sub-map '{x [:local :c]}
-        arglist '[sm a b]
+        arglist '[vc a b]
         args [sub-map arglist]
         expected {:docstring nil
                   :sub-map sub-map
@@ -26,7 +25,7 @@
 (deftest test-parse-def-component-args-with-docstring
   (let [docstring "This is my component"
         sub-map '{x [:local :c]}
-        arglist '[sm a b]
+        arglist '[vc a b]
         args [docstring sub-map arglist]
         expected {:docstring docstring
                   :sub-map sub-map
@@ -41,16 +40,16 @@
        #"The sub-map parameter must be a map"
        (macro-impl/parse-def-component-args 'foo nil))))
 
-(deftest test-check-arglist-no-sm
+(deftest test-check-arglist-no-vc
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
-       #"First argument must be `sm`"
+       #"First argument must be `vc`"
        (macro-impl/check-arglist 'foo '[]))))
 
-(deftest test-check-arglist-no-sm-2
+(deftest test-check-arglist-no-vc-2
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
-       #"First argument must be `sm`"
+       #"First argument must be `vc`"
        (macro-impl/check-arglist 'foo '[x]))))
 
 (deftest test-check-arglist
@@ -64,20 +63,20 @@
        #?(:clj ExceptionInfo :cljs js/Error)
        #"Illegal repeated symbol"
        (macro-impl/parse-def-component-args
-        'foo ['{a [:local :a]} '[sm a]]))))
+        'foo ['{a [:local :a]} '[vc a]]))))
 
 (deftest test-repeat-symbol-init-cstate
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"Illegal repeated symbol"
        (macro-impl/parse-def-component-args
-        'foo ['{a [:local :a]} '{a 1} '[sm a]]))))
+        'foo ['{a [:local :a]} '{a 1} '[vc a]]))))
 
 (deftest test-parse-sub-map-component-state
   (let [sub-map '{a [:component :a]}
         initial-component-state '{hovering? false
                                   editing? false}
-        arglist '[sm]
+        arglist '[vc]
         body '(body)
         args [sub-map initial-component-state arglist body]
         parts (macro-impl/parse-def-component-args
@@ -107,50 +106,50 @@
     {"s" 1 :s 2}))
 
 (deftest test-empty-sub-map
-  (let [sm (vivo/state-manager)
+  (let [vc (vivo/vivo-client)
         bad-sub-map {}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The sub-map parameter must contain at least one entry"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true) "test")))))
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-nil-sub-map
-  (let [sm (vivo/state-manager)
+  (let [vc (vivo/vivo-client)
         bad-sub-map nil]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The sub-map parameter must be a map"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true) "test")))))
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-non-sym-key-in-sub-map
-  (let [sm (vivo/state-manager)
+  (let [vc (vivo/vivo-client)
         bad-sub-map {:not-a-symbol [:local :user-id]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"All keys in sub-map must be symbols. Got `:not-a-symbol`"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true) "test")))))
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-bad-path-in-sub-map
-  (let [sm (vivo/state-manager)
+  (let [vc (vivo/vivo-client)
         bad-sub-map '{user-id [:local nil]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Only integers, keywords, symbols, and strings are valid path keys"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true) "test")))))
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-bad-symbol-in-sub-map
-  (let [sm (vivo/state-manager)
+  (let [vc (vivo/vivo-client)
         bad-sub-map '{user-id [:local a-symbol-which-is-not-defined]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"is not defined"
-         (vivo/subscribe! sm bad-sub-map nil (constantly true) "test")))))
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-subscribe!
   (au/test-async
    1000
    (ca/go
-     (let [sm (vivo/state-manager)
+     (let [vc (vivo/vivo-client)
            ch (ca/chan 1)
            update-fn #(ca/put! ch %)
            name "Alice"
@@ -159,29 +158,29 @@
                      name [:local :users id :name]}
            expected '{id "123"
                       name "Alice"}]
-       (au/<? (vivo/<update-state! sm [{:path [:local :users]
+       (au/<? (vivo/<update-state! vc [{:path [:local :users]
                                         :op :set
                                         :arg {user-id {:name name}}}
                                        {:path [:local :user-id]
                                         :op :set
                                         :arg user-id}]))
-       (vivo/subscribe! sm sub-map nil update-fn "test")
+       (vivo/subscribe! vc sub-map nil update-fn "test")
        (is (= expected (au/<? ch)))))))
 
 (deftest test-subscribe!-single-entry
   (au/test-async
    1000
    (ca/go
-     (let [sm (vivo/state-manager)
+     (let [vc (vivo/vivo-client)
            ch (ca/chan 1)
            update-fn #(ca/put! ch (% 'id))
            name "Alice"
            user-id "123"
            sub-map '{id [:local :user-id]}]
-       (au/<? (vivo/<update-state! sm [{:path [:local :user-id]
+       (au/<? (vivo/<update-state! vc [{:path [:local :user-id]
                                         :op :set
                                         :arg user-id}]))
-       (vivo/subscribe! sm sub-map nil update-fn "test")
+       (vivo/subscribe! vc sub-map nil update-fn "test")
        (is (= user-id (au/<? ch)))))))
 
 (deftest test-simple-insert*
@@ -277,21 +276,21 @@
         (is (= case [ret cmd]))))))
 
 (deftest test-bad-path-root-in-update-state!
-  (let [sm (vivo/state-manager)]
+  (let [vc (vivo/vivo-client)]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Paths must begin with either :local, :conn, or :sys."
-         (vivo/update-state! sm [{:path [:not-a-valid-root :x]
+         (vivo/update-state! vc [{:path [:not-a-valid-root :x]
                                   :op :set
                                   :arg 1}])))))
 
 (deftest test-bad-path-root-in-sub-map
-  (let [sm (vivo/state-manager)
+  (let [vc (vivo/vivo-client)
         sub-map '{a [:not-a-valid-root :x]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Paths must begin with either :local, :conn, or :sys."
-         (vivo/subscribe! sm sub-map nil (constantly nil) "test")))))
+         (vivo/subscribe! vc sub-map nil (constantly nil) "test")))))
 
 (deftest test-bad-insert*-on-map
   (is (thrown-with-msg?
@@ -306,11 +305,11 @@
        (commands/insert* [] [] :insert-before :new))))
 
 (deftest test-bad-command-op
-  (let [sm (vivo/state-manager)]
+  (let [vc (vivo/vivo-client)]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"is not a valid op. Got: `:not-an-op`."
-         (vivo/update-state! sm [{:path [:local :x]
+         (vivo/update-state! vc [{:path [:local :x]
                                   :op :not-an-op
                                   :arg 1}])))))
 
@@ -356,19 +355,19 @@
    1000
    (ca/go
      (try
-       (let [sm (vivo/state-manager)
+       (let [vc (vivo/vivo-client)
              sub-map '{title [:local :msgs 0 :title]}
              ch (ca/chan 1)
              update-fn #(ca/put! ch (% 'title))
              orig-title "Plato"
              new-title "Socrates"]
          (is (= true (au/<? (vivo/<update-state!
-                             sm [{:path [:local]
+                             vc [{:path [:local]
                                   :op :set
                                   :arg {:msgs [{:title orig-title}]}}]))))
-         (vivo/subscribe! sm sub-map nil update-fn "test")
+         (vivo/subscribe! vc sub-map nil update-fn "test")
          (is (= orig-title (au/<? ch)))
-         (au/<? (vivo/<update-state! sm
+         (au/<? (vivo/<update-state! vc
                                      [{:path [:local :msgs 0]
                                        :op :insert-before
                                        :arg {:title orig-title}}
@@ -376,7 +375,7 @@
                                        :op :set
                                        :arg new-title}]))
          (is (= new-title (au/<? ch)))
-         (au/<? (vivo/<update-state! sm [{:path [:local :msgs 0 :title]
+         (au/<? (vivo/<update-state! vc [{:path [:local :msgs 0 :title]
                                           :op :set
                                           :arg new-title}
                                          {:path [:local :msgs 0]
@@ -392,17 +391,17 @@
    (ca/go
      (try
        (let [orig-title "Foo"
-             sm (vivo/state-manager)
+             vc (vivo/vivo-client)
              ch (ca/chan 1)
              sub-map '{title [:local :msgs -1 :title]}
              update-fn #(ca/put! ch (% 'title))
              new-title "Bar"]
-         (au/<? (vivo/<update-state! sm [{:path [:local]
+         (au/<? (vivo/<update-state! vc [{:path [:local]
                                           :op :set
                                           :arg {:msgs [{:title orig-title}]}}]))
-         (vivo/subscribe! sm sub-map nil update-fn "test")
+         (vivo/subscribe! vc sub-map nil update-fn "test")
          (is (= orig-title (au/<? ch)))
-         (au/<? (vivo/<update-state! sm [{:path [:local :msgs -1]
+         (au/<? (vivo/<update-state! vc [{:path [:local :msgs -1]
                                           :op :insert-after
                                           :arg {:title new-title}}]))
          (is (= new-title (au/<? ch))))
@@ -441,16 +440,16 @@
                     42 "deal42"
                     911 "deal911"
                     1024 "deal1024"}
-             sm (vivo/state-manager)
+             vc (vivo/vivo-client)
              ch (ca/chan 1)
              sub-map '{my-deal-ids [:local :my-deal-ids]
                        my-deals [:local :deals my-deal-ids]}
              update-fn #(ca/put! ch %)
              expected (select-keys deals my-deal-ids)]
-         (au/<? (vivo/<update-state! sm [{:path [:local]
+         (au/<? (vivo/<update-state! vc [{:path [:local]
                                           :op :set
                                           :arg (u/sym-map my-deal-ids deals)}]))
-         (vivo/subscribe! sm sub-map nil update-fn "test")
+         (vivo/subscribe! vc sub-map nil update-fn "test")
          (is (= expected (au/<? ch))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
