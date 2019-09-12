@@ -115,28 +115,35 @@
          (finally
            (vivo/shutdown! vc)))))))
 
-(deftest test-authentication
+(deftest ^:this test-authentication
   (au/test-async
    10000
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
+         (println 1)
          (let [ret (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
+               _ (println 2)
                state-ch (ca/chan)
                sub-map '{subject-id :vivo/subject-id}
                sub-id (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
+               _ (println 3)
                login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
                                                tu/test-secret))]
+           (println 4)
            (when-not login-ret
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))
+           (println 5)
            (is (= tu/test-subject-id ('subject-id (au/<? state-ch))))
            (vivo/log-out! vc)
+           (println 6)
            (is (= {'subject-id nil} (au/<? state-ch)))
+           (println 7)
            (vivo/unsubscribe! vc sub-id))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected (u/ex-msg e))))

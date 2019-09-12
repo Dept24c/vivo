@@ -122,6 +122,22 @@
          #"Undefined symbol"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
+(deftest test-subscribe-to-subscriber-state-without-subscriber-id
+  (let [vc (vivo/vivo-client)
+        bad-sub-map '{ss [:subscriber]}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"Missing subscriber/component id in path"
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
+
+(deftest test-subscribe-to-subscriber-state-without-subscriber-id
+  (let [vc (vivo/vivo-client)
+        bad-sub-map '{cs [:component]}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"Missing subscriber/component id in path"
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
+
 (deftest test-subscribe!
   (au/test-async
    1000
@@ -153,7 +169,7 @@
            update-fn #(ca/put! ch %)
            sub-map '{sub-id :vivo/subscriber-id}
            sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")]
-       (is (= sub-id (get (au/<? ch) 'sub-id)))))))
+       (is (= sub-id ('sub-id (au/<? ch))))))))
 
 (deftest test-subscribe!-component-id
   (au/test-async
@@ -164,7 +180,7 @@
            update-fn #(ca/put! ch %)
            sub-map '{cid :vivo/component-id}
            cid (vivo/subscribe! vc sub-map nil update-fn "test-cid")]
-       (is (= cid (get (au/<? ch) 'cid)))))))
+       (is (= cid ('cid (au/<? ch))))))))
 
 (deftest test-register-subscriber-id!
   (au/test-async
@@ -177,10 +193,40 @@
            sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")
            custom-id "AAA"]
        (vivo/register-subscriber-id! vc custom-id sub-id)
-       (is (= sub-id (get (au/<? ch) 'sub-id)))
+       (is (= sub-id ('sub-id (au/<? ch))))
        (is (= sub-id (vivo/get-subscriber-id vc custom-id)))
        (vivo/unsubscribe! vc sub-id)
        (is (= nil (vivo/get-subscriber-id vc custom-id)))))))
+
+(deftest test-update-subscriber-state
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch %)
+           sub-map '{sub-id :vivo/subscriber-id
+                     sub-state [:subscriber sub-id]}
+           sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")
+           _ (is (nil? ('sub-state (au/<? ch))))
+           new-sub-state {:hi :there}
+           _ (vivo/set-state! vc [:subscriber sub-id] new-sub-state)]
+       (is (= new-sub-state ('sub-state (au/<? ch))))))))
+
+(deftest test-update-component-state
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch %)
+           sub-map '{cid :vivo/component-id
+                     cstate [:component cid]}
+           sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")
+           _ (is (nil? ('cstate (au/<? ch))))
+           new-cstate {:hi :there}
+           _ (vivo/set-state! vc [:component sub-id] new-cstate)]
+       (is (= new-cstate ('cstate (au/<? ch))))))))
 
 (deftest test-subscribe!-single-entry
   (au/test-async
@@ -294,7 +340,7 @@
   (let [vc (vivo/vivo-client)]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Paths must begin with either :local, :conn, or :sys."
+         #"Paths must begin with "
          (vivo/update-state! vc [{:path [:not-a-valid-root :x]
                                   :op :set
                                   :arg 1}])))))
@@ -304,7 +350,7 @@
         sub-map '{a [:not-a-valid-root :x]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Paths must begin with either :local, :conn, or :sys."
+         #"Paths must begin with "
          (vivo/subscribe! vc sub-map nil (constantly nil) "test")))))
 
 (deftest test-bad-insert*-on-map
