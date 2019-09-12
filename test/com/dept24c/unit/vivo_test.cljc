@@ -1,6 +1,7 @@
 (ns com.dept24c.unit.vivo-test
   (:require
    [clojure.core.async :as ca]
+   [clojure.string :as str]
    [clojure.test :refer [are deftest is]]
    [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.commands :as commands]
@@ -137,6 +138,14 @@
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Missing subscriber/component id in path"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
+
+(deftest test-update-subscriber-state-no-sub-id
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ret (ca/<! (vivo/<set-state! vc [:subscriber] {}))]
+       (is (str/includes? (u/ex-msg ret) "Missing subscriber/component id "))))))
 
 (deftest test-subscribe!
   (au/test-async

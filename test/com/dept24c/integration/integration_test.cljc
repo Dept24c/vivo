@@ -115,7 +115,7 @@
          (finally
            (vivo/shutdown! vc)))))))
 
-(deftest ^:this test-authentication
+(deftest test-authentication
   (au/test-async
    10000
    (ca/go
