@@ -55,7 +55,7 @@
                 (u/sym-map repeated-syms sub-map arglist component-name))))
     parts))
 
-(defn build-component [component-name args]
+(defn build-component [component-name render-nil-state? args]
   (let [parts (parse-def-component-args component-name args)
         {:keys [docstring sub-map arglist body]} parts
         sub-syms (keys sub-map)
@@ -69,4 +69,5 @@
           (let [vivo-state# (com.dept24c.vivo.react/use-vivo-state
                              ~'vc '~sub-map ~cname)
                 {:syms [~@sub-syms]} vivo-state#]
-            ~@body))))))
+            (when (or vivo-state# ~render-nil-state?)
+              ~@body)))))))

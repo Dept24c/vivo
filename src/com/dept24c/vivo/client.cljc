@@ -334,7 +334,8 @@
                             (:val))
 
                         (= :sys path-head)
-                        (au/<? (u/<get-in-sys-state this db-id path-tail))
+                        (when db-id
+                          (au/<? (u/<get-in-sys-state this db-id path-tail)))
 
                         (#{:component :subscriber} path-head)
                         (-> (commands/get-in-state @*subscriber-state path-tail)
@@ -423,7 +424,8 @@
                 local-db-id @*cur-db-id
                 notify-all? (and cur-db-id ;; There were :sys updates
                                  not= prev-db-id local-db-id)]
-            (if (and local-db-id (block-ids/earlier? cur-db-id local-db-id))
+            (if (and local-db-id cur-db-id
+                     (block-ids/earlier? cur-db-id local-db-id))
               (cb* false) ; Ignore out-of-order updates
               (let [paths* (set/union (set paths) (set updated-paths))]
                 (reset! *cur-db-id cur-db-id)

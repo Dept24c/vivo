@@ -192,8 +192,8 @@
 
 (defn temp-block-id? [block-id]
   (when-not (string? block-id)
-    (throw (ex-info (str "block-id must be a string. Got `"
-                         (or block-id "nil") "`.")
+    (throw (ex-info (str "Bad block-id arg to temp-block-id?. block-id must be "
+                         "a string. Got `" (or block-id "nil") "`.")
                     {:block-id block-id})))
   (string/starts-with? block-id "-"))
 

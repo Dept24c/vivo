@@ -57,10 +57,18 @@
 
 (defmacro def-component
   "Defines a Vivo React component.
-  The first argument to the constructor must
-   be a parameter named `vc` (the vivo client)."
+   The first argument to the constructor must be a parameter named
+  `vc` (the vivo client).
+   React hooks may not be used inside this component. If you need to use
+   hooks, use def-component*"
   [component-name & args]
-  (macro-impl/build-component component-name args))
+  (macro-impl/build-component component-name false args))
+
+(defmacro def-component*
+  "React hooks may be used in the body of this component, but it may
+   the caller must handle nil subscription states."
+  [component-name & args]
+  (macro-impl/build-component component-name true args))
 
 ;;;; SSR Support
 
