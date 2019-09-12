@@ -428,7 +428,8 @@
                      (block-ids/earlier? cur-db-id local-db-id))
               (cb* false) ; Ignore out-of-order updates
               (let [paths* (set/union (set paths) (set updated-paths))]
-                (reset! *cur-db-id cur-db-id)
+                (when cur-db-id
+                  (reset! *cur-db-id cur-db-id))
                 (when (seq local-cmds)
                   (swap! *local-state #(reduce commands/eval-cmd % local-cmds)))
                 (when (seq sub-cmds)
