@@ -94,15 +94,10 @@
     :paths []}
    update-cmds))
 
-(defn check-path [path sub-syms sub-map]
+(defn check-path [path sub-map]
   (if (= :vivo/subject-id path)
     path
     (reduce (fn [acc k]
-              (when (and (symbol? k) (not (sub-syms k)))
-                (throw (ex-info
-                        (str "Path symbol `" k "` in path `" path "` is not "
-                             "defined as a key in the subscription map.")
-                        (u/sym-map path k sub-map))))
               (if-not (or (keyword? k) (int? k) (string? k) (symbol? k))
                 (throw-bad-path-key path k)
                 (conj acc k)))
@@ -122,7 +117,7 @@
                            :vivo/subscriber-id
                            :vivo/component-id} path)
                       (update acc :sym->path assoc sym path)
-                      (let [[head & tail] (check-path path sub-syms sub-map)
+                      (let [[head & tail] (check-path path sub-map)
                             deps (filter symbol? path)]
                         (when-not (#{:component :subscriber :local :sys} head)
                           (throw-bad-path-root path))
@@ -139,8 +134,9 @@
             no-dep-syms (set/difference (set (keys sym->path))
                                         (set ordered-dep-syms))
             pairs (reduce (fn [acc sym]
-                            (let [path (sym->path sym)]
-                              (conj acc [sym path])))
+                            (if-let [path (sym->path sym)]
+                              (conj acc [sym path])
+                              acc))
                           []
                           (concat (seq no-dep-syms)
                                   ordered-dep-syms))]
@@ -153,6 +149,17 @@
                                (if (> new-sub-id 1e9)
                                  0
                                  new-sub-id))))))
+
+(defn get-non-numeric-part [path]
+  (take-while number? path))
+
+(defn update-numeric? [updated-path sub-path]
+  (let [u-front (get-non-numeric-part updated-path)
+        s-front (get-non-numeric-part sub-path)]
+    (if (or (not (seq u-front)) (not (seq s-front)))
+      true
+      (let [[relationship _] (u/relationship-info u-front s-front)]
+        (not= :sibling relationship)))))
 
 (defn update-sub?* [updated-paths sub-path]
   (reduce (fn [acc updated-path]
@@ -170,8 +177,11 @@
               (#{:vivo/subscriber-id :vivo/component-id} sub-path)
               false ;; subscriber/component-id never gets updated
 
-              (some number? updated-path) ;; Numeric paths are complex...
-              (reduced true)
+              (or (some number? updated-path)
+                  (some number? sub-path))
+              (if (update-numeric? updated-path sub-path)
+                (reduced true)
+                false)
 
               :else
               (let [[relationship _] (u/relationship-info
@@ -184,16 +194,8 @@
 
 (defn update-sub? [updated-paths sub-paths]
   (reduce (fn [acc sub-path]
-            (cond
-              (#{:vivo/subscriber-id :vivo/component-id} sub-path)
-              false
-
-              (or (and (sequential? sub-path) ;; Not :vivo/subject-id, etc.
-                       (some number? sub-path)) ;; Numeric paths are complex..
-                  (update-sub?* updated-paths sub-path))
+            (if (update-sub?* updated-paths sub-path)
               (reduced true)
-
-              :else
               false))
           false sub-paths))
 
@@ -212,7 +214,7 @@
                        *local-state *subscriber-state *sub-id->sub *cur-db-id
                        *last-sub-id *conn-initialized? *stopped? *ssr-info
                        *fp->schema *subject-id *custom-id->subscriber-id
-                       *subscriber-id->custom-id]
+                       *subscriber-id->custom-id *subscriber-id->last-state]
   u/ISchemaStore
   (<fp->schema [this fp]
     (when-not (int? fp)
@@ -298,16 +300,17 @@
     (log-info "Vivo client stopped."))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name sub-id]
+    [this sub-map-or-ordered-pairs subscriber-name sub-id resolution-map]
     (u/<make-state-info this sub-map-or-ordered-pairs subscriber-name sub-id
-                        @*local-state @*cur-db-id))
+                        resolution-map @*local-state @*cur-db-id))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name sub-id local-state db-id]
+    [this sub-map-or-ordered-pairs subscriber-name sub-id resolution-map
+     local-state db-id]
     (au/go
       ;; TODO: Optimize by doing <get-in-sys-state calls in parallel
       ;;       where possible (non-dependent)
-      (let [init {:state {}
+      (let [init {:state resolution-map
                   :paths []}]
         (if-not (seq sub-map-or-ordered-pairs)
           init
@@ -348,12 +351,13 @@
                   new-acc
                   (recur new-acc (inc i))))))))))
 
-  (subscribe! [this sub-map cur-state update-fn* subscriber-name]
+  (subscribe!
+    [this sub-map cur-state update-fn* subscriber-name resolution-map]
     (u/check-sub-map subscriber-name "subscriber" sub-map)
     (let [sub-id (get-sub-id *last-sub-id)
           ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
           <make-si (partial u/<make-state-info this ordered-pairs
-                            subscriber-name sub-id)]
+                            subscriber-name sub-id resolution-map)]
       (ca/go
         (try
           (when (au/<? (u/<wait-for-conn-init this))
@@ -362,9 +366,13 @@
                               (ca/go
                                 (try
                                   (let [si (au/<? (<make-si local-state db-id))
-                                        {uf-state :state} si]
-                                    (when (and (not= cur-state uf-state)
+                                        {uf-state :state} si
+                                        last-state (@*subscriber-id->last-state
+                                                    sub-id)]
+                                    (when (and (not= last-state uf-state)
                                                (@*sub-id->sub sub-id))
+                                      (swap! *subscriber-id->last-state assoc
+                                             sub-id uf-state)
                                       (update-fn* uf-state)))
                                   (catch #?(:cljs js/Error :clj Throwable) e
                                     (log-error
@@ -372,6 +380,7 @@
                                           (u/ex-msg-and-stacktrace e)))))))
                   sub (u/sym-map paths update-fn)]
               (swap! *sub-id->sub assoc sub-id sub)
+              (swap! *subscriber-id->last-state assoc sub-id state)
               (when-not (= cur-state state)
                 (update-fn* state))))
           (catch #?(:cljs js/Error :clj Exception) e
@@ -384,6 +393,7 @@
            (fn [m]
              (dissoc m sub-id)))
     (swap! *subscriber-state dissoc sub-id)
+    (swap! *subscriber-id->last-state dissoc sub-id)
     (when-let [custom-id (@*subscriber-id->custom-id sub-id)]
       (swap! *subscriber-id->custom-id dissoc sub-id)
       (swap! *custom-id->subscriber-id dissoc custom-id))
@@ -643,6 +653,7 @@
         *subject-id (atom nil)
         *custom-id->subscriber-id (atom {})
         *subscriber-id->custom-id (atom {})
+        *subscriber-id->last-state (atom {})
         path->schema-cache (sr/stockroom 100)
         state-cache (sr/stockroom state-cache-num-keys)
         sub-map->op-cache (sr/stockroom 500)
@@ -660,7 +671,7 @@
                          *local-state *subscriber-state *sub-id->sub *cur-db-id
                          *last-sub-id *conn-initialized? *stopped? *ssr-info
                          *fp->schema *subject-id *custom-id->subscriber-id
-                         *subscriber-id->custom-id)]
+                         *subscriber-id->custom-id *subscriber-id->last-state)]
     (u/start-update-loop vc)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed

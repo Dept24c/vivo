@@ -47,19 +47,20 @@
   (<handle-updates [this updates])
   (<handle-sys-state-changed [this arg metadata])
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name sub-id]
-    [this sub-map-or-ordered-pairs subscriber-name sub-id local-state db-id])
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map sub-id]
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map sub-id
+     local-state db-id])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
   (get-subscriber-id [this custom-id])
   (log-in! [this identifier secret cb])
   (log-out! [this])
-  (notify-subs [this updated-paths notify-all])
+  (notify-subs [this updatedpaths notify-all])
   (register-subscriber-id! [this custom-id subscriber-id])
   (set-subject-id [this subject-id])
   (shutdown! [this])
   (start-update-loop [this])
-  (subscribe! [this sub-map cur-state update-fn subscriber-name])
+  (subscribe! [this sub-map cur-state update-fn subscriber-name resolution-map])
   (unsubscribe! [this sub-id])
   (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
@@ -369,40 +370,6 @@
                           :ret l/boolean-schema
                           :sender :admin-client}}})
 
-(defn get-undefined-syms [sub-map]
-  (let [defined-syms (set (keys sub-map))]
-    (vec (reduce-kv
-          (fn [acc sym path]
-            (cond
-              (sequential? path)
-              (do
-                (let [[head & tail] path]
-                  (when (and (#{:component :subscriber} head)
-                             (not (seq tail)))
-                    (throw (ex-info "Missing subscriber/component id in path."
-                                    (sym-map sub-map path)))))
-                (reduce (fn [acc* k]
-                          (if-not (symbol? k)
-                            acc*
-                            (if (defined-syms k)
-                              acc*
-                              (conj acc* k))))
-                        acc path))
-
-              (#{:vivo/subject-id
-                 :vivo/subscriber-id
-                 :vivo/component-id} path)
-              acc
-
-              :else
-              (throw (ex-info
-                      (str "Bad path. Paths must be a sequence or  "
-                           "one of the special :vivo keywords. ("
-                           ":vivo/subject-id, :vivo/subscriber-id, "
-                           "or :vivo/component-id)")
-                      (sym-map sym path sub-map)))))
-          #{} sub-map))))
-
 (defn check-sub-map
   [subscriber-name subscriber-type sub-map]
   (when-not (map? sub-map)
@@ -411,14 +378,28 @@
   (when-not (pos? (count sub-map))
     (throw (ex-info "The sub-map parameter must contain at least one entry."
                     (sym-map sub-map))))
-  (let [undefined-syms (get-undefined-syms sub-map)]
-    (when (seq undefined-syms)
-      (throw
-       (ex-info
-        (str "Undefined symbol(s) in subscription map for " subscriber-type
-             " " subscriber-name "`. These symbols are used in subscription "
-             "keypaths, but are not defined: " undefined-syms)
-        (sym-map undefined-syms sub-map))))))
+  (doseq [[sym path] sub-map]
+    (when-not (symbol? sym)
+      (throw (ex-info (str "Bad key `" sym "` in subscription map. Keys must "
+                           "be symbols.")
+                      {:bad-key sym})))
+    (cond
+      (sequential? path)
+      (let [[head & tail] path]
+        (when (and (#{:component :subscriber} head)
+                   (not (seq tail)))
+          (throw (ex-info "Missing subscriber/component id in path."
+                          (sym-map sub-map path)))))
+
+      (not (#{:vivo/subject-id
+              :vivo/subscriber-id
+              :vivo/component-id} path))
+      (throw (ex-info
+              (str "Bad path. Paths must be either a sequence or  "
+                   "one of the special :vivo keywords. ("
+                   ":vivo/subject-id, :vivo/subscriber-id, "
+                   "or :vivo/component-id)")
+              (sym-map sym path sub-map))))))
 
 (defn local-or-vivo-only? [sub-map]
   (reduce (fn [acc path]

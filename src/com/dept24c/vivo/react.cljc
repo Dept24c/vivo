@@ -115,7 +115,7 @@
                   (doseq [sub-map needed]
                     (let [{:keys [state]} (au/<? (u/<make-state-info
                                                   vc sub-map
-                                                  component-name nil))]
+                                                  component-name nil {}))]
                       (swap! *ssr-info update
                              :resolved assoc sub-map state)))
                   (swap! *ssr-info assoc :needed #{})
@@ -129,15 +129,17 @@
 
 (defn use-vivo-state
   "React hook for Vivo"
-  [vc sub-map component-name]
-  #?(:cljs
-     (let [[state update-fn] (use-state nil)
-           effect (fn []
-                    (let [sub-id (u/subscribe! vc sub-map state update-fn
-                                               component-name)]
-                      #(u/unsubscribe! vc sub-id)))]
-       (use-effect effect #js [])
-       state)))
+  ([vc sub-map component-name]
+   (use-vivo-state vc sub-map component-name {}))
+  ([vc sub-map component-name resolution-map]
+   #?(:cljs
+      (let [[state update-fn] (use-state nil)
+            effect (fn []
+                     (let [sub-id (u/subscribe! vc sub-map state update-fn
+                                                component-name resolution-map)]
+                       #(u/unsubscribe! vc sub-id)))]
+        (use-effect effect #js [])
+        state))))
 
 
 (defn use-on-outside-click

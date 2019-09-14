@@ -13,9 +13,9 @@
       (clojure.lang ExceptionInfo))))
 
 (deftest test-parse-def-component-args-no-docstring
-  (let [sub-map '{x [:local :c]}
-        arglist '[vc a b]
-        args [sub-map arglist]
+  (let [arglist '[vc a b]
+        sub-map '{x [:local :c]}
+        args [arglist sub-map]
         expected {:docstring nil
                   :sub-map sub-map
                   :arglist arglist
@@ -24,9 +24,9 @@
 
 (deftest test-parse-def-component-args-with-docstring
   (let [docstring "This is my component"
-        sub-map '{x [:local :c]}
         arglist '[vc a b]
-        args [docstring sub-map arglist]
+        sub-map '{x [:local :c]}
+        args [docstring arglist sub-map]
         expected {:docstring docstring
                   :sub-map sub-map
                   :arglist arglist
@@ -36,7 +36,7 @@
 (deftest test-parse-def-component-args-bad-arg
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
-       #"The sub-map parameter must be a map"
+       #"The argument list must be a vector"
        (macro-impl/parse-def-component-args 'foo nil))))
 
 (deftest test-check-arglist-no-vc
@@ -62,13 +62,7 @@
        #?(:clj ExceptionInfo :cljs js/Error)
        #"Illegal repeated symbol"
        (macro-impl/parse-def-component-args
-        'foo ['{a [:local :a]} '[vc a]]))))
-
-(deftest test-check-sub-map-undefined-sym
-  (is (thrown-with-msg?
-       #?(:clj ExceptionInfo :cljs js/Error)
-       #"Undefined symbol\(s\) in subscription map"
-       (u/check-sub-map 'foo "component" '{a [:b c]}))))
+        'foo ['[vc a] '{a [:local :a]}]))))
 
 (deftest test-check-constructor-args
   (is (thrown-with-msg?
@@ -104,7 +98,7 @@
         bad-sub-map {:not-a-symbol [:local :user-id]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"All keys in sub-map must be symbols. Got `:not-a-symbol`"
+         #"Keys must be symbols"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-bad-path-in-sub-map
@@ -113,14 +107,6 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Only integers, keywords, symbols, and strings are valid path keys"
-         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
-
-(deftest test-bad-symbol-in-sub-map
-  (let [vc (vivo/vivo-client)
-        bad-sub-map '{user-id [:local a-symbol-which-is-not-defined]}]
-    (is (thrown-with-msg?
-         #?(:clj ExceptionInfo :cljs js/Error)
-         #"Undefined symbol"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-subscribe-to-subscriber-state-without-subscriber-id
@@ -475,6 +461,26 @@
                                           :op :insert-after
                                           :arg {:title new-title}}]))
          (is (= new-title (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-resolution-map
+  (au/test-async
+   10000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             book-id "123"
+             book-title "Treasure Island"
+             resolution-map {'book-id book-id}
+             sub-map '{title [:local :books book-id :title]}
+             update-fn #(ca/put! ch (% 'title))]
+         (au/<? (vivo/<update-state! vc [{:path [:local :books book-id]
+                                          :op :set
+                                          :arg {:title book-title}}]))
+         (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
+         (is (= book-title (au/<? ch))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 

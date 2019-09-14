@@ -36,16 +36,16 @@
 
 (defn parse-def-component-args [component-name args]
   (let [parts (if (string? (first args))
-                (let [[docstring sub-map arglist & body] args]
-                  (u/sym-map docstring sub-map arglist body))
+                (let [[docstring arglist sub-map & body] args]
+                  (u/sym-map docstring arglist sub-map body))
                 (let [docstring nil
-                      [sub-map arglist & body] args]
-                  (u/sym-map docstring sub-map arglist body)))
+                      [arglist sub-map & body] args]
+                  (u/sym-map docstring arglist sub-map body)))
         {:keys [docstring sub-map arglist body]} parts
+        _ (check-arglist component-name arglist)
+        _ (u/check-sub-map component-name "component" sub-map)
         repeated-syms (vec (set/intersection (set (keys sub-map))
                                              (set arglist)))]
-    (u/check-sub-map component-name "component" sub-map)
-    (check-arglist component-name arglist)
     (when (seq repeated-syms)
       (throw
        (ex-info (str "Illegal repeated symbol(s) in component "
@@ -66,8 +66,10 @@
        (check-constructor-args ~cname '~arglist ~(count arglist))
        (com.dept24c.vivo.react/create-element
         (fn ~component-name [props#]
-          (let [vivo-state# (com.dept24c.vivo.react/use-vivo-state
-                             ~'vc '~sub-map ~cname)
+          (let [resolution-map# (zipmap (next '~arglist)
+                                        (next (vector ~@arglist)))
+                vivo-state# (com.dept24c.vivo.react/use-vivo-state
+                             ~'vc '~sub-map ~cname resolution-map#)
                 {:syms [~@sub-syms]} vivo-state#]
             (when (or vivo-state# ~render-nil-state?)
               ~@body)))))))
