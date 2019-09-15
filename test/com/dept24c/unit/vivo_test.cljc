@@ -492,21 +492,17 @@
        (let [vc (vivo/vivo-client)
              ch (ca/chan 1)
              my-book-ids ["123" "456"]
-             resolution-map {'my-book-ids my-book-ids}
-             book123 {:title "Treasure Island"}
-             book456 {:title "Kidnapped"}
-             book789 {:title "Dr Jekyll and Mr Hyde"}
-             books {"123" book123
-                    "456" book456
-                    "789" book789}
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}book456
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
              sub-map '{my-books [:local :books my-book-ids]}
              update-fn #(ca/put! ch ('my-books %))
-             expected (mapv books my-book-ids)]
+             expected (set (mapv books my-book-ids))]
          (au/<? (vivo/<update-state! vc [{:path [:local :books]
                                           :op :set
                                           :arg books}]))
          (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
-         (is (= expected (au/<? ch))))
+         (is (= expected (set (au/<? ch)))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 

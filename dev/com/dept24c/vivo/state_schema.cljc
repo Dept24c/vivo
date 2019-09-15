@@ -6,21 +6,15 @@
   [:name l/string-schema]
   [:nickname l/string-schema])
 
-(l/def-int-map-schema users-schema
-  user-schema)
-
 (l/def-record-schema msg-schema
-  [:user-id l/int-schema]
+  [:user-id l/string-schema]
   [:text l/string-schema])
 
 (l/def-array-schema msgs-schema msg-schema)
-
-(l/def-int-map-schema user-id-to-msgs-schema
-  msgs-schema)
 
 (l/def-record-schema state-schema
   [:app-name l/string-schema]
   [:msgs msgs-schema]
   [:secret l/string-schema]
-  [:users users-schema]
-  [:user-id-to-msgs user-id-to-msgs-schema])
+  [:users (l/map-schema user-schema)]
+  [:user-id-to-msgs (l/map-schema msgs-schema)])

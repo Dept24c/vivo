@@ -460,6 +460,24 @@
                          '() template)))
           (cartesian-product colls))))
 
+(defn path->schema-path [path]
+  (reduce (fn [acc item]
+            (conj acc (if (sequential? item)
+                        (first item)
+                        item)))
+          [] path))
+
+(defn path->schema [path->schema-cache state-schema path]
+  (let [sch-path (path->schema-path path)
+        seq-path? (not= path sch-path)]
+    (or (sr/get path->schema-cache path)
+        (let [sch (l/schema-at-path state-schema sch-path)
+              sch* (if seq-path?
+                     (l/array-schema sch)
+                     sch)]
+          (sr/put! path->schema-cache path sch*)
+          sch*))))
+
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 
 (defn jvm? []

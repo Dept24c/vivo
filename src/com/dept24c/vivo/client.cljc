@@ -252,10 +252,8 @@
   (<deserialize-value [this path ret]
     (au/go
       (when ret
-        (let [value-sch (or (sr/get path->schema-cache path)
-                            (let [sch (l/schema-at-path sys-state-schema path)]
-                              (sr/put! path->schema-cache path sch)
-                              sch))
+        (let [value-sch (u/path->schema path->schema-cache sys-state-schema
+                                        path)
               writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
           (l/deserialize value-sch writer-sch (:bytes ret))))))
 

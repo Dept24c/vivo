@@ -22,7 +22,7 @@
 
 (def user-bo {:name "Bo Johnson"
               :nickname "Bo"})
-(def user-bo-id 1)
+(def user-bo-id "1")
 
 (u/configure-capsule-logging :info)
 
@@ -100,16 +100,41 @@
            (is (= expected-all-msgs (au/<? all-msgs-ch)))
            (is (= app-name (au/<? app-name-ch)))
            (is (= msg2 (au/<? last-msg-ch)))
-           (is (= {1 [{:text "This is great" :user-id 1}
-                      {:text "A msg" :user-id 1}]}
+           (is (= {"1" [{:text "This is great" :user-id "1"}
+                        {:text "A msg" :user-id "1"}]}
                   (au/<? index-ch)))
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys :msgs -1]
                                     :op :remove}]))))
            (is (= msg (au/<? last-msg-ch)))
            (is (= 1 (count (au/<? all-msgs-ch))))
-           (is (= {1 [{:text "A msg" :user-id 1}]}
+           (is (= {"1" [{:text "A msg" :user-id "1"}]}
                   (au/<? index-ch))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
+(deftest test-sequence-join
+  (au/test-async
+   10000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [ch (ca/chan 1)
+               core-user-ids ["123" "789"]
+               resolution-map {'core-user-ids core-user-ids}
+               users {"123" {:name "Alice" :nickname "A"}
+                      "456" {:name "Bob" :nickname "Bobby"}
+                      "789" {:name "Candace" :nickname "Candy"}}
+               sub-map '{core-users [:sys :users core-user-ids]}
+               update-fn #(ca/put! ch ('core-users %))
+               expected (set (mapv users core-user-ids))]
+           (au/<? (vivo/<update-state! vc [{:path [:sys :users]
+                                            :op :set
+                                            :arg users}]))
+           (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
+           (is (= expected (set (au/<? ch)))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -121,29 +146,22 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (println 1)
          (let [ret (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
-               _ (println 2)
                state-ch (ca/chan)
                sub-map '{subject-id :vivo/subject-id}
                sub-id (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
-               _ (println 3)
                login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
                                                tu/test-secret))]
-           (println 4)
            (when-not login-ret
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))
-           (println 5)
            (is (= tu/test-subject-id ('subject-id (au/<? state-ch))))
            (vivo/log-out! vc)
-           (println 6)
            (is (= {'subject-id nil} (au/<? state-ch)))
-           (println 7)
            (vivo/unsubscribe! vc sub-id))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected (u/ex-msg e))))
