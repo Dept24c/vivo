@@ -208,6 +208,12 @@
               k))
           path)))
 
+(defn get-in-state [state path]
+  (if-not (some sequential? path)
+    (:val (commands/get-in-state state path))
+    (mapv #(get-in-state state %)
+          (u/expand-path path))))
+
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
                        log-info log-error state-cache sub-map->op-cache
                        path->schema-cache update-ch subject-id-ch
@@ -333,16 +339,15 @@
                         sub-id
 
                         (= :local path-head)
-                        (-> (commands/get-in-state local-state path-tail)
-                            (:val))
+                        (get-in-state local-state path-tail)
+
 
                         (= :sys path-head)
                         (when db-id
                           (au/<? (u/<get-in-sys-state this db-id path-tail)))
 
                         (#{:component :subscriber} path-head)
-                        (-> (commands/get-in-state @*subscriber-state path-tail)
-                            (:val)))
+                        (get-in-state @*subscriber-state path-tail))
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
                                 (update :paths conj (or resolved-path

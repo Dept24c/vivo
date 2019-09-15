@@ -209,6 +209,24 @@
                                      :arg new-branches}]))
       (au/<? (u/<delete-reference! storage branch-reference)))))
 
+(defn path->schema-path [path]
+  (reduce (fn [acc item]
+            (conj acc (if (sequential? item)
+                        (first item)
+                        item)))
+          [] path))
+
+(defn path->schema [path->schema-cache state-schema path]
+  (let [sch-path (path->schema-path path)
+        seq-path? (not= path sch-path)]
+    (or (sr/get path->schema-cache path)
+        (let [sch (l/schema-at-path state-schema sch-path)
+              sch* (if seq-path?
+                     (l/array-schema sch)
+                     sch)]
+          (sr/put! path->schema-cache path sch*)
+          sch*))))
+
 (defrecord VivoServer [admin-secret
                        authorization-fn
                        log-error
@@ -366,7 +384,20 @@
                       perm-storage)
             data-id (au/<? (u/<get-in storage db-id u/db-info-schema
                                       [:data-id]))]
-        (au/<? (u/<get-in storage data-id state-schema path*)))))
+        (if-not (some sequential? path)
+          (au/<? (u/<get-in storage data-id state-schema path*))
+          (let [expanded-paths (u/expand-path path*)
+                num-results (count expanded-paths)]
+            ;; Use loop to stay in the go block
+            (loop [out []
+                   i 0]
+              (let [v (au/<? (u/<get-in storage data-id state-schema
+                                        (nth expanded-paths i)))
+                    new-out (conj v)
+                    new-i (inc i)]
+                (if (= num-results new-i)
+                  new-out
+                  (recur new-out new-i)))))))))
 
   (<get-log [this branch limit]
     (au/go
@@ -408,10 +439,7 @@
         (if-not authorized?
           :vivo/unauthorized
           (when v
-            (let [schema (or (sr/get path->schema-cache path)
-                             (let [sch (l/schema-at-path state-schema path)]
-                               (sr/put! path->schema-cache path sch)
-                               sch))
+            (let [schema (path->schema path->schema-cache state-schema path)
                   fp (au/<? (u/<schema->fp perm-storage schema))]
               {:fp fp
                :bytes (l/serialize schema v)}))))))

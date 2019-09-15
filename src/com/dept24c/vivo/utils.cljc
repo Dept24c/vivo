@@ -251,8 +251,20 @@
   l/string-schema
   l/long-schema)
 
+(def path-item-sequence
+  (l/array-schema path-item-schema))
+
 (l/def-array-schema path-schema
   path-item-schema)
+
+(l/def-union-schema augmented-path-item-schema
+  l/keyword-schema
+  l/string-schema
+  l/long-schema
+  path-item-sequence)
+
+(l/def-array-schema augmented-path-schema
+  augmented-path-item-schema)
 
 (l/def-record-schema serialized-value-schema
   [:fp :required fp-schema]
@@ -270,7 +282,7 @@
 
 (l/def-record-schema get-state-arg-schema
   [:db-id db-id-schema]
-  [:path path-schema])
+  [:path augmented-path-schema])
 
 (l/def-enum-schema unauthorized-schema
   :vivo/unauthorized)
@@ -410,6 +422,43 @@
               (reduced false)))
           true (vals sub-map)))
 
+(defn cartesian-product [colls]
+  (if (empty? colls)
+    '(())
+    (for [more (cartesian-product (rest colls))
+          x (first colls)]
+      (cons x more))))
+
+(defn parse-path [path]
+  (let [info (reduce
+              (fn [{:keys [template in-progress colls coll-index] :as acc} part]
+                (if-not (sequential? part)
+                  (update acc :in-progress conj part)
+                  (cond-> acc
+                    (seq in-progress) (update :template conj in-progress)
+                    (seq in-progress) (assoc :in-progress [])
+                    true (update :colls conj part)
+                    true (update :template conj coll-index)
+                    true (update :coll-index inc))))
+              {:template []
+               :in-progress []
+               :colls []
+               :coll-index 0}
+              path)
+        {:keys [in-progress]} info]
+    (cond-> info
+      (seq in-progress) (update :template conj in-progress)
+      true (select-keys [:template :colls]))))
+
+(defn expand-path [path]
+  (let [{:keys [template colls]} (parse-path path)]
+    (mapv (fn [product]
+            (vec (reduce (fn [acc part]
+                           (concat acc (if (number? part)
+                                         [(nth product part)]
+                                         part)))
+                         '() template)))
+          (cartesian-product colls))))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

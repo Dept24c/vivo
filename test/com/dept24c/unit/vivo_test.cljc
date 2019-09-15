@@ -484,6 +484,32 @@
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
+(deftest test-sequence-join
+  (au/test-async
+   10000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             my-book-ids ["123" "456"]
+             resolution-map {'my-book-ids my-book-ids}
+             book123 {:title "Treasure Island"}
+             book456 {:title "Kidnapped"}
+             book789 {:title "Dr Jekyll and Mr Hyde"}
+             books {"123" book123
+                    "456" book456
+                    "789" book789}
+             sub-map '{my-books [:local :books my-book-ids]}
+             update-fn #(ca/put! ch ('my-books %))
+             expected (mapv books my-book-ids)]
+         (au/<? (vivo/<update-state! vc [{:path [:local :books]
+                                          :op :set
+                                          :arg books}]))
+         (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
+         (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
 (deftest test-relationship
   (are [ret ks1 ks2] (= ret (u/relationship-info ks1 ks2))
     [:equal nil] [] []
@@ -504,28 +530,18 @@
     [:sibling nil] [:a :b] [:a :c]
     [:sibling nil] [:a :c :d] [:a :b :d]))
 
-#_
-(deftest test-collection-join
-  (au/test-async
-   10000
-   (ca/go
-     (try
-       (let [my-deal-ids [42 911 1024]
-             deals {1 "deal1"
-                    2 "deal2"
-                    42 "deal42"
-                    911 "deal911"
-                    1024 "deal1024"}
-             vc (vivo/vivo-client)
-             ch (ca/chan 1)
-             sub-map '{my-deal-ids [:local :my-deal-ids]
-                       my-deals [:local :deals my-deal-ids]}
-             update-fn #(ca/put! ch %)
-             expected (select-keys deals my-deal-ids)]
-         (au/<? (vivo/<update-state! vc [{:path [:local]
-                                          :op :set
-                                          :arg (u/sym-map my-deal-ids deals)}]))
-         (vivo/subscribe! vc sub-map nil update-fn "test")
-         (is (= expected (au/<? ch))))
-       (catch #?(:clj Exception :cljs js/Error) e
-         (is (= :unexpected e)))))))
+(deftest test-expand-path-1
+  (let [path [:b [1 2] :c [3 5] :d]
+        expected #{[:b 1 :c 3 :d]
+                   [:b 1 :c 5 :d]
+                   [:b 2 :c 3 :d]
+                   [:b 2 :c 5 :d]}]
+    (is (= expected (set (u/expand-path path))))))
+
+(deftest test-expand-path-2
+  (let [path [[1 2][3 5] :d]
+        expected #{[1 3 :d]
+                   [1 5 :d]
+                   [2 3 :d]
+                   [2 5 :d]}]
+    (is (= expected (set (u/expand-path path))))))
