@@ -211,8 +211,9 @@
 (defn get-in-state [state path]
   (if-not (some sequential? path)
     (:val (commands/get-in-state state path))
-    (mapv #(get-in-state state %)
-          (u/expand-path path))))
+    (reduce-kv (fn [acc k expanded-path]
+                 (assoc acc k (get-in-state state expanded-path)))
+               {} (u/expand-path path))))
 
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
                        log-info log-error state-cache sub-map->op-cache
@@ -254,8 +255,13 @@
       (when ret
         (let [value-sch (u/path->schema path->schema-cache sys-state-schema
                                         path)
-              writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
-          (l/deserialize value-sch writer-sch (:bytes ret))))))
+              writer-sch (au/<? (u/<fp->schema this (:fp ret)))
+              v (l/deserialize value-sch writer-sch (:bytes ret))]
+          (if-not (some sequential? path)
+            v
+            (reduce-kv (fn [acc k v]
+                         (assoc acc (u/str->edn k) v))
+                       {} v))))))
 
   (set-subject-id [this subject-id]
     (reset! *subject-id subject-id)

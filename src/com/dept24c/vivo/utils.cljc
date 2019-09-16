@@ -452,13 +452,17 @@
 
 (defn expand-path [path]
   (let [{:keys [template colls]} (parse-path path)]
-    (mapv (fn [product]
-            (vec (reduce (fn [acc part]
-                           (concat acc (if (number? part)
-                                         [(nth product part)]
-                                         part)))
-                         '() template)))
-          (cartesian-product colls))))
+    (reduce (fn [acc combo]
+              (let [k (if (= 1 (count combo))
+                        (first combo)
+                        (vec combo))]
+                (assoc acc k
+                       (vec (reduce (fn [acc* part]
+                                      (concat acc* (if (number? part)
+                                                     [(nth combo part)]
+                                                     part)))
+                                    '() template)))))
+            {} (cartesian-product colls))))
 
 (defn path->schema-path [path]
   (reduce (fn [acc item]
@@ -473,7 +477,7 @@
     (or (sr/get path->schema-cache path)
         (let [sch (l/schema-at-path state-schema sch-path)
               sch* (if seq-path?
-                     (l/array-schema sch)
+                     (l/map-schema sch)
                      sch)]
           (sr/put! path->schema-cache path sch*)
           sch*))))

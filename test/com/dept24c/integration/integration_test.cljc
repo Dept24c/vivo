@@ -127,14 +127,15 @@
                users {"123" {:name "Alice" :nickname "A"}
                       "456" {:name "Bob" :nickname "Bobby"}
                       "789" {:name "Candace" :nickname "Candy"}}
-               sub-map '{core-users [:sys :users core-user-ids]}
-               update-fn #(ca/put! ch ('core-users %))
-               expected (set (mapv users core-user-ids))]
+               sub-map '{core-user-names [:sys :users core-user-ids :name]}
+               update-fn #(ca/put! ch ('core-user-names %))
+               expected {"123" "Alice"
+                         "789" "Candace"}]
            (au/<? (vivo/<update-state! vc [{:path [:sys :users]
                                             :op :set
                                             :arg users}]))
            (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
-           (is (= expected (set (au/<? ch)))))
+           (is (= expected (au/<? ch))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
