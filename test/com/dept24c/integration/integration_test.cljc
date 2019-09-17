@@ -77,7 +77,6 @@
                             "test3")
            (vivo/subscribe! vc '{uid->msgs [:sys :user-id-to-msgs]} nil
                             (fn [{:syms [uid->msgs] :as df}]
-                              (println "UUUUUUUUUUUUUUUUU Entering uf. df:" df)
                               (if (seq uid->msgs)
                                 (ca/put! index-ch uid->msgs)
                                 (ca/put! index-ch :no-u->m)))
