@@ -43,7 +43,8 @@
   (<log-in [this arg metadata])
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
-  (<modify-db [this <update-fn msg updated-paths metadata])
+  (<modify-db [this <update-fn msg metadata])
+  (<serialize-update-info-values [this update-infos])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
   (<update-state [this arg metadata])
@@ -70,66 +71,86 @@
   [requested-subject-id identifier hashed-secret dbi storage subject-id]
   (au/go
     (let [{:keys [identifier-to-subject-id-data-id
-                  subject-id-to-hashed-secret-data-id]} dbi]
-      (assoc dbi
-             :subject-id-to-hashed-secret-data-id
-             (au/<? (u/<update storage
-                               subject-id-to-hashed-secret-data-id
-                               u/string-map-schema
-                               [{:path [requested-subject-id]
-                                 :op :set
-                                 :arg hashed-secret}]))
-             :identifier-to-subject-id-data-id
-             (au/<? (u/<update storage
-                               identifier-to-subject-id-data-id
-                               u/string-map-schema
-                               [{:path [identifier]
-                                 :op :set
-                                 :arg requested-subject-id}]))))))
+                  subject-id-to-hashed-secret-data-id]} dbi
+          new-dbi (assoc dbi
+                         :subject-id-to-hashed-secret-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            subject-id-to-hashed-secret-data-id
+                                            u/string-map-schema
+                                            [{:path [requested-subject-id]
+                                              :op :set
+                                              :arg hashed-secret}]
+                                            nil)))
+                         :identifier-to-subject-id-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            identifier-to-subject-id-data-id
+                                            u/string-map-schema
+                                            [{:path [identifier]
+                                              :op :set
+                                              :arg requested-subject-id}]
+                                            nil))))]
+      {:dbi new-dbi
+       :update-infos []})))
 
 (defn <add-subject-identifier-update-fn [identifier dbi storage subject-id]
   (au/go
-    (let [{:keys [identifier-to-subject-id-data-id]} dbi]
-      (assoc dbi
-             :identifier-to-subject-id-data-id
-             (au/<? (u/<update storage
-                               identifier-to-subject-id-data-id
-                               u/string-map-schema
-                               [{:path [identifier]
-                                 :op :set
-                                 :arg subject-id}]))))))
+    (let [{:keys [identifier-to-subject-id-data-id]} dbi
+          new-dbi (assoc dbi
+                         :identifier-to-subject-id-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            identifier-to-subject-id-data-id
+                                            u/string-map-schema
+                                            [{:path [identifier]
+                                              :op :set
+                                              :arg subject-id}]
+                                            nil))))]
+      {:dbi new-dbi
+       :update-infos []})))
 
 (defn <change-secret-update-fn [hashed-secret dbi storage subject-id]
   (au/go
-    (let [{:keys [subject-id-to-hashed-secret-data-id]} dbi]
-      (assoc dbi
-             :subject-id-to-hashed-secret-data-id
-             (au/<? (u/<update storage
-                               subject-id-to-hashed-secret-data-id
-                               u/string-map-schema
-                               [{:path [subject-id]
-                                 :op :set
-                                 :arg hashed-secret}]))))))
+    (let [{:keys [subject-id-to-hashed-secret-data-id]} dbi
+          new-dbi (assoc dbi
+                         :subject-id-to-hashed-secret-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            subject-id-to-hashed-secret-data-id
+                                            u/string-map-schema
+                                            [{:path [subject-id]
+                                              :op :set
+                                              :arg hashed-secret}]
+                                            nil))))]
+      {:dbi new-dbi
+       :update-infos []})))
 
 (defn <log-in-update-fn [token token-info dbi storage subject-id]
   (au/go
     (let [{:keys [token-to-token-info-data-id
-                  subject-id-to-tokens-data-id]} dbi]
-      (assoc dbi
-             :token-to-token-info-data-id
-             (au/<? (u/<update storage
-                               token-to-token-info-data-id
-                               u/token-map-schema
-                               [{:path [token]
-                                 :op :set
-                                 :arg token-info}]))
-             :subject-id-to-tokens-data-id
-             (au/<? (u/<update storage
-                               subject-id-to-tokens-data-id
-                               u/subject-id-to-tokens-schema
-                               [{:path [subject-id -1]
-                                 :op :insert-after
-                                 :arg token}]))))))
+                  subject-id-to-tokens-data-id]} dbi
+          new-dbi (assoc dbi
+                         :token-to-token-info-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            token-to-token-info-data-id
+                                            u/token-map-schema
+                                            [{:path [token]
+                                              :op :set
+                                              :arg token-info}]
+                                            nil)))
+                         :subject-id-to-tokens-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            subject-id-to-tokens-data-id
+                                            u/subject-id-to-tokens-schema
+                                            [{:path [subject-id -1]
+                                              :op :insert-after
+                                              :arg token}]
+                                            nil))))]
+      {:dbi new-dbi
+       :update-infos []})))
 
 (defn <log-out-update-fn [dbi storage subject-id]
   (au/go
@@ -137,27 +158,34 @@
                   subject-id-to-tokens-data-id]} dbi
           tokens (au/<? (u/<get-in storage subject-id-to-tokens-data-id
                                    u/subject-id-to-tokens-schema
-                                   [subject-id]))
+                                   [subject-id] nil))
           dbi* (assoc dbi
                       :subject-id-to-tokens-data-id
-                      (au/<? (u/<update storage
-                                        subject-id-to-tokens-data-id
-                                        u/subject-id-to-tokens-schema
-                                        [{:path [subject-id]
-                                          :op :remove}])))]
-      ;; Use loop here to stay in go block
-      (loop [new-dbi dbi*
-             [token & more] tokens]
-        (let [new-dbi* (assoc new-dbi
-                              :token-to-token-info-data-id
-                              (au/<? (u/<update storage
-                                                token-to-token-info-data-id
-                                                u/token-map-schema
-                                                [{:path [token]
-                                                  :op :remove}])))]
-          (if (seq more)
-            (recur new-dbi* more)
-            new-dbi*))))))
+                      (:new-data-id
+                       (au/<? (u/<update storage
+                                         subject-id-to-tokens-data-id
+                                         u/subject-id-to-tokens-schema
+                                         [{:path [subject-id]
+                                           :op :remove}]
+                                         nil))))
+          ;; Use loop here to stay in go block
+          new-dbi (loop [new-dbi dbi*
+                         [token & more] tokens]
+                    (let [new-dbi* (assoc new-dbi
+                                          :token-to-token-info-data-id
+                                          (:new-data-id
+                                           (au/<? (u/<update
+                                                   storage
+                                                   token-to-token-info-data-id
+                                                   u/token-map-schema
+                                                   [{:path [token]
+                                                     :op :remove}]
+                                                   nil))))]
+                      (if (seq more)
+                        (recur new-dbi* more)
+                        new-dbi*)))]
+      {:dbi new-dbi
+       :update-infos []})))
 
 (defn <delete-token-update-fn [token dbi storage subject-id]
   (au/go
@@ -165,37 +193,47 @@
                   subject-id-to-tokens-data-id]} dbi
           tokens (au/<? (u/<get-in storage subject-id-to-tokens-data-id
                                    u/subject-id-to-tokens-schema
-                                   [subject-id]))
+                                   [subject-id]
+                                   nil))
           new-tokens (-> (set tokens)
-                         (disj token))]
-      (assoc dbi
-             :token-to-token-info-data-id
-             (au/<? (u/<update storage
-                               token-to-token-info-data-id
-                               u/token-map-schema
-                               [{:path [token]
-                                 :op :remove}]))
-             ;; TODO: Improve this when `find` is implemented
-             :subject-id-to-tokens-data-id
-             (au/<? (u/<update storage
-                               subject-id-to-tokens-data-id
-                               u/subject-id-to-tokens-schema
-                               [{:path [subject-id]
-                                 :op :set
-                                 :arg new-tokens}]))))))
+                         (disj token))
+          new-dbi (assoc dbi
+                         :token-to-token-info-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            token-to-token-info-data-id
+                                            u/token-map-schema
+                                            [{:path [token]
+                                              :op :remove}]
+                                            nil)))
+                         ;; TODO: Improve this when `find` is implemented
+                         :subject-id-to-tokens-data-id
+                         (:new-data-id
+                          (au/<? (u/<update storage
+                                            subject-id-to-tokens-data-id
+                                            u/subject-id-to-tokens-schema
+                                            [{:path [subject-id]
+                                              :op :set
+                                              :arg new-tokens}]
+                                            nil))))]
+      {:dbi new-dbi
+       :update-infos []})))
 
 (defn <update-state-update-fn
   [state-schema update-cmds tx-fns dbi storage subject-id]
   (au/go
-    (let [{:keys [data-id]} dbi]
-      (assoc dbi :data-id (au/<? (u/<update storage data-id state-schema
-                                            update-cmds tx-fns))))))
+    (let [{:keys [data-id]} dbi
+          ret (au/<? (u/<update storage data-id state-schema
+                                update-cmds :sys tx-fns))
+          {:keys [new-data-id update-infos]} ret]
+      {:dbi (assoc dbi :data-id new-data-id)
+       :update-infos update-infos})))
 
 (defn <delete-branch* [branch storage]
   (au/go
     (let [all-branches (au/<? (u/<get-in-reference
                                storage u/all-branches-reference
-                               u/all-branches-schema nil))
+                               u/all-branches-schema nil nil))
           new-branches (or (-> (set all-branches)
                                (disj branch)
                                (seq))
@@ -206,7 +244,8 @@
                                    u/all-branches-schema
                                    [{:path nil
                                      :op :set
-                                     :arg new-branches}]))
+                                     :arg new-branches}]
+                                   nil))
       (au/<? (u/<delete-reference! storage branch-reference)))))
 
 
@@ -226,7 +265,7 @@
                        *subject-id->conn-ids
                        *branch->info]
   IVivoServer
-  (<modify-db [this <update-fn msg updated-paths metadata]
+  (<modify-db [this <update-fn msg metadata]
     ;; TODO: Do these serially in a queue to minimize conflicts
     (au/go
       (let [{:keys [conn-id]} metadata
@@ -239,27 +278,34 @@
                 prev-db-id (au/<? (u/<get-data-id storage branch-reference))
                 prev-dbi (when prev-db-id
                            (au/<? (u/<get-in storage prev-db-id
-                                             u/db-info-schema nil)))
+                                             u/db-info-schema nil nil)))
                 {:keys [num-prev-dbs data-id]} prev-dbi
-                cur-dbi (-> (<update-fn prev-dbi storage subject-id)
-                            (au/<?)
-                            (assoc :msg msg
-                                   :timestamp-ms (u/current-time-ms)
-                                   :num-prev-dbs (if num-prev-dbs
-                                                   (inc num-prev-dbs)
-                                                   0)
-                                   :prev-db-id prev-db-id))
-                cur-db-id (au/<? (u/<update storage nil u/db-info-schema
-                                            [{:path nil
-                                              :op :set
-                                              :arg cur-dbi}]))]
+                uf-ret (au/<? (<update-fn prev-dbi storage subject-id))
+                new-dbi (:dbi uf-ret)
+                new-dbi (assoc new-dbi
+                               :msg msg
+                               :timestamp-ms (u/current-time-ms)
+                               :num-prev-dbs (if num-prev-dbs
+                                               (inc num-prev-dbs)
+                                               0)
+                               :prev-db-id prev-db-id)
+                update-ret (au/<? (u/<update storage nil u/db-info-schema
+                                             [{:path []
+                                               :op :set
+                                               :arg new-dbi}]
+                                             nil))
+                new-db-id (:new-data-id update-ret)]
             (if (au/<? (u/<compare-and-set! storage branch-reference
                                             l/string-schema
-                                            prev-db-id cur-db-id))
-              (let [change-info (u/sym-map cur-db-id prev-db-id updated-paths)]
+                                            prev-db-id
+                                            new-db-id))
+              (let [ser-uinfos (au/<? (<serialize-update-info-values
+                                       this (:update-infos uf-ret)))
+                    change-info {:new-db-id new-db-id
+                                 :prev-db-id prev-db-id
+                                 :update-infos ser-uinfos}]
                 (doseq [conn-id* (disj (set conn-ids) conn-id)]
-                  (ep/send-msg sm-ep conn-id* :sys-state-changed
-                               change-info))
+                  (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
                 change-info)
               (if (zero? num-tries-left)
                 (throw (ex-info (str "Failed to commit to branch `" branch
@@ -269,6 +315,25 @@
                   (au/<? (ca/timeout (rand-int 100)))
                   (recur (dec num-tries-left))))))))))
 
+  (<serialize-update-info-values [this update-infos]
+    (au/go
+      (if (not (seq update-infos))
+        []
+        (loop [i 0
+               out []] ;; Use loop to stay in go block
+          (let [{:keys [norm-path value] :as info} (nth update-infos i)
+                schema-path (rest norm-path) ; Ignore :sys
+                schema (u/path->schema path->schema-cache state-schema
+                                       schema-path)
+                fp (au/<? (u/<schema->fp perm-storage schema))
+                sval {:fp fp
+                      :bytes (l/serialize schema value)}
+                new-i (inc i)
+                new-out (conj out (assoc info :value sval))]
+            (if (= (count update-infos) new-i)
+              new-out
+              (recur new-i new-out)))))))
+
   (<add-subject [this arg metadata]
     (au/go
       (let [{:keys [identifier secret subject-id]
@@ -276,21 +341,18 @@
             hashed-secret (bcrypt/encrypt secret work-factor)]
         (au/<? (<modify-db this (partial <add-subject-update-fn subject-id
                                          identifier hashed-secret)
-                           (str "Add subject " subject-id)
-                           [:vivo/authentication] metadata))
+                           (str "Add subject " subject-id) metadata))
         subject-id)))
 
   (<add-subject-identifier [this identifier metadata]
     (<modify-db this (partial <add-subject-identifier-update-fn identifier)
-                (str "Add subject indentifier `" identifier)
-                [:vivo/authentication] metadata)
+                (str "Add subject indentifier `" identifier) metadata)
     true)
 
   (<change-secret [this new-secret metadata]
     (let [hashed-secret (bcrypt/encrypt new-secret work-factor)]
       (<modify-db this (partial <change-secret-update-fn hashed-secret)
-                  "Change secret"
-                  [:vivo/authentication] metadata)))
+                  "Change secret" metadata)))
 
   (<create-branch [this arg metadata]
     (au/go
@@ -321,7 +383,8 @@
                                      u/all-branches-schema
                                      [{:path [-1]
                                        :op :insert-after
-                                       :arg branch}]))
+                                       :arg branch}]
+                                     nil))
         true)))
 
   (<delete-branch [this branch metadata]
@@ -338,10 +401,10 @@
     (au/go
       (let [perm-branches (au/<? (u/<get-in-reference
                                   perm-storage u/all-branches-reference
-                                  u/all-branches-schema nil))
+                                  u/all-branches-schema nil nil))
             temp-branches (au/<? (u/<get-in-reference
                                   temp-storage u/all-branches-reference
-                                  u/all-branches-schema nil))
+                                  u/all-branches-schema nil nil))
             all-branches (concat perm-branches temp-branches)]
         (when (seq all-branches)
           all-branches))))
@@ -362,14 +425,14 @@
         (throw (ex-info (str "Bad path `" path
                              "`. Path must be nil or a sequence.")
                         {:path path})))
-      (let [path* (or path [])
+      (let [path* (or path [:sys])
             storage (if (block-ids/temp-block-id? db-id)
                       temp-storage
                       perm-storage)
             data-id (au/<? (u/<get-in storage db-id u/db-info-schema
-                                      [:data-id]))]
+                                      [:data-id] nil))]
         (if-not (some sequential? path)
-          (au/<? (u/<get-in storage data-id state-schema path*))
+          (au/<? (u/<get-in storage data-id state-schema path* :sys))
           (let [expanded-path-map (u/expand-path path*)
                 num-results (count expanded-path-map)
                 ks (keys expanded-path-map)]
@@ -380,7 +443,7 @@
                     edn-str-k (u/edn->str k)
                     expanded-path (expanded-path-map k)
                     v (au/<? (u/<get-in storage data-id state-schema
-                                        expanded-path))
+                                        expanded-path :sys))
                     new-out (assoc out edn-str-k v)
                     new-i (inc i)]
                 (if (= num-results new-i)
@@ -391,7 +454,7 @@
     (au/go
       (let [storage (get-storage this branch)
             db-id (au/<? (<get-db-id this branch))
-            dbi (au/<? (u/<get-in storage db-id u/db-info-schema nil))
+            dbi (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
             make-log-rec #(select-keys % [:msg :timestamp-ms])]
         (when dbi
           (loop [out [(make-log-rec dbi)]
@@ -401,7 +464,7 @@
                       (= limit i))
                 out
                 (let [prev-dbi (au/<? (u/<get-in storage prev-db-id
-                                                 u/db-info-schema nil))]
+                                                 u/db-info-schema nil nil))]
                   (recur (conj out (make-log-rec dbi))
                          (inc i))))))))))
 
@@ -409,7 +472,7 @@
     (au/go
       (let [storage (get-storage this branch)
             db-id (au/<? (<get-db-id this branch))
-            dbi (au/<? (u/<get-in storage db-id u/db-info-schema nil))]
+            dbi (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))]
         (if dbi
           (inc (:num-prev-dbs dbi))
           0))))
@@ -427,7 +490,9 @@
         (if-not authorized?
           :vivo/unauthorized
           (when v
-            (let [schema (u/path->schema path->schema-cache state-schema path)
+            (let [schema-path (rest path) ; Ignore :sys
+                  schema (u/path->schema path->schema-cache state-schema
+                                         schema-path)
                   fp (au/<? (u/<schema->fp perm-storage schema))]
               {:fp fp
                :bytes (l/serialize schema v)}))))))
@@ -440,16 +505,16 @@
             branch-reference (branch->reference branch)
             storage (get-storage this branch)
             db-id (au/<? (u/<get-data-id storage branch-reference))
-            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil))
+            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
             {id->sid-data-id :identifier-to-subject-id-data-id
              sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
             subject-id (au/<? (u/<get-in storage id->sid-data-id
                                          u/string-map-schema
-                                         [identifier]))
+                                         [identifier] nil))
             hashed-secret (when subject-id
                             (au/<? (u/<get-in storage sid->hs-data-id
                                               u/string-map-schema
-                                              [subject-id])))]
+                                              [subject-id] nil)))]
         (when (and hashed-secret
                    (bcrypt/check secret hashed-secret))
           (let [token (generate-token)
@@ -462,7 +527,7 @@
                      (conj (or conn-ids #{}) conn-id)))
             (au/<? (<modify-db this (partial <log-in-update-fn
                                              token token-info)
-                               "Log in" [:vivo/authentication] metadata))
+                               "Log in" metadata))
             (u/sym-map subject-id token))))))
 
   (<log-in-w-token [this token metadata]
@@ -472,12 +537,11 @@
             branch-reference (branch->reference branch)
             storage (get-storage this branch)
             db-id (au/<? (u/<get-data-id storage branch-reference))
-            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil))
+            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
             {:keys [token-to-token-info-data-id]} db-info
             info (when token-to-token-info-data-id
                    (au/<? (u/<get-in storage token-to-token-info-data-id
-                                     u/token-map-schema
-                                     [token])))
+                                     u/token-map-schema [token] nil)))
             {:keys [expiration-time-mins subject-id]} info
             now-mins (-> (u/current-time-ms)
                          (u/ms->mins))]
@@ -485,8 +549,7 @@
           (if (>= now-mins expiration-time-mins)
             (do
               (au/<? (<modify-db this (partial <delete-token-update-fn token)
-                                 "Delete expired token"
-                                 [:vivo/authentication] metadata))
+                                 "Delete expired token" metadata))
               nil)
             (do
               (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
@@ -500,8 +563,7 @@
       (let [{:keys [conn-id]} metadata
             {:keys [subject-id]} (@*conn-id->info conn-id)
             conn-ids (@*subject-id->conn-ids subject-id)]
-        (au/<? (<modify-db this <log-out-update-fn
-                           "Log out" [:vivo/authentication] metadata))
+        (au/<? (<modify-db this <log-out-update-fn "Log out"  metadata))
         (doseq [conn-id conn-ids]
           (ep/close-conn sm-ep conn-id)))))
 
@@ -526,12 +588,12 @@
                    (assoc info :conn-ids #{conn-id}))))
         (or (au/<? (<get-db-id this branch))
             (let [default-data (l/default-data state-schema)
-                  update-cmds [{:path []
+                  update-cmds [{:path [:sys]
                                 :op :set
                                 :arg default-data}]]
               (-> (<modify-db this (partial <update-state-update-fn state-schema
                                             update-cmds tx-fns)
-                              "Create initial db" [] metadata)
+                              "Create initial db" metadata)
                   (au/<?)
                   (:cur-db-id)))))))
 
@@ -546,7 +608,9 @@
           (let [{:keys [path arg]} scmd
                 arg-sch (when arg
                           (or (sr/get path->schema-cache path)
-                              (let [sch (l/schema-at-path state-schema path)]
+                              (let [schema-path (rest path) ; Ignore :sys
+                                    sch (l/schema-at-path state-schema
+                                                          schema-path)]
                                 (sr/put! path->schema-cache path sch)
                                 sch)))
                 writer-arg-sch (when arg
@@ -566,11 +630,10 @@
     ;; TODO: Use authorization here
     (au/go
       (let [{:keys [conn-id]} metadata
-            update-cmds (au/<? (<scmds->cmds this arg conn-id))
-            updated-paths (map :path update-cmds)]
+            update-cmds (au/<? (<scmds->cmds this arg conn-id))]
         (au/<? (<modify-db this (partial <update-state-update-fn
                                          state-schema update-cmds tx-fns)
-                           "Update state" updated-paths metadata)))))
+                           "Update state" metadata)))))
 
   (<get-schema-pcf [this fp metadata]
     (au/go

@@ -3,12 +3,14 @@
    #?(:cljs [cljs.reader :as reader])
    #?(:clj [clojure.edn :as edn])
    #?(:cljs [clojure.pprint :as pprint])
+   [clojure.set :as set]
    [clojure.string :as str]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.logging :as logging]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
-   #?(:clj [puget.printer :refer [cprint cprint-str]]))
+   #?(:clj [puget.printer :refer [cprint cprint-str]])
+   [weavejester.dependency :as dep])
   #?(:cljs
      (:require-macros
       [com.dept24c.vivo.utils :refer [sym-map]])))
@@ -67,14 +69,14 @@
 
 (defprotocol IDataStorage
   (<delete-reference! [this reference])
-  (<get-in [this data-id schema path])
-  (<get-in-reference [this reference schema path])
+  (<get-in [this data-id schema path prefix])
+  (<get-in-reference [this reference schema path prefix])
   (<update
-    [this data-id schema update-commands]
-    [this data-id schema update-commands tx-fns])
+    [this data-id schema update-commands prefix]
+    [this data-id schema update-commands prefix tx-fns])
   (<update-reference!
-    [this reference schema update-commands]
-    [this reference schema update-commands tx-fns]))
+    [this reference schema update-commands prefix]
+    [this reference schema update-commands prefix tx-fns]))
 
 (defprotocol IDataBlockStorage
   (<allocate-data-block-id [this])
@@ -290,10 +292,18 @@
 (def get-state-ret-schema
   (l/union-schema [l/null-schema unauthorized-schema serialized-value-schema]))
 
+(l/def-record-schema update-info-schema
+  [:norm-path path-schema]
+  [:op op-schema]
+  [:value serialized-value-schema])
+
 (l/def-record-schema sys-state-change-schema
-  [:cur-db-id db-id-schema]
+  [:new-db-id db-id-schema]
   [:prev-db-id db-id-schema]
-  [:updated-paths (l/array-schema (l/maybe path-schema))])
+  [:update-infos (l/array-schema update-info-schema)])
+
+(def update-state-ret-schema
+  (l/union-schema [l/null-schema unauthorized-schema sys-state-change-schema]))
 
 (l/def-record-schema log-in-arg-schema
   [:identifier identifier-schema]
@@ -334,6 +344,8 @@
   [:branch branch-name-schema]
   [:db-id db-id-schema])
 
+;;;;;;;;;;;;;;;;;;;; Protocols ;;;;;;;;;;;;;;;;;;;;
+
 (def client-server-protocol
   {:roles [:client :server]
    :msgs {:add-subject {:arg add-subject-arg-schema
@@ -367,10 +379,10 @@
                              :sender :client}
           :sys-state-changed {:arg sys-state-change-schema
                               :sender :server}
-          ;; We need to return the state change so sys+local updates
-          ;; remain transactional
+          ;; We need to return the state change from :update-state so
+          ;; sys+local updates remain atomic
           :update-state {:arg serializable-update-commands-schema
-                         :ret (l/maybe sys-state-change-schema)
+                         :ret update-state-ret-schema
                          :sender :client}}})
 
 (def admin-client-server-protocol
@@ -381,6 +393,8 @@
           :delete-branch {:arg branch-name-schema
                           :ret l/boolean-schema
                           :sender :admin-client}}})
+
+;;;;;;;;;;;;;;;;;;;; Helper fns ;;;;;;;;;;;;;;;;;;;;
 
 (defn check-sub-map
   [subscriber-name subscriber-type sub-map]
@@ -398,19 +412,17 @@
     (cond
       (sequential? path)
       (let [[head & tail] path]
-        (when (and (#{:component :subscriber} head)
+        (when (and (= :subscriber head)
                    (not (seq tail)))
-          (throw (ex-info "Missing subscriber/component id in path."
+          (throw (ex-info "Missing subscriber id in path."
                           (sym-map sub-map path)))))
 
       (not (#{:vivo/subject-id
-              :vivo/subscriber-id
-              :vivo/component-id} path))
+              :vivo/subscriber-id} path))
       (throw (ex-info
               (str "Bad path. Paths must be either a sequence or  "
                    "one of the special :vivo keywords. ("
-                   ":vivo/subject-id, :vivo/subscriber-id, "
-                   "or :vivo/component-id)")
+                   ":vivo/subject-id, or :vivo/subscriber-id)")
               (sym-map sym path sub-map))))))
 
 (defn local-or-vivo-only? [sub-map]
@@ -481,6 +493,139 @@
                      sch)]
           (sr/put! path->schema-cache path sch*)
           sch*))))
+
+(defn get-non-numeric-part [path]
+  (take-while #(not (number? %)) path))
+
+(defn update-numeric? [updated-path sub-path op]
+  ;; TODO: Improve this using op / normalized paths
+  (let [u-front (get-non-numeric-part updated-path)
+        s-front (get-non-numeric-part sub-path)]
+    (if (or (not (seq u-front)) (not (seq s-front)))
+      true
+      (let [[relationship _] (relationship-info u-front s-front)]
+        (not= :sibling relationship)))))
+
+(defn update-sub?* [update-infos sub-path]
+  (reduce (fn [acc {:keys [norm-path op] :as update-info}]
+            (cond
+              (= :vivo/subject-id sub-path)
+              (if (= :vivo/subject-id norm-path)
+                (reduced true)
+                false)
+
+              (= :vivo/subject-id norm-path)
+              (if (= :vivo/subject-id sub-path)
+                (reduced true)
+                false)
+
+              (= :vivo/subscriber-id  sub-path)
+              false ;; subscriber never gets updated
+
+              (or (some number? norm-path)
+                  (some number? sub-path))
+              (if (update-numeric? norm-path sub-path op)
+                (reduced true)
+                false)
+
+              :else
+              (let [[relationship _] (relationship-info
+                                      (or norm-path [])
+                                      (or sub-path []))]
+                (if (= :sibling relationship)
+                  false
+                  ;; TODO: Compare values here if :parent
+                  (reduced true)))))
+          false update-infos))
+
+(defn update-sub? [update-infos sub-paths]
+  (reduce (fn [acc sub-path]
+            (if (update-sub?* update-infos sub-path)
+              (reduced true)
+              false))
+          false sub-paths))
+
+(defn throw-missing-path-key
+  ([k path sub-map]
+   (throw-missing-path-key k path sub-map nil))
+  ([k path sub-map subscriber-name]
+   (throw (ex-info (str "Could not find a value for key `" k "` in path `"
+                        path "` of " (if subscriber-name
+                                       (str "subscriber `" subscriber-name)
+                                       (str "sub-map `" sub-map))
+                        "`.")
+                   (sym-map k path sub-map subscriber-name)))))
+
+(defn throw-bad-path-root [path]
+  (let [[head & tail] path
+        disp-head (or head "nil")]
+    (throw (ex-info (str "Paths must begin with :local, :sys, or :subscriber. "
+                         "Got `" disp-head "` in path `" path "`.")
+                    (sym-map path head)))))
+
+(defn throw-bad-path-key [path k]
+  (let [disp-k (or k "nil")]
+    (throw (ex-info
+            (str "Illegal key `" disp-k "` in path `" path "`. Only integers, "
+                 "keywords, symbols, and strings are valid path keys.")
+            (sym-map k path)))))
+
+(defn resolve-symbols-in-path [acc ordered-pairs subscriber-name path]
+  (when (sequential? path)
+    (mapv (fn [k]
+            (if (symbol? k)
+              (or (get-in acc [:state k])
+                  (throw-missing-path-key k path ordered-pairs subscriber-name))
+              k))
+          path)))
+
+(defn check-path [path sub-map]
+  (if (= :vivo/subject-id path)
+    path
+    (reduce (fn [acc k]
+              (if-not (or (keyword? k) (int? k) (string? k) (symbol? k))
+                (throw-bad-path-key path k)
+                (conj acc k)))
+            [] path)))
+
+(defn sub-map->ordered-pairs [sub-map->op-cache sub-map]
+  (or (sr/get sub-map->op-cache sub-map)
+      (let [sub-syms (set (keys sub-map))
+            info (reduce-kv
+                  (fn [acc sym path]
+                    (when-not (symbol? sym)
+                      (throw (ex-info
+                              (str "All keys in sub-map must be symbols. Got `"
+                                   sym "`.")
+                              (sym-map sym sub-map))))
+                    (if (#{:vivo/subject-id
+                           :vivo/subscriber-id} path)
+                      (update acc :sym->path assoc sym path)
+                      (let [[head & tail] (check-path path sub-map)
+                            deps (filter symbol? path)]
+                        (when-not (#{:subscriber :local :sys} head)
+                          (throw-bad-path-root path))
+                        (cond-> (update acc :sym->path assoc sym path)
+                          (seq deps) (update :g #(reduce
+                                                  (fn [g dep]
+                                                    (dep/depend g sym dep))
+                                                  % deps))))))
+                  {:g (dep/graph)
+                   :sym->path {}}
+                  sub-map)
+            {:keys [g sym->path]} info
+            ordered-dep-syms (dep/topo-sort g)
+            no-dep-syms (set/difference (set (keys sym->path))
+                                        (set ordered-dep-syms))
+            pairs (reduce (fn [acc sym]
+                            (if-let [path (sym->path sym)]
+                              (conj acc [sym path])
+                              acc))
+                          []
+                          (concat (seq no-dep-syms)
+                                  ordered-dep-syms))]
+        (sr/put! sub-map->op-cache sub-map pairs)
+        pairs)))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

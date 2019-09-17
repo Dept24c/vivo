@@ -16,7 +16,8 @@
 
 (defn <authorized? [subject-id path read-or-write v]
   (au/go
-    (not= :secret (first path))))
+    ;; Note that path includes the :sys prefix.
+    (not= [:sys :secret] path)))
 
 (defn stop []
   (if stop-server
@@ -35,9 +36,10 @@
   ([]
    (start default-server-port))
   ([port]
-   (let [tx-fns [{:sub-map '{msgs [:msgs]}
+   (let [tx-fns [{:name "Make user-id to msgs index"
+                  :sub-map '{msgs [:sys :msgs]}
                   :f make-user-id-to-msgs
-                  :output-path [:user-id-to-msgs]}]
+                  :output-path [:sys :user-id-to-msgs]}]
          config {:authorization-fn <authorized?
                  :port port
                  :repository-name repository-name

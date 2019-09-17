@@ -114,15 +114,7 @@
         bad-sub-map '{ss [:subscriber]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Missing subscriber/component id in path"
-         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
-
-(deftest test-subscribe-to-subscriber-state-without-subscriber-id
-  (let [vc (vivo/vivo-client)
-        bad-sub-map '{cs [:component]}]
-    (is (thrown-with-msg?
-         #?(:clj ExceptionInfo :cljs js/Error)
-         #"Missing subscriber/component id in path"
+         #"Missing subscriber id in path"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-update-subscriber-state-no-sub-id
@@ -131,7 +123,7 @@
    (ca/go
      (let [vc (vivo/vivo-client)
            ret (ca/<! (vivo/<set-state! vc [:subscriber] {}))]
-       (is (str/includes? (u/ex-msg ret) "Missing subscriber/component id "))))))
+       (is (str/includes? (u/ex-msg ret) "Missing subscriber id "))))))
 
 (deftest test-subscribe!
   (au/test-async
@@ -166,17 +158,6 @@
            sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")]
        (is (= sub-id ('sub-id (au/<? ch))))))))
 
-(deftest test-subscribe!-component-id
-  (au/test-async
-   1000
-   (ca/go
-     (let [vc (vivo/vivo-client)
-           ch (ca/chan 1)
-           update-fn #(ca/put! ch %)
-           sub-map '{cid :vivo/component-id}
-           cid (vivo/subscribe! vc sub-map nil update-fn "test-cid")]
-       (is (= cid ('cid (au/<? ch))))))))
-
 (deftest test-register-subscriber-id!
   (au/test-async
    1000
@@ -208,21 +189,6 @@
            _ (vivo/set-state! vc [:subscriber sub-id] new-sub-state)]
        (is (= new-sub-state ('sub-state (au/<? ch))))))))
 
-(deftest test-update-component-state
-  (au/test-async
-   1000
-   (ca/go
-     (let [vc (vivo/vivo-client)
-           ch (ca/chan 1)
-           update-fn #(ca/put! ch %)
-           sub-map '{cid :vivo/component-id
-                     cstate [:component cid]}
-           sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")
-           _ (is (nil? ('cstate (au/<? ch))))
-           new-cstate {:hi :there}
-           _ (vivo/set-state! vc [:component sub-id] new-cstate)]
-       (is (= new-cstate ('cstate (au/<? ch))))))))
-
 (deftest test-subscribe!-single-entry
   (au/test-async
    1000
@@ -239,44 +205,106 @@
        (vivo/subscribe! vc sub-map nil update-fn "test")
        (is (= user-id (au/<? ch)))))))
 
+(deftest test-commands-get-set
+  (let [state {:some-stuff [{:name "a"}
+                            {:name "b"}]}
+        get-path [:local :some-stuff -1 :name]
+        get-ret (commands/get-in-state state get-path :local)
+        expected-get-ret {:norm-path [:local :some-stuff 1 :name]
+                          :val "b"}
+        _ (is (= expected-get-ret get-ret))
+        set-path [:local :some-stuff -1]
+        set-ret (commands/eval-cmd state {:path set-path
+                                          :op :set
+                                          :arg {:name "new"}}
+                                   :local)
+        set-expected {:state {:some-stuff [{:name "a"}
+                                           {:name "new"}]},
+                      :update-info {:norm-path [:local :some-stuff 1]
+                                    :op :set
+                                    :value {:name "new"}}}]
+    (is (= set-expected set-ret))))
+
+(deftest test-insert-after
+  (let [state [:a :b]
+        path [:local -1]
+        arg :new
+        ret (commands/insert* state path :local :insert-after arg)
+        expected {:state [:a :b :new],
+                  :update-info {:norm-path [:local 2]
+                                :op :insert-after
+                                :value :new}}]
+    (is (= expected ret))))
+
+(deftest test-insert-before
+  (let [state [:a :b]
+        path [:local -1]
+        arg :new
+        ret (commands/insert* state path :local :insert-before arg)
+        expected {:state [:a :new :b],
+                  :update-info {:norm-path [:local 1]
+                                :op :insert-before
+                                :value :new}}]
+    (is (= expected ret))))
+
+(deftest test-simple-remove-prefix
+  (let [state [:a :b :c]
+        path [:local -1]
+        ret (commands/eval-cmd state {:path path :op :remove} :local)
+        expected {:state [:a :b],
+                  :update-info {:norm-path [:local 2]
+                                :op :remove
+                                :value nil}}]
+    (is (= expected ret))))
+
+(deftest test-simple-remove-no-prefix
+  (let [state [:a :b :c]
+        path [-1]
+        ret (commands/eval-cmd state {:path path :op :remove} nil)
+        expected {:state [:a :b],
+                  :update-info {:norm-path [2]
+                                :op :remove
+                                :value nil}}]
+    (is (= expected ret))))
+
 (deftest test-simple-insert*
   (let [state [:a :b]
-        cases [[[:a :b :new] {:path [-1]
+        cases [[[:a :b :new] {:path [:local -1]
                               :op :insert-after
                               :arg :new}]
-               [[:a :new :b] {:path [-1]
+               [[:a :new :b] {:path [:local -1]
                               :op :insert-before
                               :arg :new}]
-               [[:new :a :b] {:path [0]
+               [[:new :a :b] {:path [:local 0]
                               :op :insert-before
                               :arg :new}]
-               [[:a :new :b] {:path [0]
+               [[:a :new :b] {:path [:local 0]
                               :op :insert-after
                               :arg :new}]
-               [[:a :b :new] {:path [1]
+               [[:a :b :new] {:path [:local 1]
                               :op :insert-after
                               :arg :new}]
-               [[:a :new :b] {:path [1]
+               [[:a :new :b] {:path [:local 1]
                               :op :insert-before
                               :arg :new}]
-               [[:a :b :new] {:path [2]
+               [[:a :b :new] {:path [:local 2]
                               :op :insert-after
                               :arg :new}]
-               [[:a :b :new] {:path [10]
+               [[:a :b :new] {:path [:local 10]
                               :op :insert-after
                               :arg :new}]
-               [[:new :a :b] {:path [-10]
+               [[:new :a :b] {:path [:local -10]
                               :op :insert-after
                               :arg :new}]
-               [[:a :b :new] {:path [10]
+               [[:a :b :new] {:path [:local 10]
                               :op :insert-before
                               :arg :new}]
-               [[:new :a :b] {:path [-10]
+               [[:new :a :b] {:path [:local -10]
                               :op :insert-before
                               :arg :new}]]]
     (doseq [case cases]
       (let [[expected {:keys [path op arg] :as cmd}] case
-            ret (commands/insert* state path op arg)]
+            ret (:state (commands/insert* state path :local op arg))]
         (is (= case [ret cmd]))))))
 
 (deftest test-deep-insert*
@@ -313,22 +341,10 @@
                                    :arg :new}]
                [{:x [:new :a :b]} {:path [:x -10]
                                    :op :insert-before
-                                   :arg :new}]
-               [{:x [:a :b] :y [:new]} {:path [:y 0]
-                                        :op :insert-after
-                                        :arg :new}]
-               [{:x [:a :b] :y [:new]} {:path [:y 0]
-                                        :op :insert-before
-                                        :arg :new}]
-               [{:x [:a :b] :y [:new]} {:path [:y -1]
-                                        :op :insert-before
-                                        :arg :new}]
-               [{:x [:a :b] :y [:new]} {:path [:y -1]
-                                        :op :insert-after
-                                        :arg :new}]]]
+                                   :arg :new}]]]
     (doseq [case cases]
       (let [[expected {:keys [path op arg] :as cmd}] case
-            ret (commands/insert* state path op arg)]
+            ret (:state (commands/insert* state path nil op arg))]
         (is (= case [ret cmd]))))))
 
 (deftest test-bad-path-root-in-update-state!
@@ -352,13 +368,13 @@
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"does not point to a vector"
-       (commands/insert* {} [0] :insert-before :new))))
+       (commands/insert* {:local {}} [:local 0] :local :insert-before :new))))
 
 (deftest test-bad-insert*-path
   (is (thrown-with-msg?
-       #?(:clj ExceptionInfo :cljs js/Error)
+       #?(:clj ExceptionInfo :cljs xo js/Error)
        #"the last element of the path must be an integer"
-       (commands/insert* [] [] :insert-before :new))))
+       (commands/insert* [] [] :local :insert-before :new))))
 
 (deftest test-bad-command-op
   (let [vc (vivo/vivo-client)]
@@ -371,21 +387,20 @@
 
 (deftest test-remove
   (let [state {:x [:a :b :c]}
-        cases [[{:w 1} {:w 1 :z 2} [:z]]
-               [{:w 1 :z {:b 2}} {:w 1 :z {:a 1 :b 2}} [:z :a]]
-               [{:x [:b :c]} state [:x 0]]
-               [{:x [:a :c]} state [:x 1]]
-               [{:x [:a :b]} state [:x 2]]
-               [{:x [:a :b]} state [:x -1]]
-               [{:x [:a :c]} state [:x -2]]
-               [{:x [:a :b :c]} state [:x 10]]
-               [{:x [:a :b :c]} state [:x -10]]]]
+        cases [[{:w 1} {:w 1 :z 2} [:local :z]]
+               [{:w 1 :z {:b 2}} {:w 1 :z {:a 1 :b 2}} [:local :z :a]]
+               [{:x [:b :c]} state [:local :x 0]]
+               [{:x [:a :c]} state [:local :x 1]]
+               [{:x [:a :b]} state [:local :x 2]]
+               [{:x [:a :b]} state [:local :x -1]]
+               [{:x [:a :c]} state [:local :x -2]]]]
     (doseq [case cases]
       (let [[expected state* path] case
-            ret (commands/eval-cmd state* {:path path :op :remove})]
+            ret (:state (commands/eval-cmd state*
+                                           {:path path :op :remove} :local))]
         (is (= case [ret state* path]))))))
 
-(deftest test-math
+(deftest test-math-no-prefix
   (let [state0 {:a 10}
         state1 {:x {:a 10}}
         state2 {:x [{:a 10} {:a 20}]}
@@ -403,7 +418,28 @@
                [{:x [{:a 10} {:a 19}]} state2 {:path [:x 1 :a] :op :- :arg 1}]]]
     (doseq [case cases]
       (let [[expected state* cmd] case
-            ret (commands/eval-cmd state* cmd)]
+            ret (:state (commands/eval-cmd state* cmd nil))]
+        (is (= case [ret state* cmd]))))))
+
+(deftest test-math-local-prefix
+  (let [state0 {:a 10}
+        state1 {:x {:a 10}}
+        state2 {:x [{:a 10} {:a 20}]}
+        cases [[{:a 11} state0 {:path [:local :a] :op :+ :arg 1}]
+               [{:a 9} state0 {:path [:local :a] :op :- :arg 1}]
+               [{:a 20} state0 {:path [:local :a] :op :* :arg 2}]
+               [{:a 5} state0 {:path [:local :a] :op :/ :arg 2}]
+               [{:a 1} state0 {:path [:local :a] :op :mod :arg 3}]
+               [{:x {:a 11}} state1 {:path [:local :x :a] :op :+ :arg 1}]
+               [{:x {:a 9}} state1 {:path [:local :x :a] :op :- :arg 1}]
+               [{:x {:a 30}} state1 {:path [:local :x :a] :op :* :arg 3}]
+               [{:x {:a (/ 10 3)}} state1 {:path [:local :x :a] :op :/ :arg 3}]
+               [{:x {:a 1}} state1 {:path [:local :x :a] :op :mod :arg 3}]
+               [{:x [{:a 10} {:a 21}]} state2 {:path [:local :x 1 :a] :op :+ :arg 1}]
+               [{:x [{:a 10} {:a 19}]} state2 {:path [:local :x 1 :a] :op :- :arg 1}]]]
+    (doseq [case cases]
+      (let [[expected state* cmd] case
+            ret (:state (commands/eval-cmd state* cmd :local))]
         (is (= case [ret state* cmd]))))))
 
 (deftest test-ordered-update-maps
@@ -443,7 +479,7 @@
 
 (deftest test-end-relative-sub-map
   (au/test-async
-   10000
+   1000
    (ca/go
      (try
        (let [orig-title "Foo"
@@ -466,7 +502,7 @@
 
 (deftest test-resolution-map
   (au/test-async
-   10000
+   1000
    (ca/go
      (try
        (let [vc (vivo/vivo-client)
@@ -486,7 +522,7 @@
 
 (deftest test-sequence-join
   (au/test-async
-   10000
+   1000
    (ca/go
      (try
        (let [vc (vivo/vivo-client)
@@ -556,3 +592,10 @@
                   ["2" :a] [:x "2" :y :a]
                   ["2" :b] [:x "2" :y :b]}]
     (is (= expected (u/expand-path path)))))
+
+(deftest test-update-sub?-numeric
+  (let [update-infos [{:norm-path [:sys 0]
+                       :op :insert
+                       :value "hi"}]
+        sub-paths [[:local :page]]]
+    (is (= false (u/update-sub? update-infos sub-paths)))))

@@ -1,7 +1,6 @@
 (ns com.dept24c.vivo.client
   (:require
    [clojure.core.async :as ca]
-   [clojure.set :as set]
    [clojure.string :as str]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.commands :as commands]
@@ -10,8 +9,7 @@
    [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
-   [deercreeklabs.stockroom :as sr]
-   [weavejester.dependency :as dep]))
+   [deercreeklabs.stockroom :as sr]))
 
 (def default-vc-opts
   {:log-error println
@@ -20,6 +18,7 @@
 
 (def get-state-timeout-ms 30000)
 (def login-token-local-storage-key "login-token")
+(def max-commit-attempts 100)
 (def update-state-timeout-ms 30000)
 
 (defn get-login-token []
@@ -37,31 +36,6 @@
   #?(:cljs
      (when (u/browser?)
        (.removeItem (.-localStorage js/window) login-token-local-storage-key))))
-
-(defn throw-bad-path-root [path]
-  (let [[head & tail] path
-        disp-head (or head "nil")]
-    (throw (ex-info (str "Paths must begin with :local, :sys, :subscriber, or "
-                         ":component. Got `" disp-head "` in path `" path "`.")
-                    (u/sym-map path head)))))
-
-(defn throw-bad-path-key [path k]
-  (let [disp-k (or k "nil")]
-    (throw (ex-info
-            (str "Illegal key `" disp-k "` in path `" path "`. Only integers, "
-                 "keywords, symbols, and strings are valid path keys.")
-            (u/sym-map k path)))))
-
-(defn throw-missing-path-key
-  ([k path sub-map]
-   (throw-missing-path-key k path sub-map nil))
-  ([k path sub-map subscriber-name]
-   (throw (ex-info (str "Could not find a value for key `" k "` in path `"
-                        path "` of " (if subscriber-name
-                                       (str "subscriber `" subscriber-name)
-                                       (str "sub-map `" sub-map))
-                        "`.")
-                   (u/sym-map k path sub-map subscriber-name)))))
 
 (defn make-update-info [update-cmds]
   (reduce
@@ -83,65 +57,16 @@
                :local :local-cmds
                :sys :sys-cmds
                :subscriber :sub-cmds
-               :component :sub-cmds
-               (throw-bad-path-root path))]
-       (-> acc
-           (update k conj (assoc cmd :path tail))
-           (update :paths conj path))))
+               (u/throw-bad-path-root path))]
+       (when (and (= :subscriber head)
+                  (not (seq tail)))
+         (throw (ex-info (str "Missing subscriber id in :subscriber path. ")
+                         (u/sym-map path))))
+       (update acc k conj (assoc cmd :path path))))
    {:local-cmds []
     :sys-cmds []
-    :sub-cmds []
-    :paths []}
+    :sub-cmds []}
    update-cmds))
-
-(defn check-path [path sub-map]
-  (if (= :vivo/subject-id path)
-    path
-    (reduce (fn [acc k]
-              (if-not (or (keyword? k) (int? k) (string? k) (symbol? k))
-                (throw-bad-path-key path k)
-                (conj acc k)))
-            [] path)))
-
-(defn sub-map->ordered-pairs [sub-map->op-cache sub-map]
-  (or (sr/get sub-map->op-cache sub-map)
-      (let [sub-syms (set (keys sub-map))
-            info (reduce-kv
-                  (fn [acc sym path]
-                    (when-not (symbol? sym)
-                      (throw (ex-info
-                              (str "All keys in sub-map must be symbols. Got `"
-                                   sym "`.")
-                              (u/sym-map sym sub-map))))
-                    (if (#{:vivo/subject-id
-                           :vivo/subscriber-id
-                           :vivo/component-id} path)
-                      (update acc :sym->path assoc sym path)
-                      (let [[head & tail] (check-path path sub-map)
-                            deps (filter symbol? path)]
-                        (when-not (#{:component :subscriber :local :sys} head)
-                          (throw-bad-path-root path))
-                        (cond-> (update acc :sym->path assoc sym path)
-                          (seq deps) (update :g #(reduce
-                                                  (fn [g dep]
-                                                    (dep/depend g sym dep))
-                                                  % deps))))))
-                  {:g (dep/graph)
-                   :sym->path {}}
-                  sub-map)
-            {:keys [g sym->path]} info
-            ordered-dep-syms (dep/topo-sort g)
-            no-dep-syms (set/difference (set (keys sym->path))
-                                        (set ordered-dep-syms))
-            pairs (reduce (fn [acc sym]
-                            (if-let [path (sym->path sym)]
-                              (conj acc [sym path])
-                              acc))
-                          []
-                          (concat (seq no-dep-syms)
-                                  ordered-dep-syms))]
-        (sr/put! sub-map->op-cache sub-map pairs)
-        pairs)))
 
 (defn get-sub-id [*last-sub-id]
   (str (swap! *last-sub-id (fn [sub-id]
@@ -150,70 +75,22 @@
                                  0
                                  new-sub-id))))))
 
-(defn get-non-numeric-part [path]
-  (take-while number? path))
-
-(defn update-numeric? [updated-path sub-path]
-  (let [u-front (get-non-numeric-part updated-path)
-        s-front (get-non-numeric-part sub-path)]
-    (if (or (not (seq u-front)) (not (seq s-front)))
-      true
-      (let [[relationship _] (u/relationship-info u-front s-front)]
-        (not= :sibling relationship)))))
-
-(defn update-sub?* [updated-paths sub-path]
-  (reduce (fn [acc updated-path]
-            (cond
-              (= :vivo/subject-id sub-path)
-              (if (= :vivo/subject-id updated-path)
-                (reduced true)
-                false)
-
-              (= :vivo/subject-id updated-path)
-              (if (= :vivo/subject-id sub-path)
-                (reduced true)
-                false)
-
-              (#{:vivo/subscriber-id :vivo/component-id} sub-path)
-              false ;; subscriber/component-id never gets updated
-
-              (or (some number? updated-path)
-                  (some number? sub-path))
-              (if (update-numeric? updated-path sub-path)
-                (reduced true)
-                false)
-
-              :else
-              (let [[relationship _] (u/relationship-info
-                                      (or updated-path [])
-                                      (or sub-path []))]
-                (if (= :sibling relationship)
-                  false
-                  (reduced true)))))
-          false updated-paths))
-
-(defn update-sub? [updated-paths sub-paths]
-  (reduce (fn [acc sub-path]
-            (if (update-sub?* updated-paths sub-path)
-              (reduced true)
-              false))
-          false sub-paths))
-
-(defn resolve-path [acc ordered-pairs subscriber-name path]
-  (when (sequential? path)
-    (mapv (fn [k]
-            (if (symbol? k)
-              (or (get-in acc [:state k])
-                  (throw-missing-path-key k path ordered-pairs subscriber-name))
-              k))
-          path)))
-
-(defn get-in-state [state path]
+(defn get-in-state [state path prefix]
   (if-not (some sequential? path)
-    (:val (commands/get-in-state state path))
+    (:val (commands/get-in-state state path prefix))
     (reduce-kv (fn [acc k expanded-path]
-                 (assoc acc k (get-in-state state expanded-path)))
+                 (assoc acc k (get-in-state state expanded-path prefix)))
                {} (u/expand-path path))))
+
+(defn eval-cmds [initial-state cmds prefix]
+  (reduce (fn [{:keys [state] :as acc} cmd]
+            (let [ret (commands/eval-cmd state cmd prefix)]
+              (-> acc
+                  (assoc :state (:state ret))
+                  (update :update-infos conj (:update-info ret)))))
+          {:state initial-state
+           :update-infos []}
+          cmds))
 
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
                        log-info log-error state-cache sub-map->op-cache
@@ -253,8 +130,9 @@
   (<deserialize-value [this path ret]
     (au/go
       (when ret
-        (let [value-sch (u/path->schema path->schema-cache sys-state-schema
-                                        path)
+        (let [schema-path (rest path) ; Ignore :sys
+              value-sch (u/path->schema path->schema-cache sys-state-schema
+                                        schema-path)
               writer-sch (au/<? (u/<fp->schema this (:fp ret)))
               v (l/deserialize value-sch writer-sch (:bytes ret))]
           (if-not (some sequential? path)
@@ -265,7 +143,10 @@
 
   (set-subject-id [this subject-id]
     (reset! *subject-id subject-id)
-    (u/notify-subs this [:vivo/subject-id] false)
+    (u/notify-subs this [{:norm-path :vivo/subject-id
+                          :op :set
+                          :value subject-id}]
+                   false)
     nil)
 
   (log-in! [this identifier secret cb]
@@ -325,33 +206,35 @@
         (if-not (seq sub-map-or-ordered-pairs)
           init
           (let [ordered-pairs (if (map? sub-map-or-ordered-pairs)
-                                (sub-map->ordered-pairs
+                                (u/sub-map->ordered-pairs
                                  sub-map->op-cache sub-map-or-ordered-pairs)
                                 sub-map-or-ordered-pairs)]
             ;; Use loop instead of reduce here to stay within the go block
             (loop [acc init
                    i 0]
               (let [[sym path] (nth ordered-pairs i)
-                    resolved-path (resolve-path acc ordered-pairs
-                                                subscriber-name path)
+                    resolved-path (u/resolve-symbols-in-path
+                                   acc ordered-pairs subscriber-name path)
                     [path-head & path-tail] resolved-path
                     v (cond
                         (= :vivo/subject-id path)
                         @*subject-id
 
-                        (#{:vivo/subscriber-id :vivo/component-id} path)
+                        (= :vivo/subscriber-id path)
                         sub-id
 
                         (= :local path-head)
-                        (get-in-state local-state path-tail)
+                        (get-in-state local-state resolved-path :local)
 
 
                         (= :sys path-head)
                         (when db-id
-                          (au/<? (u/<get-in-sys-state this db-id path-tail)))
+                          (au/<? (u/<get-in-sys-state this db-id
+                                                      resolved-path)))
 
-                        (#{:component :subscriber} path-head)
-                        (get-in-state @*subscriber-state path-tail))
+                        (= :subscriber path-head)
+                        (get-in-state @*subscriber-state resolved-path
+                                      :subscriber))
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
                                 (update :paths conj (or resolved-path
@@ -364,7 +247,7 @@
     [this sub-map cur-state update-fn* subscriber-name resolution-map]
     (u/check-sub-map subscriber-name "subscriber" sub-map)
     (let [sub-id (get-sub-id *last-sub-id)
-          ordered-pairs (sub-map->ordered-pairs sub-map->op-cache sub-map)
+          ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
           <make-si (partial u/<make-state-info this ordered-pairs
                             subscriber-name sub-id resolution-map)]
       (ca/go
@@ -408,13 +291,13 @@
       (swap! *custom-id->subscriber-id dissoc custom-id))
     nil)
 
-  (notify-subs [this updated-paths notify-all?]
+  (notify-subs [this update-infos notify-all?]
     (let [local-state @*local-state
           db-id @*cur-db-id]
       (doseq [[sub-id sub] @*sub-id->sub]
         (let [{:keys [paths update-fn]} sub]
           (when (or notify-all?
-                    (update-sub? updated-paths paths))
+                    (u/update-sub? update-infos paths))
             (update-fn local-state db-id))))))
 
   (<wait-for-conn-init [this]
@@ -432,37 +315,43 @@
 
   (<handle-updates [this update]
     (au/go
-      (let [{:keys [sys-cmds local-cmds sub-cmds paths cb]} update
+      (let [{:keys [sys-cmds local-cmds sub-cmds cb]} update
             cb* (or cb (constantly nil))
-            ret (if (seq sys-cmds)
-                  (au/<? (u/<update-sys-state this sys-cmds))
-                  {:updated-paths []})]
-        (if-not ret
-          (cb* false)
-          (let [{:keys [prev-db-id cur-db-id updated-paths]} ret
-                local-db-id @*cur-db-id
-                notify-all? (and cur-db-id ;; There were :sys updates
-                                 not= prev-db-id local-db-id)]
-            (if (and local-db-id cur-db-id
-                     (block-ids/earlier? cur-db-id local-db-id))
-              (cb* false) ; Ignore out-of-order updates
-              (let [paths* (set/union (set paths) (set updated-paths))]
-                (when cur-db-id
-                  (reset! *cur-db-id cur-db-id))
-                (when (seq local-cmds)
-                  (swap! *local-state #(reduce commands/eval-cmd % local-cmds)))
-                (when (seq sub-cmds)
-                  (swap! *subscriber-state
-                         #(reduce
-                           (fn [acc {:keys [path] :as cmd}]
-                             (when-not (seq path)
-                               (throw (ex-info (str "Missing subscriber/"
-                                                    "component id in path.")
-                                               {})))
-                             (commands/eval-cmd acc cmd))
-                           % sub-cmds)))
-                (u/notify-subs this paths* notify-all?)
-                (cb* true))))))))
+            sys-ret (when (seq sys-cmds)
+                      (when-let [ret (au/<? (u/<update-sys-state
+                                             this sys-cmds))]
+                        (let [{:keys [new-db-id prev-db-id update-infos]} ret
+                              local-db-id @*cur-db-id
+                              notify-all? (not= prev-db-id local-db-id)]
+                          (when (or (nil? local-db-id)
+                                    (block-ids/earlier? local-db-id new-db-id))
+                            (reset! *cur-db-id new-db-id))
+                          (u/sym-map notify-all? update-infos))))]
+        (if (and (seq sys-cmds)
+                 (not sys-ret))
+          (cb* false) ;; Don't do local/sub updates if sys updates failed
+          (loop [num-attempts 1]
+            (let [cur-local-state @*local-state
+                  local-ret (eval-cmds cur-local-state local-cmds :local)
+                  cur-sub-state @*subscriber-state
+                  sub-ret (eval-cmds cur-sub-state sub-cmds :subscriber)]
+              (if (and
+                   (compare-and-set! *local-state cur-local-state
+                                     (:state local-ret))
+                   (compare-and-set! *subscriber-state cur-sub-state
+                                     (:state sub-ret)))
+                (let [update-infos (concat (:update-infos sys-ret)
+                                           (:update-infos local-ret)
+                                           (:update-infos sub-ret))]
+                  (u/notify-subs this update-infos (:notify-all? sys-ret))
+                  (cb* true))
+                (if (< num-attempts max-commit-attempts)
+                  (recur (inc num-attempts))
+                  (cb* (ex-info
+                        (str "Failed to commit updates after "
+                             num-attempts " attempts.")
+                        (u/sym-map max-commit-attempts
+                                   sys-cmds local-cmds sub-cmds)))))))))))
 
   (start-update-loop [this]
     (ca/go-loop []
@@ -507,7 +396,9 @@
       cmd
       (let [{:keys [arg path]} cmd
             arg-sch (or (sr/get path->schema-cache path)
-                        (let [sch (l/schema-at-path sys-state-schema path)]
+                        (let [schema-path (rest path) ; Ignore :sys
+                              sch (l/schema-at-path sys-state-schema
+                                                    schema-path)]
                           (sr/put! path->schema-cache path sch)
                           sch))
             fp (l/fingerprint64 arg-sch)
@@ -530,16 +421,15 @@
             v))))
 
   (<handle-sys-state-changed [this arg metadata]
-    ;; TODO: Combine this with handle-sys-updates-only
     (ca/go
       (try
-        (let [{:keys [prev-db-id cur-db-id updated-paths]} arg
+        (let [{:keys [prev-db-id new-db-id update-infos]} arg
               local-db-id @*cur-db-id
               notify-all? (not= prev-db-id local-db-id)]
           (when (or (nil? local-db-id)
-                    (block-ids/earlier? local-db-id cur-db-id))
-            (reset! *cur-db-id cur-db-id)
-            (u/notify-subs this updated-paths notify-all?)))
+                    (block-ids/earlier? local-db-id new-db-id))
+            (reset! *cur-db-id new-db-id)
+            (u/notify-subs this update-infos notify-all?)))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in <handle-sys-state-changed: "
                           (u/ex-msg-and-stacktrace e)))))))

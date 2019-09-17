@@ -11,7 +11,7 @@
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]))
 
-(defrecord DataStorage [data-block-storage]
+(defrecord DataStorage [data-block-storage sub-map->op-cache]
   u/ISchemaStore
   (<schema->fp [this schema]
     (u/<schema->fp data-block-storage schema))
@@ -24,49 +24,66 @@
     (u/check-reference reference)
     (u/<delete-data-block data-block-storage reference))
 
-  (<get-in [this data-id schema path]
+  (<get-in [this data-id schema path prefix]
     ;; TODO: Support structural sharing
     (u/check-data-id data-id)
     (au/go
       (some-> (u/<read-data-block data-block-storage data-id schema)
               (au/<?)
-              (commands/get-in-state path)
+              (commands/get-in-state path prefix)
               (:val))))
 
-  (<get-in-reference [this reference schema path]
+  (<get-in-reference [this reference schema path prefix]
     (u/check-reference reference)
     (au/go
       (let [data-id (au/<? (u/<get-data-id this reference))]
-        (au/<? (u/<get-in this data-id schema path)))))
+        (au/<? (u/<get-in this data-id schema path prefix)))))
 
-  (<update [this data-id schema update-commands]
-    (u/<update this data-id schema update-commands nil))
+  (<update [this data-id schema update-commands prefix]
+    (u/<update this data-id schema update-commands prefix nil))
 
-  (<update [this data-id schema update-commands tx-fns]
+  (<update [this data-id schema update-commands prefix tx-fns]
     ;; TODO: Support structural sharing
     (when data-id ;; Allow nil for the creating a new data item
       (u/check-data-id data-id))
     (au/go
-      (let [old (when data-id
-                  (au/<? (u/<read-data-block data-block-storage
-                                             data-id schema)))
-            new (cond->> (reduce commands/eval-cmd old update-commands)
-                  tx-fns (tx-fns/eval-tx-fns tx-fns))
+      (let [old-state (when data-id
+                        (au/<? (u/<read-data-block data-block-storage
+                                                   data-id schema)))
+            uc-ret (reduce
+                    (fn [{:keys [state] :as acc} cmd]
+                      (let [ret (commands/eval-cmd state cmd prefix)]
+                        (-> acc
+                            (assoc :state (:state ret))
+                            (update :update-infos conj (:update-info ret)))))
+                    {:state old-state
+                     :update-infos []}
+                    update-commands)
+            ;; TODO: Optimize this. Don't run tx-fns on all updates.
+            txf-ret (when tx-fns
+                      (tx-fns/eval-tx-fns sub-map->op-cache tx-fns
+                                          (:state uc-ret)))
+            final-state (if tx-fns
+                          (:state txf-ret)
+                          (:state uc-ret))
+            update-infos (concat (:update-infos uc-ret) (:update-infos txf-ret))
             new-data-id (au/<? (u/<allocate-data-block-id data-block-storage))]
-        (au/<? (u/<write-data-block data-block-storage new-data-id schema new))
-        new-data-id)))
+        (au/<? (u/<write-data-block data-block-storage new-data-id schema
+                                    final-state))
+        (u/sym-map new-data-id update-infos))))
 
-  (<update-reference! [this reference schema update-commands]
-    (u/<update-reference! this reference schema update-commands nil))
+  (<update-reference! [this reference schema update-commands prefix]
+    (u/<update-reference! this reference schema update-commands prefix nil))
 
-  (<update-reference! [this reference schema update-commands tx-fns]
+  (<update-reference! [this reference schema update-commands prefix tx-fns]
     (au/go
       (let [num-tries 100]
         (u/check-reference reference)
         (loop [num-tries-left (dec num-tries)]
           (let [data-id (au/<? (u/<get-data-id this reference))
-                new-data-id (au/<? (u/<update this data-id schema
-                                              update-commands tx-fns))]
+                {:keys [new-data-id]} (au/<? (u/<update this data-id schema
+                                                        update-commands
+                                                        prefix tx-fns))]
             (if (au/<? (u/<compare-and-set! this reference l/string-schema
                                             data-id new-data-id))
               new-data-id
@@ -95,4 +112,5 @@
     (u/<get-data-id data-block-storage reference)))
 
 (defn data-storage [data-block-storage]
-  (->DataStorage data-block-storage))
+  (let [sub-map->op-cache (sr/stockroom 500)]
+    (->DataStorage data-block-storage sub-map->op-cache)))
