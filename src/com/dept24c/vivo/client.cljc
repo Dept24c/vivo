@@ -57,11 +57,13 @@
                :local :local-cmds
                :sys :sys-cmds
                :subscriber :sub-cmds
+               :component :sub-cmds
                (u/throw-bad-path-root path))]
-       (when (and (= :subscriber head)
+       (when (and (#{:subscriber :component} head)
                   (not (seq tail)))
-         (throw (ex-info (str "Missing subscriber id in :subscriber path. ")
-                         (u/sym-map path))))
+         (throw (ex-info
+                 (str "Missing " (name head) " id in " head " path. ")
+                 (u/sym-map path))))
        (update acc k conj (assoc cmd :path path))))
    {:local-cmds []
     :sys-cmds []
@@ -220,7 +222,7 @@
                         (= :vivo/subject-id path)
                         @*subject-id
 
-                        (= :vivo/subscriber-id path)
+                        (#{:vivo/subscriber-id :vivo/component-id} path)
                         sub-id
 
                         (= :local path-head)
@@ -232,9 +234,9 @@
                           (au/<? (u/<get-in-sys-state this db-id
                                                       resolved-path)))
 
-                        (= :subscriber path-head)
+                        (#{:subscriber :component} path-head)
                         (get-in-state @*subscriber-state resolved-path
-                                      :subscriber))
+                                      path-head))
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
                                 (update :paths conj (or resolved-path
@@ -334,7 +336,8 @@
             (let [cur-local-state @*local-state
                   local-ret (eval-cmds cur-local-state local-cmds :local)
                   cur-sub-state @*subscriber-state
-                  sub-ret (eval-cmds cur-sub-state sub-cmds :subscriber)]
+                  sub-ret (eval-cmds cur-sub-state sub-cmds
+                                     #{:subscriber :component})]
               (if (and
                    (compare-and-set! *local-state cur-local-state
                                      (:state local-ret))

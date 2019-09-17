@@ -26,12 +26,17 @@
    Returns a map with :norm-path and :val keys."
   ([state path]
    (get-in-state state path nil))
-  ([state path prefix]
-   (let [[path-head & path-tail] path]
-     (when (and prefix (not= prefix path-head))
-       (throw (ex-info (str "Illegal path. Path must start with `" prefix
-                            "`. Got `" path "`.")
-                       (u/sym-map path prefix path-head))))
+  ([state path prefixes*]
+   (let [prefixes (cond
+                    (nil? prefixes*) #{}
+                    (set? prefixes*) prefixes*
+                    :else (set [prefixes*]))
+         [path-head & path-tail] path]
+     (when (and (seq prefixes)
+                (not (prefixes path-head)))
+       (throw (ex-info (str "Illegal path. Path must start with one of "
+                            prefixes ". Got `" path "`.")
+                       (u/sym-map path prefixes path-head))))
      (reduce (fn [{:keys [val] :as acc} k]
                (let [[k* val*] (cond
                                  (or (keyword? k) (nat-int? k) (string? k))
@@ -46,11 +51,11 @@
                  (-> acc
                      (update :norm-path conj k*)
                      (assoc :val val*))))
-             {:norm-path (if prefix
+             {:norm-path (if (seq prefixes)
                            [path-head]
                            [])
               :val state}
-             (if prefix
+             (if (seq prefixes)
                path-tail
                path)))))
 

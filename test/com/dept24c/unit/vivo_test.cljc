@@ -114,7 +114,15 @@
         bad-sub-map '{ss [:subscriber]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Missing subscriber id in path"
+         #"Missing subscriber id"
+         (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
+
+(deftest test-subscribe-to-component-state-without-subscriber-id
+  (let [vc (vivo/vivo-client)
+        bad-sub-map '{ss [:component]}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"Missing component id"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-update-subscriber-state-no-sub-id
@@ -124,6 +132,14 @@
      (let [vc (vivo/vivo-client)
            ret (ca/<! (vivo/<set-state! vc [:subscriber] {}))]
        (is (str/includes? (u/ex-msg ret) "Missing subscriber id "))))))
+
+(deftest test-update-component-state-no-component-id
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ret (ca/<! (vivo/<set-state! vc [:component] {}))]
+       (is (str/includes? (u/ex-msg ret) "Missing component id "))))))
 
 (deftest test-subscribe!
   (au/test-async
@@ -158,6 +174,17 @@
            sub-id (vivo/subscribe! vc sub-map nil update-fn "test-sub-id")]
        (is (= sub-id ('sub-id (au/<? ch))))))))
 
+(deftest test-subscribe!-component-id
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch %)
+           sub-map '{cid :vivo/component-id}
+           sub-id (vivo/subscribe! vc sub-map nil update-fn "test-cid")]
+       (is (= sub-id ('cid (au/<? ch))))))))
+
 (deftest test-register-subscriber-id!
   (au/test-async
    1000
@@ -188,6 +215,21 @@
            new-sub-state {:hi :there}
            _ (vivo/set-state! vc [:subscriber sub-id] new-sub-state)]
        (is (= new-sub-state ('sub-state (au/<? ch))))))))
+
+(deftest test-update-component-state
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client)
+           ch (ca/chan 1)
+           update-fn #(ca/put! ch %)
+           sub-map '{cid :vivo/component-id
+                     cstate [:component cid]}
+           sub-id (vivo/subscribe! vc sub-map nil update-fn "test-cid")
+           _ (is (nil? ('cstate (au/<? ch))))
+           new-sub-state {:hi :there}
+           _ (vivo/set-state! vc [:component sub-id] new-sub-state)]
+       (is (= new-sub-state ('cstate (au/<? ch))))))))
 
 (deftest test-subscribe!-single-entry
   (au/test-async

@@ -412,17 +412,17 @@
     (cond
       (sequential? path)
       (let [[head & tail] path]
-        (when (and (= :subscriber head)
+        (when (and (#{:subscriber :component} head)
                    (not (seq tail)))
-          (throw (ex-info "Missing subscriber id in path."
-                          (sym-map sub-map path)))))
+          (throw (ex-info
+                  (str "Missing " (name head) " id in " head " path. ")
+                  (sym-map path)))))
 
-      (not (#{:vivo/subject-id
-              :vivo/subscriber-id} path))
+      (not (#{:vivo/subject-id :vivo/component-id :vivo/subscriber-id} path))
       (throw (ex-info
               (str "Bad path. Paths must be either a sequence or  "
-                   "one of the special :vivo keywords. ("
-                   ":vivo/subject-id, or :vivo/subscriber-id)")
+                   "one of the special :vivo keywords. (:vivo/subject-id, "
+                   ":vivo/subscriber-id, or :vivo/component-id)")
               (sym-map sym path sub-map))))))
 
 (defn local-or-vivo-only? [sub-map]
@@ -519,7 +519,7 @@
                 (reduced true)
                 false)
 
-              (= :vivo/subscriber-id  sub-path)
+              (#{:vivo/subscriber-id :vivo/component-id}  sub-path)
               false ;; subscriber never gets updated
 
               (or (some number? norm-path)
@@ -559,8 +559,8 @@
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
         disp-head (or head "nil")]
-    (throw (ex-info (str "Paths must begin with :local, :sys, or :subscriber. "
-                         "Got `" disp-head "` in path `" path "`.")
+    (throw (ex-info (str "Paths must begin with :local, :sys, :subscriber, or "
+                         ":component. Got `" disp-head "` in path `" path "`.")
                     (sym-map path head)))))
 
 (defn throw-bad-path-key [path k]
@@ -599,11 +599,12 @@
                                    sym "`.")
                               (sym-map sym sub-map))))
                     (if (#{:vivo/subject-id
-                           :vivo/subscriber-id} path)
+                           :vivo/subscriber-id
+                           :vivo/component-id} path)
                       (update acc :sym->path assoc sym path)
                       (let [[head & tail] (check-path path sub-map)
                             deps (filter symbol? path)]
-                        (when-not (#{:subscriber :local :sys} head)
+                        (when-not (#{:subscriber :component :local :sys} head)
                           (throw-bad-path-root path))
                         (cond-> (update acc :sym->path assoc sym path)
                           (seq deps) (update :g #(reduce
