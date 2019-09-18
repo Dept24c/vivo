@@ -134,10 +134,10 @@
   (ssr? [this]
     (boolean @*ssr-info))
 
-  (ssr-get-state! [this sub-map]
-    (or (get (:resolved @*ssr-info) sub-map)
+  (ssr-get-state! [this sub-map resolution-map]
+    (or (get (:resolved @*ssr-info) [sub-map resolution-map])
         (do
-          (swap! *ssr-info update :needed conj sub-map)
+          (swap! *ssr-info update :needed conj [sub-map resolution-map])
           nil)))
 
   (<ssr [this component-fn component-name]
@@ -164,12 +164,13 @@
                (if-not (seq needed)
                  s
                  (do
-                   (doseq [sub-map needed]
+                   (doseq [[sub-map resolution-map] needed]
                      (let [{:keys [state]} (au/<? (u/<make-state-info
                                                    this sub-map
-                                                   component-name "SSR" {}))]
+                                                   component-name "SSR"
+                                                   resolution-map))]
                        (swap! *ssr-info update
-                              :resolved assoc sub-map state)))
+                              :resolved assoc [sub-map resolution-map] state)))
                    (swap! *ssr-info assoc :needed #{})
                    (recur)))))
            (finally

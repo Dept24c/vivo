@@ -63,7 +63,7 @@
   (register-subscriber-id! [this custom-id subscriber-id])
   (set-subject-id [this subject-id])
   (shutdown! [this])
-  (ssr-get-state! [this sub-map])
+  (ssr-get-state! [this sub-map resolution-map])
   (ssr? [this])
   (start-update-loop [this])
   (subscribe! [this sub-map cur-state update-fn subscriber-name resolution-map])

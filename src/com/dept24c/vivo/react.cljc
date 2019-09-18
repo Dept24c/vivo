@@ -103,7 +103,7 @@
                             (u/get-local-state vc sub-map component-name)
 
                             (u/ssr? vc)
-                            (u/ssr-get-state! vc sub-map)
+                            (u/ssr-get-state! vc sub-map resolution-map)
 
                             :else
                             nil)
