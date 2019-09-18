@@ -4,6 +4,7 @@
    [clojure.string :as str]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.commands :as commands]
+   [com.dept24c.vivo.react :as react]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
@@ -17,6 +18,7 @@
    :state-cache-num-keys 100})
 
 (def get-state-timeout-ms 30000)
+(def initial-ssr-info {:resolved {} :needed #{}})
 (def login-token-local-storage-key "login-token")
 (def max-commit-attempts 100)
 (def update-state-timeout-ms 30000)
@@ -129,6 +131,72 @@
         fp)))
 
   u/IVivoClient
+  (ssr? [this]
+    (boolean @*ssr-info))
+
+  (ssr-get-state! [this sub-map]
+    (or (get (:resolved @*ssr-info) sub-map)
+        (do
+          (swap! *ssr-info update :needed conj sub-map)
+          nil)))
+
+  (<ssr [this component-fn component-name]
+    #?(:cljs
+       (au/go
+         (when-not (ifn? component-fn)
+           (throw (ex-info (str "component-fn must be a function. Got: `"
+                                (or component-fn "nil") "`.")
+                           (u/sym-map component-fn))))
+         (when-not (compare-and-set! *ssr-info nil initial-ssr-info)
+           (throw
+            (ex-info (str "Another SSR is in progress. Try again...") {})))
+         (try
+           (loop []
+             (let [el (component-fn this)
+                   _ (when-not (react/valid-element? el)
+
+                       (throw (ex-info
+                               (str "component-fn must return a valid React "
+                                    "element. Returned: `" (or el "nil") "`.")
+                               {:returned el})))
+                   s (react/render-to-string el)
+                   {:keys [needed]} @*ssr-info]
+               (if-not (seq needed)
+                 s
+                 (do
+                   (doseq [sub-map needed]
+                     (let [{:keys [state]} (au/<? (u/<make-state-info
+                                                   this sub-map
+                                                   component-name "SSR" {}))]
+                       (swap! *ssr-info update
+                              :resolved assoc sub-map state)))
+                   (swap! *ssr-info assoc :needed #{})
+                   (recur)))))
+           (finally
+             (reset! *ssr-info nil))))))
+
+  (get-local-state [this sub-map component-name]
+    (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
+          local-state @*local-state]
+      (reduce
+       (fn [acc [sym path]]
+         (let [v (cond
+                   (= :vivo/subject-id path)
+                   @*subject-id
+
+                   (= :local (first path))
+                   (let [resolved-path (mapv (fn [k]
+                                               (if-not (symbol? k)
+                                                 k
+                                                 (or (acc k)
+                                                     (u/throw-missing-path-key
+                                                      k path sub-map
+                                                      component-name))))
+                                             path)]
+                     (get-in-state local-state resolved-path :local)))]
+           (assoc acc sym v)))
+       {} ordered-pairs)))
+
   (<deserialize-value [this path ret]
     (au/go
       (when ret

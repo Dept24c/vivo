@@ -52,8 +52,10 @@
     [this sub-map-or-ordered-pairs subscriber-name resolution-map sub-id]
     [this sub-map-or-ordered-pairs subscriber-name resolution-map sub-id
      local-state db-id])
+  (<ssr [this component-fn component-name])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
+  (get-local-state [this sub-map component-name])
   (get-subscriber-id [this custom-id])
   (log-in! [this identifier secret cb])
   (log-out! [this])
@@ -61,6 +63,8 @@
   (register-subscriber-id! [this custom-id subscriber-id])
   (set-subject-id [this subject-id])
   (shutdown! [this])
+  (ssr-get-state! [this sub-map])
+  (ssr? [this])
   (start-update-loop [this])
   (subscribe! [this sub-map cur-state update-fn subscriber-name resolution-map])
   (unsubscribe! [this sub-id])
