@@ -33,14 +33,19 @@
 (defn eval-tx-fns [sub-map->op-cache tx-fns state]
   (reduce (fn [acc tx-fn]
             (let [{:keys [name sub-map f output-path]} tx-fn
-                  [head & tail] output-path
-                  _ (when-not (= :sys head)
+                  _ (when-not (= :sys (first output-path))
                       (throw-bad-output-path output-path))
                   pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
-                  si (make-state-info name pairs state)]
+                  si (make-state-info name pairs state)
+                  ;; TODO: Optimize this; just need path. Don't need val.
+                  {:keys [norm-path]} (commands/get-in-state state output-path)
+                  op :set
+                  val (f (:state si))
+                  update-info (u/sym-map norm-path op val)
+                  [head & tail] norm-path]
               (-> acc
-                  (update :state assoc-in tail (f (:state si)))
-                  (update :updated-paths conj output-path))))
+                  (update :state assoc-in tail val)
+                  (update :update-infos conj update-info))))
           {:state state
-           :updated-paths []}
+           :update-infos []}
           tx-fns))
