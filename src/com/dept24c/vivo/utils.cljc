@@ -55,7 +55,7 @@
   (<ssr [this component-fn component-name])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
-  (get-local-state [this sub-map component-name])
+  (get-local-state [this sub-map resolution-map component-name])
   (get-subscriber-id [this custom-id])
   (log-in! [this identifier secret cb])
   (log-out! [this])

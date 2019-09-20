@@ -176,7 +176,7 @@
            (finally
              (reset! *ssr-info nil))))))
 
-  (get-local-state [this sub-map component-name]
+  (get-local-state [this sub-map resolution-map component-name]
     (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
           local-state @*local-state]
       (reduce
@@ -196,7 +196,7 @@
                                              path)]
                      (get-in-state local-state resolved-path :local)))]
            (assoc acc sym v)))
-       {} ordered-pairs)))
+       resolution-map ordered-pairs)))
 
   (<deserialize-value [this path ret]
     (au/go

@@ -31,6 +31,11 @@
         (ocall React :useEffect effect dependencies)
         (ocall React :useEffect effect)))))
 
+(defn use-reducer
+  [reducer initial-state]
+  #?(:cljs
+     (ocall React :useReducer reducer initial-state)))
+
 (defn use-ref
   ([]
    (use-ref nil))
@@ -100,7 +105,8 @@
    #?(:cljs
       (let [initial-state (cond
                             (local-or-vivo-only? sub-map)
-                            (u/get-local-state vc sub-map component-name)
+                            (u/get-local-state vc sub-map resolution-map
+                                               component-name)
 
                             (u/ssr? vc)
                             (u/ssr-get-state! vc sub-map resolution-map)
