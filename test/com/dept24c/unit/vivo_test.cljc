@@ -42,19 +42,19 @@
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"First argument must be `vc`"
-       (macro-impl/check-arglist 'foo '[]))))
+       (macro-impl/check-arglist 'foo true '[]))))
 
 (deftest test-check-arglist-no-vc-2
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"First argument must be `vc`"
-       (macro-impl/check-arglist 'foo '[x]))))
+       (macro-impl/check-arglist 'foo true '[x]))))
 
 (deftest test-check-arglist
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
        #"The argument list must be a vector"
-       (macro-impl/check-arglist 'foo '()))))
+       (macro-impl/check-arglist 'foo false '()))))
 
 (deftest test-repeat-symbol
   (is (thrown-with-msg?

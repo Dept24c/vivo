@@ -24,10 +24,10 @@
    is a low-level function that generally should not be called directly.
    Prefer `def-component` or `use-vivo-state`.
    Returns a subscription id."
-  ([vc sub-map cur-state update-fn subscriber-name]
-   (u/subscribe! vc sub-map cur-state update-fn subscriber-name {}))
-  ([vc sub-map cur-state update-fn subscriber-name resolution-map]
-   (u/subscribe! vc sub-map cur-state update-fn subscriber-name
+  ([vc sub-map initial-state update-fn subscriber-name]
+   (u/subscribe! vc sub-map initial-state update-fn subscriber-name {}))
+  ([vc sub-map initial-state update-fn subscriber-name resolution-map]
+   (u/subscribe! vc sub-map initial-state update-fn subscriber-name
                  resolution-map)))
 
 (defn unsubscribe!

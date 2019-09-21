@@ -74,12 +74,6 @@
 
 ;;;; Macros
 
-(defmacro component
-  [& body]
-  `(create-element
-    (fn [props#]
-      ~@body)))
-
 (defmacro def-component
   "Defines a Vivo React component.
    The first argument to the constructor must be a parameter named

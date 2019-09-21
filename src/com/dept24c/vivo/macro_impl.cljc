@@ -8,7 +8,7 @@
      (:import
       (clojure.lang ExceptionInfo))))
 
-(defn check-arglist [component-name arglist]
+(defn check-arglist [component-name subscription? arglist]
   (when-not (vector? arglist)
     (throw
      (ex-info (str "Illegal argument list in component `" component-name
@@ -16,8 +16,9 @@
                    "` which is a " (type arglist) ".")
               (u/sym-map arglist component-name))))
   (let [first-arg (first arglist)]
-    (when (or (nil? first-arg)
-              (not= "vc" (name first-arg)))
+    (when (and subscription?
+               (or (nil? first-arg)
+                   (not= "vc" (name first-arg))))
       (throw
        (ex-info (str "Bad constructor arglist for component `" component-name
                      "`. First argument must be `vc`"
@@ -47,7 +48,7 @@
                   (let [[arglist & body] args]
                     (u/sym-map arglist body))))
         {:keys [docstring sub-map arglist body]} parts
-        _ (check-arglist component-name arglist)
+        _ (check-arglist component-name (boolean sub-map) arglist)
         _ (when sub-map
             (u/check-sub-map component-name "component" sub-map))
         repeated-syms (vec (set/intersection (set (keys sub-map))
@@ -78,17 +79,14 @@
   ([component-name args dispatch-val]
    (let [parts (parse-def-component-args component-name args)
          {:keys [docstring arglist sub-map body]} parts
-         def-type (if dispatch-val
-                    'defmethod
-                    'defn)
          first-line (if dispatch-val
                       `(defmethod ~component-name ~dispatch-val)
-                      `(defn ~component-name))
+                      (cond-> (vec `(defn ~component-name))
+                        docstring (conj docstring)))
          component-body (if sub-map
                           [(make-sub-body parts component-name)]
                           body)]
      `(~@first-line
-       {:doc ~docstring}
        [~@arglist]
        (check-constructor-args ~component-name '~arglist ~(count arglist))
        (com.dept24c.vivo.react/create-element
