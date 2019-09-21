@@ -35,15 +35,21 @@
                            num-args-defined))))))
 
 (defn parse-def-component-args [component-name args]
-  (let [parts (if (string? (first args))
-                (let [[docstring arglist sub-map & body] args]
-                  (u/sym-map docstring arglist sub-map body))
-                (let [docstring nil
-                      [arglist sub-map & body] args]
-                  (u/sym-map docstring arglist sub-map body)))
+  (let [parts (if (string? (nth args 0))
+                (if (map? (nth args 2))
+                  (let [[docstring arglist sub-map & body] args]
+                    (u/sym-map docstring arglist sub-map body))
+                  (let [[docstring arglist & body] args]
+                    (u/sym-map docstring arglist body)))
+                (if (map? (nth args 1))
+                  (let [[arglist sub-map & body] args]
+                    (u/sym-map arglist sub-map body))
+                  (let [[arglist & body] args]
+                    (u/sym-map arglist body))))
         {:keys [docstring sub-map arglist body]} parts
         _ (check-arglist component-name arglist)
-        _ (u/check-sub-map component-name "component" sub-map)
+        _ (when sub-map
+            (u/check-sub-map component-name "component" sub-map))
         repeated-syms (vec (set/intersection (set (keys sub-map))
                                              (set arglist)))]
     (when (seq repeated-syms)
@@ -55,21 +61,36 @@
                 (u/sym-map repeated-syms sub-map arglist component-name))))
     parts))
 
-(defn build-component [component-name render-nil-state? args]
-  (let [parts (parse-def-component-args component-name args)
-        {:keys [docstring sub-map arglist body]} parts
+(defn make-sub-body [parts component-name]
+  (let [{:keys [sub-map arglist body]} parts
         sub-syms (keys sub-map)
         cname (name component-name)]
-    `(defn ~component-name
+    `(let [resolution-map# (zipmap (next '~arglist)
+                                   (next (vector ~@arglist)))
+           ~'vivo-state (com.dept24c.vivo.react/use-vivo-state
+                         ~'vc '~sub-map ~cname resolution-map#)
+           {:syms [~@sub-syms]} ~'vivo-state]
+       ~@body)))
+
+(defn build-component
+  ([component-name args]
+   (build-component component-name args nil))
+  ([component-name args dispatch-val]
+   (let [parts (parse-def-component-args component-name args)
+         {:keys [docstring arglist sub-map body]} parts
+         def-type (if dispatch-val
+                    'defmethod
+                    'defn)
+         first-line (if dispatch-val
+                      `(defmethod ~component-name ~dispatch-val)
+                      `(defn ~component-name))
+         component-body (if sub-map
+                          [(make-sub-body parts component-name)]
+                          body)]
+     `(~@first-line
        {:doc ~docstring}
        [~@arglist]
-       (check-constructor-args ~cname '~arglist ~(count arglist))
+       (check-constructor-args ~component-name '~arglist ~(count arglist))
        (com.dept24c.vivo.react/create-element
         (fn ~component-name [props#]
-          (let [resolution-map# (zipmap (next '~arglist)
-                                        (next (vector ~@arglist)))
-                vivo-state# (com.dept24c.vivo.react/use-vivo-state
-                             ~'vc '~sub-map ~cname resolution-map#)
-                {:syms [~@sub-syms]} vivo-state#]
-            (when (or vivo-state# ~render-nil-state?)
-              ~@body)))))))
+          ~@component-body))))))

@@ -16,8 +16,7 @@
   (let [arglist '[vc a b]
         sub-map '{x [:local :c]}
         args [arglist sub-map]
-        expected {:docstring nil
-                  :sub-map sub-map
+        expected {:sub-map sub-map
                   :arglist arglist
                   :body nil}]
     (is (= expected (macro-impl/parse-def-component-args 'foo args)))))
