@@ -101,19 +101,6 @@
   [vc fp]
   (u/<fp->schema vc fp))
 
-(defn register-subscriber-id!
-  "Adds an entry to the custom-id->subscriber-id map.
-   Useful for accessing subscriber-local state."
-  [vc custom-id subscriber-id]
-  (u/register-subscriber-id! vc custom-id subscriber-id))
-
-(defn get-subscriber-id
-  "Gets a subscriber-id from the custom-id->subscriber-id map.
-   The subscriber-id must have been added via register-subscriber-id!.
-   Useful for accessing subscriber-local state."
-  [vc custom-id]
-  (u/get-subscriber-id vc custom-id))
-
 (defn shutdown!
   "Shutdown the vivo client and its connection to the server.
    Mostly useful in tests."

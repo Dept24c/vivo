@@ -49,8 +49,8 @@
   (<handle-updates [this updates])
   (<handle-sys-state-changed [this arg metadata])
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map sub-id]
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map sub-id
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map]
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map
      local-state db-id])
   (<ssr [this component-fn component-name])
   (<update-sys-state [this update-commands])

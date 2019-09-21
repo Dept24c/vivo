@@ -58,18 +58,10 @@
            k (case head
                :local :local-cmds
                :sys :sys-cmds
-               :subscriber :sub-cmds
-               :component :sub-cmds
                (u/throw-bad-path-root path))]
-       (when (and (#{:subscriber :component} head)
-                  (not (seq tail)))
-         (throw (ex-info
-                 (str "Missing " (name head) " id in " head " path. ")
-                 (u/sym-map path))))
        (update acc k conj (assoc cmd :path path))))
    {:local-cmds []
-    :sys-cmds []
-    :sub-cmds []}
+    :sys-cmds []}
    update-cmds))
 
 (defn get-sub-id [*last-sub-id]
@@ -99,10 +91,9 @@
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
                        log-info log-error state-cache sub-map->op-cache
                        path->schema-cache update-ch subject-id-ch
-                       *local-state *subscriber-state *sub-id->sub *cur-db-id
+                       *local-state *sub-id->sub *cur-db-id
                        *last-sub-id *conn-initialized? *stopped? *ssr-info
-                       *fp->schema *subject-id *custom-id->subscriber-id
-                       *subscriber-id->custom-id *subscriber-id->last-state]
+                       *fp->schema *subject-id *subscriber-id->last-state]
   u/ISchemaStore
   (<fp->schema [this fp]
     (when-not (int? fp)
@@ -167,7 +158,7 @@
                    (doseq [[sub-map resolution-map] needed]
                      (let [{:keys [state]} (au/<? (u/<make-state-info
                                                    this sub-map
-                                                   component-name "SSR"
+                                                   component-name
                                                    resolution-map))]
                        (swap! *ssr-info update
                               :resolved assoc [sub-map resolution-map] state)))
@@ -262,12 +253,12 @@
     (log-info "Vivo client stopped."))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name sub-id resolution-map]
-    (u/<make-state-info this sub-map-or-ordered-pairs subscriber-name sub-id
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map]
+    (u/<make-state-info this sub-map-or-ordered-pairs subscriber-name
                         resolution-map @*local-state @*cur-db-id))
 
   (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name sub-id resolution-map
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map
      local-state db-id]
     (au/go
       ;; TODO: Optimize by doing <get-in-sys-state calls in parallel
@@ -291,9 +282,6 @@
                         (= :vivo/subject-id path)
                         @*subject-id
 
-                        (#{:vivo/subscriber-id :vivo/component-id} path)
-                        sub-id
-
                         (= :local path-head)
                         (get-in-state local-state resolved-path :local)
 
@@ -301,11 +289,7 @@
                         (= :sys path-head)
                         (when db-id
                           (au/<? (u/<get-in-sys-state this db-id
-                                                      resolved-path)))
-
-                        (#{:subscriber :component} path-head)
-                        (get-in-state @*subscriber-state resolved-path
-                                      path-head))
+                                                      resolved-path))))
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
                                 (update :paths conj (or resolved-path
@@ -320,7 +304,7 @@
     (let [sub-id (get-sub-id *last-sub-id)
           ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
           <make-si (partial u/<make-state-info this ordered-pairs
-                            subscriber-name sub-id resolution-map)]
+                            subscriber-name resolution-map)]
       (ca/go
         (try
           (when (au/<? (u/<wait-for-conn-init this))
@@ -355,11 +339,7 @@
     (swap! *sub-id->sub
            (fn [m]
              (dissoc m sub-id)))
-    (swap! *subscriber-state dissoc sub-id)
     (swap! *subscriber-id->last-state dissoc sub-id)
-    (when-let [custom-id (@*subscriber-id->custom-id sub-id)]
-      (swap! *subscriber-id->custom-id dissoc sub-id)
-      (swap! *custom-id->subscriber-id dissoc custom-id))
     nil)
 
   (notify-subs [this update-infos notify-all?]
@@ -386,7 +366,7 @@
 
   (<handle-updates [this update]
     (au/go
-      (let [{:keys [sys-cmds local-cmds sub-cmds cb]} update
+      (let [{:keys [sys-cmds local-cmds cb]} update
             cb* (or cb (constantly nil))
             sys-ret (when (seq sys-cmds)
                       (when-let [ret (au/<? (u/<update-sys-state
@@ -403,18 +383,11 @@
           (cb* false) ;; Don't do local/sub updates if sys updates failed
           (loop [num-attempts 1]
             (let [cur-local-state @*local-state
-                  local-ret (eval-cmds cur-local-state local-cmds :local)
-                  cur-sub-state @*subscriber-state
-                  sub-ret (eval-cmds cur-sub-state sub-cmds
-                                     #{:subscriber :component})]
-              (if (and
-                   (compare-and-set! *local-state cur-local-state
-                                     (:state local-ret))
-                   (compare-and-set! *subscriber-state cur-sub-state
-                                     (:state sub-ret)))
+                  local-ret (eval-cmds cur-local-state local-cmds :local)]
+              (if (compare-and-set! *local-state cur-local-state
+                                    (:state local-ret))
                 (let [update-infos (concat (:update-infos sys-ret)
-                                           (:update-infos local-ret)
-                                           (:update-infos sub-ret))]
+                                           (:update-infos local-ret))]
                   (u/notify-subs this update-infos (:notify-all? sys-ret))
                   (cb* true))
                 (if (< num-attempts max-commit-attempts)
@@ -423,7 +396,7 @@
                         (str "Failed to commit updates after "
                              num-attempts " attempts.")
                         (u/sym-map max-commit-attempts
-                                   sys-cmds local-cmds sub-cmds)))))))))))
+                                   sys-cmds local-cmds)))))))))))
 
   (start-update-loop [this]
     (ca/go-loop []
@@ -511,15 +484,7 @@
 
   (<add-subject! [this identifier secret subject-id]
     (cc/<send-msg capsule-client :add-subject
-                  (u/sym-map identifier secret subject-id)))
-
-  (register-subscriber-id! [this custom-id subscriber-id]
-    (swap! *subscriber-id->custom-id assoc subscriber-id custom-id)
-    (swap! *custom-id->subscriber-id assoc custom-id subscriber-id)
-    nil)
-
-  (get-subscriber-id [this custom-id]
-    (@*custom-id->subscriber-id custom-id)))
+                  (u/sym-map identifier secret subject-id))))
 
 (defn <log-in-w-token [capsule-client subject-id-ch log-info token]
   (au/go
@@ -613,7 +578,6 @@
                 sys-state-source
                 sys-state-schema]} (merge default-vc-opts opts)
         *local-state (atom initial-local-state)
-        *subscriber-state (atom {})
         *sub-id->sub (atom {})
         *cur-db-id (atom nil)
         *last-sub-id (atom 0)
@@ -622,8 +586,6 @@
         *ssr-info (atom nil)
         *fp->schema (atom {})
         *subject-id (atom nil)
-        *custom-id->subscriber-id (atom {})
-        *subscriber-id->custom-id (atom {})
         *subscriber-id->last-state (atom {})
         path->schema-cache (sr/stockroom 100)
         state-cache (sr/stockroom state-cache-num-keys)
@@ -639,10 +601,9 @@
         vc (->VivoClient capsule-client sys-state-schema sys-state-source
                          log-info log-error state-cache sub-map->op-cache
                          path->schema-cache update-ch subject-id-ch
-                         *local-state *subscriber-state *sub-id->sub *cur-db-id
-                         *last-sub-id *conn-initialized? *stopped? *ssr-info
-                         *fp->schema *subject-id *custom-id->subscriber-id
-                         *subscriber-id->custom-id *subscriber-id->last-state)]
+                         *local-state *sub-id->sub *cur-db-id *last-sub-id
+                         *conn-initialized? *stopped? *ssr-info
+                         *fp->schema *subject-id *subscriber-id->last-state)]
     (u/start-update-loop vc)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
