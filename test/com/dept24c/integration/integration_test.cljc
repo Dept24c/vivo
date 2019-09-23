@@ -153,7 +153,7 @@
                                               tu/test-subject-id))
                state-ch (ca/chan)
                sub-map '{subject-id :vivo/subject-id}
-               sub-id (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
+               unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
                login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
@@ -164,7 +164,7 @@
            (is (= tu/test-subject-id ('subject-id (au/<? state-ch))))
            (vivo/log-out! vc)
            (is (= {'subject-id nil} (au/<? state-ch)))
-           (vivo/unsubscribe! vc sub-id))
+           (unsub!))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected (u/ex-msg e))))
          (finally
@@ -182,12 +182,12 @@
                state-ch (ca/chan)
                sub-map '{app-name [:sys :app-name]
                          secret [:sys :secret]}
-               sub-id (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
+               unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                expected-state {'app-name app-name
                                'secret :vivo/unauthorized}]
            (is (= expected-state (au/<? state-ch)))
-           (vivo/unsubscribe! vc sub-id))
+           (unsub!))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally

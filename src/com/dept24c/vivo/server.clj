@@ -44,7 +44,6 @@
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
   (<modify-db [this <update-fn msg metadata])
-  (<serialize-update-info-values [this update-infos])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
   (<update-state [this arg metadata])
@@ -299,11 +298,9 @@
                                             l/string-schema
                                             prev-db-id
                                             new-db-id))
-              (let [ser-uinfos (au/<? (<serialize-update-info-values
-                                       this (:update-infos uf-ret)))
-                    change-info {:new-db-id new-db-id
+              (let [change-info {:new-db-id new-db-id
                                  :prev-db-id prev-db-id
-                                 :update-infos ser-uinfos}]
+                                 :update-infos (:update-infos uf-ret)}]
                 (doseq [conn-id* (disj (set conn-ids) conn-id)]
                   (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
                 change-info)
@@ -314,25 +311,6 @@
                 (do
                   (au/<? (ca/timeout (rand-int 100)))
                   (recur (dec num-tries-left))))))))))
-
-  (<serialize-update-info-values [this update-infos]
-    (au/go
-      (if (not (seq update-infos))
-        []
-        (loop [i 0
-               out []] ;; Use loop to stay in go block
-          (let [{:keys [norm-path value] :as info} (nth update-infos i)
-                schema-path (rest norm-path) ; Ignore :sys
-                schema (u/path->schema path->schema-cache state-schema
-                                       schema-path)
-                fp (au/<? (u/<schema->fp perm-storage schema))
-                sval {:fp fp
-                      :bytes (l/serialize schema value)}
-                new-i (inc i)
-                new-out (conj out (assoc info :value sval))]
-            (if (= (count update-infos) new-i)
-              new-out
-              (recur new-i new-out)))))))
 
   (<add-subject [this arg metadata]
     (au/go

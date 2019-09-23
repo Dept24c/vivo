@@ -23,17 +23,12 @@
    change, calls `update-fn` with the updated state. Note that this
    is a low-level function that generally should not be called directly.
    Prefer `def-component` or `use-vivo-state`.
-   Returns a subscription id."
+   Returns an unsubscribe fn that may be called to cancel the subscription."
   ([vc sub-map initial-state update-fn subscriber-name]
    (u/subscribe! vc sub-map initial-state update-fn subscriber-name {}))
   ([vc sub-map initial-state update-fn subscriber-name resolution-map]
    (u/subscribe! vc sub-map initial-state update-fn subscriber-name
                  resolution-map)))
-
-(defn unsubscribe!
-  "Removes a Vivo subscription. Returns nil."
-  [vc sub-id]
-  (u/unsubscribe! vc sub-id))
 
 (defn update-state!
   ([vc update-commands]

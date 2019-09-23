@@ -46,28 +46,22 @@
     [this identifier secret subject-id])
   (<deserialize-value [this path ret])
   (<get-in-sys-state [this db-id path])
-  (<handle-updates [this updates])
-  (<handle-sys-state-changed [this arg metadata])
+  (<handle-updates [this updates cb])
   (<make-state-info
     [this sub-map-or-ordered-pairs subscriber-name resolution-map]
     [this sub-map-or-ordered-pairs subscriber-name resolution-map
      local-state db-id])
-  (<ssr [this component-fn component-name])
+  (<ssr [this component-fn component-name static-markup?])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
   (get-local-state [this sub-map resolution-map component-name])
-  (get-subscriber-id [this custom-id])
+  (handle-sys-state-changed [this arg metadata])
   (log-in! [this identifier secret cb])
   (log-out! [this])
-  (notify-subs [this updatedpaths notify-all])
-  (register-subscriber-id! [this custom-id subscriber-id])
-  (set-subject-id [this subject-id])
   (shutdown! [this])
   (ssr-get-state! [this sub-map resolution-map])
   (ssr? [this])
-  (start-update-loop [this])
   (subscribe! [this sub-map cur-state update-fn subscriber-name resolution-map])
-  (unsubscribe! [this sub-id])
   (update-cmd->serializable-update-cmd [this cmds])
   (update-state! [this update-cmds cb]))
 
@@ -298,8 +292,7 @@
 
 (l/def-record-schema update-info-schema
   [:norm-path path-schema]
-  [:op op-schema]
-  [:value serialized-value-schema])
+  [:op op-schema])
 
 (l/def-record-schema sys-state-change-schema
   [:new-db-id db-id-schema]

@@ -22,6 +22,10 @@
   #?(:cljs
      (ocall ReactDOMServer :renderToString el)))
 
+(defn render-to-static-markup [el]
+  #?(:cljs
+     (ocall ReactDOMServer :renderToStaticMarkup el)))
+
 (defn use-effect
   ([effect]
    (use-effect effect nil))
@@ -52,8 +56,11 @@
   #?(:cljs
      (ocall React :cloneElement element #js {"key" k})))
 
-(defn <ssr [vc component-fn component-name]
-  (u/<ssr vc component-fn component-name))
+(defn <ssr
+  ([vc component-fn component-name]
+   (u/<ssr vc component-fn component-name false))
+  ([vc component-fn component-name static-markup?]
+   (u/<ssr vc component-fn component-name static-markup?)))
 
 (defn local-or-vivo-only? [sub-map]
   (reduce (fn [acc path]
@@ -106,9 +113,13 @@
                             nil)
             [state update-fn] (use-state initial-state)
             effect (fn []
-                     (let [sub-id (u/subscribe! vc sub-map state update-fn
-                                                component-name resolution-map)]
-                       #(u/unsubscribe! vc sub-id)))]
+                     (let [unsub (u/subscribe! vc sub-map state
+                                               #(do
+                                                  (println
+                                                   "Calling update-fn on" component-name)
+                                                  (update-fn %))
+                                               component-name resolution-map)]
+                       unsub))]
         (use-effect effect #js [])
         state))))
 
@@ -131,5 +142,5 @@
                     #(doseq [e events]
                        (ocall js/document :removeEventListener
                               e handle-click)))]
-       (use-effect effect #js [])
+       (use-effect effect #js [cb])
        el-ref)))
