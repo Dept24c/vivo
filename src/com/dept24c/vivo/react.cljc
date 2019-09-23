@@ -114,10 +114,7 @@
             [state update-fn] (use-state initial-state)
             effect (fn []
                      (let [unsub (u/subscribe! vc sub-map state
-                                               #(do
-                                                  (println
-                                                   "Calling update-fn on" component-name)
-                                                  (update-fn %))
+                                               #(update-fn %)
                                                component-name resolution-map)]
                        unsub))]
         (use-effect effect #js [])
