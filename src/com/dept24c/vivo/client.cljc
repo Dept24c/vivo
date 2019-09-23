@@ -150,7 +150,7 @@
                                (str "component-fn must return a valid React "
                                     "element. Returned: `" (or el "nil") "`.")
                                {:returned el})))
-                   s (when static-markup?
+                   s (if static-markup?
                        (react/render-to-static-markup el)
                        (react/render-to-string el))
                    {:keys [needed]} @*ssr-info]
