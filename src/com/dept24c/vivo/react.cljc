@@ -131,7 +131,7 @@
                           (when-not (ocall el-ref "current.contains"
                                            (oget e :target))
                             (cb)))
-           events ["mousedown" "touchstart"]
+           events ["click"]
            effect (fn []
                     (doseq [e events]
                       (ocall js/document :addEventListener
