@@ -172,24 +172,26 @@
   (get-local-state [this sub-map resolution-map component-name]
     (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
           local-state @*local-state]
-      (reduce
-       (fn [acc [sym path]]
-         (let [v (cond
-                   (= :vivo/subject-id path)
-                   @*subject-id
+      (-> (reduce
+           (fn [acc [sym path]]
+             (let [v (cond
+                       (= :vivo/subject-id path)
+                       @*subject-id
 
-                   (= :local (first path))
-                   (let [resolved-path (mapv (fn [k]
-                                               (if-not (symbol? k)
-                                                 k
-                                                 (or (acc k)
-                                                     (u/throw-missing-path-key
-                                                      k path sub-map
-                                                      component-name))))
-                                             path)]
-                     (get-in-state local-state resolved-path :local)))]
-           (assoc acc sym v)))
-       resolution-map ordered-pairs)))
+                       (= :local (first path))
+                       (let [resolved-path (mapv
+                                            (fn [k]
+                                              (if-not (symbol? k)
+                                                k
+                                                (or (acc k)
+                                                    (u/throw-missing-path-key
+                                                     k path sub-map
+                                                     component-name))))
+                                            path)]
+                         (get-in-state local-state resolved-path :local)))]
+               (assoc acc sym v)))
+           resolution-map ordered-pairs)
+          (select-keys (keys sub-map)))))
 
   (<deserialize-value [this path ret]
     (au/go
@@ -264,7 +266,8 @@
           (let [ordered-pairs (if (map? sub-map-or-ordered-pairs)
                                 (u/sub-map->ordered-pairs
                                  sub-map->op-cache sub-map-or-ordered-pairs)
-                                sub-map-or-ordered-pairs)]
+                                sub-map-or-ordered-pairs)
+                sub-keys (map first ordered-pairs)]
             ;; Use loop instead of reduce here to stay within the go block
             (loop [acc init
                    i 0]
@@ -289,7 +292,7 @@
                                 (update :paths conj (or resolved-path
                                                         path)))]
                 (if (= (dec (count ordered-pairs)) i)
-                  new-acc
+                  (update new-acc :state select-keys sub-keys)
                   (recur new-acc (inc i))))))))))
 
   (subscribe!
