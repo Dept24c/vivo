@@ -475,7 +475,7 @@
              sub-map '{my-books [:local :books my-book-ids]}
              resolution-map {'my-book-ids my-book-ids}
              update-fn #(ca/put! ch ('my-books %))
-             expected (select-keys books my-book-ids)]
+             expected (vals (select-keys books my-book-ids))]
          (au/<? (vivo/<update-state! vc [{:path [:local :books]
                                           :op :set
                                           :arg books}]))
@@ -506,32 +506,33 @@
 
 (deftest test-expand-path-1
   (let [path [:x [:a :b]]
-        expected {:a [:x :a]
-                  :b [:x :b]}]
+        expected [[:x :a]
+                  [:x :b]]]
     (is (= expected (u/expand-path path)))))
 
 (deftest test-expand-path-2
   (let [path [:b [1 2] :c [3 5] :d]
-        expected {[1 3] [:b 1 :c 3 :d]
-                  [1 5] [:b 1 :c 5 :d]
-                  [2 3] [:b 2 :c 3 :d]
-                  [2 5] [:b 2 :c 5 :d]}]
+        expected [[:b 1 :c 3 :d]
+                  [:b 2 :c 3 :d]
+                  [:b 1 :c 5 :d]
+                  [:b 2 :c 5 :d]]]
     (is (= expected (u/expand-path path)))))
 
 (deftest test-expand-path-3
   (let [path [[1 2][3 5] :d]
-        expected {[1 3] [1 3 :d]
-                  [1 5] [1 5 :d]
-                  [2 3] [2 3 :d]
-                  [2 5] [2 5 :d]}]
+        expected [[1 3 :d]
+                  [2 3 :d]
+                  [1 5 :d]
+                  [2 5 :d]]]
     (is (= expected (u/expand-path path)))))
 
 (deftest test-expand-path-4
   (let [path [:x ["1" "2"] :y [:a :b]]
-        expected {["1" :a] [:x "1" :y :a]
-                  ["1" :b] [:x "1" :y :b]
-                  ["2" :a] [:x "2" :y :a]
-                  ["2" :b] [:x "2" :y :b]}]
+        expected
+        [[:x "1" :y :a]
+         [:x "2" :y :a]
+         [:x "1" :y :b]
+         [:x "2" :y :b]]]
     (is (= expected (u/expand-path path)))))
 
 (deftest test-update-sub?-numeric

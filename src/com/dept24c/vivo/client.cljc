@@ -74,9 +74,7 @@
 (defn get-in-state [state path prefix]
   (if-not (some sequential? path)
     (:val (commands/get-in-state state path prefix))
-    (reduce-kv (fn [acc k expanded-path]
-                 (assoc acc k (get-in-state state expanded-path prefix)))
-               {} (u/expand-path path))))
+    (map #(get-in-state state % prefix) (u/expand-path path))))
 
 (defn eval-cmds [initial-state cmds prefix]
   (reduce (fn [{:keys [state] :as acc} cmd]
@@ -199,13 +197,8 @@
         (let [schema-path (rest path) ; Ignore :sys
               value-sch (u/path->schema path->schema-cache sys-state-schema
                                         schema-path)
-              writer-sch (au/<? (u/<fp->schema this (:fp ret)))
-              v (l/deserialize value-sch writer-sch (:bytes ret))]
-          (if-not (some sequential? path)
-            v
-            (reduce-kv (fn [acc k v]
-                         (assoc acc (u/str->edn k) v))
-                       {} v))))))
+              writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
+          (l/deserialize value-sch writer-sch (:bytes ret))))))
 
   (log-in! [this identifier secret cb]
     (ca/go

@@ -130,8 +130,7 @@
                       "789" {:name "Candace" :nickname "Candy"}}
                sub-map '{core-user-names [:sys :users core-user-ids :name]}
                update-fn #(ca/put! ch ('core-user-names %))
-               expected {"123" "Alice"
-                         "789" "Candace"}]
+               expected ["Alice" "Candace"]]
            (au/<? (vivo/<update-state! vc [{:path [:sys :users]
                                             :op :set
                                             :arg users}]))

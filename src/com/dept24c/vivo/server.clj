@@ -411,18 +411,15 @@
                                       [:data-id] nil))]
         (if-not (some sequential? path)
           (au/<? (u/<get-in storage data-id state-schema path* :sys))
-          (let [expanded-path-map (u/expand-path path*)
-                num-results (count expanded-path-map)
-                ks (keys expanded-path-map)]
+          (let [expanded-paths (u/expand-path path*)
+                num-results (count expanded-paths)]
             ;; Use loop to stay in the go block
-            (loop [out {}
+            (loop [out []
                    i 0]
-              (let [k (nth ks i)
-                    edn-str-k (u/edn->str k)
-                    expanded-path (expanded-path-map k)
+              (let [expanded-path (nth expanded-paths i)
                     v (au/<? (u/<get-in storage data-id state-schema
                                         expanded-path :sys))
-                    new-out (assoc out edn-str-k v)
+                    new-out (conj out v)
                     new-i (inc i)]
                 (if (= num-results new-i)
                   new-out

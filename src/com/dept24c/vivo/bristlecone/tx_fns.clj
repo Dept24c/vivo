@@ -9,9 +9,7 @@
 (defn get-in-state [state path prefix]
   (if-not (some sequential? path)
     (:val (commands/get-in-state state path prefix))
-    (reduce-kv (fn [acc k expanded-path]
-                 (assoc acc k (get-in-state state expanded-path prefix)))
-               {} (u/expand-path path))))
+    (map #(get-in-state state % prefix) (u/expand-path path))))
 
 (defn make-state-info [tx-fn-name ordered-pairs state]
   (reduce (fn [acc [sym path]]
