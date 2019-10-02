@@ -119,25 +119,3 @@
                        unsub))]
         (use-effect effect #js [])
         state))))
-
-(defn use-on-outside-click
-  "Calls the given callback when a click happens outside the referenced element.
-   Returns a reference which should be added as a `ref` property to the
-   referenced element, e.g. `{:ref (react/use-on-outside-click close-menu)}`"
-  [cb]
-  #?(:cljs
-     (let [el-ref (use-ref)
-           handle-click (fn [e]
-                          (when-not (ocall el-ref "current.contains"
-                                           (oget e :target))
-                            (cb)))
-           events ["click"]
-           effect (fn []
-                    (doseq [e events]
-                      (ocall js/document :addEventListener
-                             e handle-click))
-                    #(doseq [e events]
-                       (ocall js/document :removeEventListener
-                              e handle-click)))]
-       (use-effect effect #js [cb])
-       el-ref)))
