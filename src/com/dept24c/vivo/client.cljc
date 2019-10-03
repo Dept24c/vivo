@@ -87,6 +87,12 @@
            :update-infos []}
           cmds))
 
+(defn xf-res-map [res-map]
+  (reduce-kv (fn [acc k v]
+               (assoc acc k (when-not (fn? v)
+                              v)))
+             {} res-map))
+
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
                        log-info log-error state-cache sub-map->op-cache
                        path->schema-cache updates-ch updates-pub
@@ -125,7 +131,7 @@
     (boolean @*ssr-info))
 
   (ssr-get-state! [this sub-map resolution-map]
-    (or (get (:resolved @*ssr-info) [sub-map (keys resolution-map)])
+    (or (get (:resolved @*ssr-info) [sub-map (xf-res-map resolution-map)])
         (do
           (swap! *ssr-info update :needed conj [sub-map resolution-map])
           nil)))
@@ -163,7 +169,7 @@
                                                    resolution-map))]
                        (swap! *ssr-info update
                               :resolved assoc
-                              [sub-map (keys resolution-map)] state)))
+                              [sub-map (xf-res-map resolution-map)] state)))
                    (swap! *ssr-info assoc :needed #{})
                    (recur)))))
            (finally
