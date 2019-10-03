@@ -125,7 +125,7 @@
     (boolean @*ssr-info))
 
   (ssr-get-state! [this sub-map resolution-map]
-    (or (get (:resolved @*ssr-info) [sub-map resolution-map])
+    (or (get (:resolved @*ssr-info) [sub-map (keys resolution-map)])
         (do
           (swap! *ssr-info update :needed conj [sub-map resolution-map])
           nil)))
@@ -162,7 +162,8 @@
                                                    component-name
                                                    resolution-map))]
                        (swap! *ssr-info update
-                              :resolved assoc [sub-map resolution-map] state)))
+                              :resolved assoc
+                              [sub-map (keys resolution-map)] state)))
                    (swap! *ssr-info assoc :needed #{})
                    (recur)))))
            (finally
