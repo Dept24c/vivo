@@ -74,7 +74,8 @@
 (defn get-in-state [state path prefix]
   (if-not (some sequential? path)
     (:val (commands/get-in-state state path prefix))
-    (map #(get-in-state state % prefix) (u/expand-path path))))
+    (when-not (u/empty-sequence-in-path? path)
+      (map #(get-in-state state % prefix) (u/expand-path path)))))
 
 (defn eval-cmds [initial-state cmds prefix]
   (reduce (fn [{:keys [state] :as acc} cmd]
@@ -201,6 +202,11 @@
           (l/deserialize value-sch writer-sch (:bytes ret))))))
 
   (log-in! [this identifier secret cb]
+    (when-not capsule-client
+      (throw
+       (ex-info (str "Can't log in because the :get-server-url "
+                     "option was not provided when the vivo-client was "
+                     "created.") {})))
     (ca/go
       (try
         (sr/flush! state-cache)
@@ -225,6 +231,11 @@
             (cb e))))))
 
   (log-out! [this]
+    (when-not capsule-client
+      (throw
+       (ex-info (str "Can't log in because the :get-server-url "
+                     "option was not provided when the vivo-client was "
+                     "created.") {})))
     (ca/go
       (try
         (delete-login-token)
@@ -393,6 +404,11 @@
     nil)
 
   (<update-sys-state [this sys-cmds]
+    (when-not capsule-client
+      (throw
+       (ex-info (str "Can't update :sys state because the :get-server-url "
+                     "option was not provided when the vivo-client was "
+                     "created.") {})))
     (cc/<send-msg capsule-client :update-state
                   (map (partial u/update-cmd->serializable-update-cmd this)
                        sys-cmds)
@@ -415,6 +431,11 @@
         scmd)))
 
   (<get-in-sys-state [this db-id path]
+    (when-not capsule-client
+      (throw
+       (ex-info (str "Can't get :sys state because the :get-server-url "
+                     "option was not provided when the vivo-client was "
+                     "created.") {})))
     (au/go
       (or (sr/get state-cache [db-id path])
           (let [arg (u/sym-map db-id path)

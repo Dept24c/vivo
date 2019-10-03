@@ -141,6 +141,34 @@
          (finally
            (vivo/shutdown! vc)))))))
 
+(deftest test-empty-sequence-join
+  (au/test-async
+   1000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [ch (ca/chan 1)
+               users {"123" {:name "Alice" :nickname "A"}
+                      "456" {:name "Bob" :nickname "Bobby"}
+                      "789" {:name "Candace" :nickname "Candy"}}
+               sub-map '{core-user-ids [:sys :core-user-ids]
+                         core-user-names [:sys :users core-user-ids :name]}
+               update-fn #(ca/put! ch %)
+               expected '{core-user-ids []
+                          core-user-names nil}]
+           (au/<? (vivo/<update-state! vc [{:path [:sys :core-user-ids]
+                                            :op :set
+                                            :arg []}
+                                           {:path [:sys :users]
+                                            :op :set
+                                            :arg users}]))
+           (vivo/subscribe! vc sub-map nil update-fn "test")
+           (is (= expected (au/<? ch))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
 (deftest test-authentication
   (au/test-async
    10000

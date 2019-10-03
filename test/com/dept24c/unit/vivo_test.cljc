@@ -484,6 +484,32 @@
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
+(deftest test-empty-sequence-join
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{my-book-ids [:local :my-book-ids]
+                       my-books [:local :books my-book-ids]}
+             update-fn #(ca/put! ch %)
+             expected '{my-book-ids []
+                        my-books nil}]
+         (au/<? (vivo/<update-state! vc [{:path [:local :my-book-ids]
+                                          :op :set
+                                          :arg []}
+                                         {:path [:local :books]
+                                          :op :set
+                                          :arg books}]))
+         (vivo/subscribe! vc sub-map nil update-fn "test")
+         (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
 (deftest test-relationship
   (are [ret ks1 ks2] (= ret (u/relationship-info ks1 ks2))
     [:equal nil] [] []

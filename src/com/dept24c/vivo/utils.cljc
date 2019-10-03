@@ -621,6 +621,14 @@
         (sr/put! sub-map->op-cache sub-map pairs)
         pairs)))
 
+(defn empty-sequence-in-path? [path]
+  (reduce (fn [acc element]
+            (if (and (sequential? element)
+                     (not (seq element)))
+              (reduced true)
+              acc))
+          false path))
+
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 
 (defn jvm? []

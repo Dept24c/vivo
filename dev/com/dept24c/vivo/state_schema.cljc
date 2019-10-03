@@ -14,6 +14,7 @@
 
 (l/def-record-schema state-schema
   [:app-name l/string-schema]
+  [:core-user-ids (l/array-schema l/string-schema)]
   [:msgs msgs-schema]
   [:secret l/string-schema]
   [:users (l/map-schema user-schema)]

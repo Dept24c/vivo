@@ -411,19 +411,20 @@
                                       [:data-id] nil))]
         (if-not (some sequential? path)
           (au/<? (u/<get-in storage data-id state-schema path* :sys))
-          (let [expanded-paths (u/expand-path path*)
-                num-results (count expanded-paths)]
-            ;; Use loop to stay in the go block
-            (loop [out []
-                   i 0]
-              (let [expanded-path (nth expanded-paths i)
-                    v (au/<? (u/<get-in storage data-id state-schema
-                                        expanded-path :sys))
-                    new-out (conj out v)
-                    new-i (inc i)]
-                (if (= num-results new-i)
-                  new-out
-                  (recur new-out new-i)))))))))
+          (when-not (u/empty-sequence-in-path? path)
+            (let [expanded-paths (u/expand-path path*)
+                  num-results (count expanded-paths)]
+              ;; Use loop to stay in the go block
+              (loop [out []
+                     i 0]
+                (let [expanded-path (nth expanded-paths i)
+                      v (au/<? (u/<get-in storage data-id state-schema
+                                          expanded-path :sys))
+                      new-out (conj out v)
+                      new-i (inc i)]
+                  (if (= num-results new-i)
+                    new-out
+                    (recur new-out new-i))))))))))
 
   (<get-log [this branch limit]
     (au/go
