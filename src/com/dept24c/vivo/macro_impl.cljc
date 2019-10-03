@@ -68,9 +68,9 @@
         cname (name component-name)]
     `(let [resolution-map# (zipmap (next '~arglist)
                                    (next (vector ~@arglist)))
-           ~'vivo-state (com.dept24c.vivo.react/use-vivo-state
-                         ~'vc '~sub-map ~cname resolution-map#)
-           {:syms [~@sub-syms]} ~'vivo-state]
+           ~'*vivo-state* (com.dept24c.vivo.react/use-vivo-state
+                           ~'vc '~sub-map ~cname resolution-map#)
+           {:syms [~@sub-syms]} ~'*vivo-state*]
        ~@body)))
 
 (defn build-component
