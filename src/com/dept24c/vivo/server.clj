@@ -682,6 +682,7 @@
         {:keys [additional-endpoints
                 admin-secret
                 authorization-fn
+                disable-ddb?
                 handle-http
                 http-timeout-ms
                 log-error
@@ -693,8 +694,10 @@
                 tx-fns]} config*
         perm-storage (data-storage/data-storage
                       (data-block-storage/data-block-storage
-                       (au/<?? (ddb-block-storage/<ddb-block-storage
-                                repository-name))))
+                       (if disable-ddb?
+                         (mem-block-storage/mem-block-storage true)
+                         (au/<?? (ddb-block-storage/<ddb-block-storage
+                                  repository-name)))))
         temp-storage (data-storage/data-storage
                       (data-block-storage/data-block-storage
                        (mem-block-storage/mem-block-storage true)))
