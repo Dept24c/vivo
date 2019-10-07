@@ -695,7 +695,7 @@
         perm-storage (data-storage/data-storage
                       (data-block-storage/data-block-storage
                        (if disable-ddb?
-                         (mem-block-storage/mem-block-storage true)
+                         (mem-block-storage/mem-block-storage false)
                          (au/<?? (ddb-block-storage/<ddb-block-storage
                                   repository-name)))))
         temp-storage (data-storage/data-storage
