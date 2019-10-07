@@ -298,10 +298,14 @@
                         (when db-id
                           (au/<? (u/<get-in-sys-state this db-id
                                                       resolved-path))))
+                    path* (or resolved-path path)
+                    paths (cond
+                            (not (sequential? path*)) [path*]
+                            (some sequential? path*) (u/expand-path path*)
+                            :else [path*])
                     new-acc (-> acc
                                 (assoc-in [:state sym] v)
-                                (update :paths conj (or resolved-path
-                                                        path)))]
+                                (update :paths concat paths))]
                 (if (= (dec (count ordered-pairs)) i)
                   (update new-acc :state select-keys sub-keys)
                   (recur new-acc (inc i))))))))))

@@ -103,14 +103,13 @@
            (is (= {"1" [{:text "This is great" :user-id "1"}
                         {:text "A msg" :user-id "1"}]}
                   (au/<? index-ch)))
-           ;; (is (= true (au/<? (vivo/<update-state!
-           ;;                     vc [{:path [:sys :msgs -1]
-           ;;                          :op :remove}]))))
-           ;; (is (= msg (au/<? last-msg-ch)))
-           ;; (is (= 1 (count (au/<? all-msgs-ch))))
-           ;; (is (= {"1" [{:text "A msg" :user-id "1"}]}
-           ;;        (au/<? index-ch)))
-           )
+           (is (= true (au/<? (vivo/<update-state!
+                               vc [{:path [:sys :msgs -1]
+                                    :op :remove}]))))
+           (is (= msg (au/<? last-msg-ch)))
+           (is (= 1 (count (au/<? all-msgs-ch))))
+           (is (= {"1" [{:text "A msg" :user-id "1"}]}
+                  (au/<? index-ch))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally

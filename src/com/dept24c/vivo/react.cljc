@@ -51,6 +51,10 @@
   #?(:cljs
      (ocall React :useState initial-state)))
 
+(defn use-callback [f deps]
+  #?(:cljs
+     (ocall React :useCallback f deps)))
+
 (defn with-key [element k]
   "Adds the given React key to element."
   #?(:cljs
