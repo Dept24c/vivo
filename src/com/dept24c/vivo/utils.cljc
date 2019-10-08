@@ -54,6 +54,7 @@
   (<ssr [this component-fn component-name static-markup?])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
+  (get-cached-state [this sub-map resolution-map])
   (get-local-state [this sub-map resolution-map component-name])
   (handle-sys-state-changed [this arg metadata])
   (log-in! [this identifier secret cb])

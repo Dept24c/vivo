@@ -15,7 +15,8 @@
 (def default-vc-opts
   {:log-error println
    :log-info println
-   :state-cache-num-keys 100})
+   :state-cache-num-keys 500
+   :sys-state-cache-num-keys 100})
 
 (def get-state-timeout-ms 30000)
 (def initial-ssr-info {:resolved {} :needed #{}})
@@ -94,7 +95,8 @@
              {} res-map))
 
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
-                       log-info log-error state-cache sub-map->op-cache
+                       log-info log-error state-cache sys-state-cache
+                       sub-map->op-cache
                        path->schema-cache updates-ch updates-pub
                        set-subject-id! *local-state *cur-db-id
                        *conn-initialized? *stopped? *ssr-info
@@ -175,6 +177,9 @@
            (finally
              (reset! *ssr-info nil))))))
 
+  (get-cached-state [this sub-map resolution-map]
+    (sr/get state-cache [sub-map (xf-res-map resolution-map)]))
+
   (get-local-state [this sub-map resolution-map component-name]
     (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
           local-state @*local-state]
@@ -217,6 +222,7 @@
     (ca/go
       (try
         (sr/flush! state-cache)
+        (sr/flush! sys-state-cache)
         (let [arg (u/sym-map identifier secret)
               {:keys [subject-id token]} (au/<? (cc/<send-msg capsule-client
                                                               :log-in arg))
@@ -248,6 +254,7 @@
         (delete-login-token)
         (set-subject-id! nil)
         (sr/flush! state-cache)
+        (sr/flush! sys-state-cache)
         (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
           (log-info (str "Logout " (if ret "succeeded." "failed."))))
         (catch #?(:cljs js/Error :clj Throwable) e
@@ -326,6 +333,8 @@
             (let [{cur-state :state
                    cur-paths :paths} (au/<? (<make-si))
                   *last-state (atom cur-state)]
+              (sr/put! state-cache [sub-map (xf-res-map resolution-map)]
+                       cur-state)
               (when (not= initial-state cur-state)
                 (update-fn* cur-state))
               (loop [paths-to-watch cur-paths]
@@ -448,7 +457,7 @@
                      "option was not provided when the vivo-client was "
                      "created.") {})))
     (au/go
-      (or (sr/get state-cache [db-id path])
+      (or (sr/get sys-state-cache [db-id path])
           (let [arg (u/sym-map db-id path)
                 ret (au/<? (cc/<send-msg capsule-client :get-state arg
                                          get-state-timeout-ms))
@@ -456,7 +465,7 @@
                     :vivo/unauthorized
                     (when ret
                       (au/<? (u/<deserialize-value this path ret))))]
-            (sr/put! state-cache [db-id path] v)
+            (sr/put! sys-state-cache [db-id path] v)
             v))))
 
   (handle-sys-state-changed [this arg metadata]
@@ -571,6 +580,7 @@
                 log-error
                 log-info
                 state-cache-num-keys
+                sys-state-cache-num-keys
                 sys-state-source
                 sys-state-schema]} (merge default-vc-opts opts)
         *local-state (atom initial-local-state)
@@ -580,6 +590,7 @@
         *ssr-info (atom nil)
         *fp->schema (atom {})
         *subject-id (atom nil)
+
         updates-ch (ca/chan (ca/sliding-buffer 100))
         updates-pub (ca/pub updates-ch (constantly :all))
         set-subject-id! (fn [subject-id]
@@ -590,6 +601,7 @@
                           nil)
         path->schema-cache (sr/stockroom 100)
         state-cache (sr/stockroom state-cache-num-keys)
+        sys-state-cache (sr/stockroom sys-state-cache-num-keys)
         sub-map->op-cache (sr/stockroom 500)
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
@@ -598,7 +610,8 @@
                           log-error log-info *cur-db-id *conn-initialized?
                           set-subject-id!))
         vc (->VivoClient capsule-client sys-state-schema sys-state-source
-                         log-info log-error state-cache sub-map->op-cache
+                         log-info log-error state-cache sys-state-cache
+                         sub-map->op-cache
                          path->schema-cache updates-ch updates-pub
                          set-subject-id! *local-state *cur-db-id
                          *conn-initialized? *stopped? *ssr-info

@@ -114,7 +114,7 @@
                             (u/ssr-get-state! vc sub-map resolution-map)
 
                             :else
-                            nil)
+                            (u/get-cached-state vc sub-map resolution-map))
             [state update-fn] (use-state initial-state)
             effect (fn []
                      (let [unsub (u/subscribe! vc sub-map state
