@@ -539,17 +539,6 @@
               false))
           false sub-paths))
 
-(defn throw-missing-path-key
-  ([k path sub-map]
-   (throw-missing-path-key k path sub-map nil))
-  ([k path sub-map subscriber-name]
-   (throw (ex-info (str "Could not find a value for key `" k "` in path `"
-                        path "` of " (if subscriber-name
-                                       (str "subscriber `" subscriber-name)
-                                       (str "sub-map `" sub-map))
-                        "`.")
-                   (sym-map k path sub-map subscriber-name)))))
-
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
         disp-head (or head "nil")]
@@ -558,18 +547,16 @@
                     (sym-map path head)))))
 
 (defn throw-bad-path-key [path k]
-  (let [disp-k (or k "nil")]
-    (throw (ex-info
-            (str "Illegal key `" disp-k "` in path `" path "`. Only integers, "
-                 "keywords, symbols, and strings are valid path keys.")
-            (sym-map k path)))))
+  (throw (ex-info
+          (str "Illegal key `" k "` in path `" path "`. Only integers, "
+               "keywords, symbols, and strings are valid path keys.")
+          (sym-map k path))))
 
 (defn resolve-symbols-in-path [acc ordered-pairs subscriber-name path]
   (when (sequential? path)
     (mapv (fn [k]
             (if (symbol? k)
-              (or (get-in acc [:state k])
-                  (throw-missing-path-key k path ordered-pairs subscriber-name))
+              (get-in acc [:state k])
               k))
           path)))
 
@@ -577,7 +564,8 @@
   (if (= :vivo/subject-id path)
     path
     (reduce (fn [acc k]
-              (if-not (or (keyword? k) (int? k) (string? k) (symbol? k))
+              (if-not (or (nil? k) (keyword? k) (int? k)
+                          (string? k) (symbol? k))
                 (throw-bad-path-key path k)
                 (conj acc k)))
             [] path)))

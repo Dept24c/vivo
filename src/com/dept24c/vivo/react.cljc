@@ -79,7 +79,6 @@
               acc
 
               :else
-
               (reduced false)))
           true (vals sub-map)))
 

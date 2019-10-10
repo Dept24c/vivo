@@ -102,7 +102,7 @@
 
 (deftest test-bad-path-in-sub-map
   (let [vc (vivo/vivo-client)
-        bad-sub-map '{user-id [:local nil]}]
+        bad-sub-map '{user-id [:local 8.9]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Only integers, keywords, symbols, and strings are valid path keys"

@@ -194,10 +194,7 @@
                                             (fn [k]
                                               (if-not (symbol? k)
                                                 k
-                                                (or (acc k)
-                                                    (u/throw-missing-path-key
-                                                     k path sub-map
-                                                     component-name))))
+                                                (acc k)))
                                             path)]
                          (get-in-state local-state resolved-path :local)))]
                (assoc acc sym v)))

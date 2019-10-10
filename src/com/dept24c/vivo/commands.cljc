@@ -46,6 +46,9 @@
                                  (and (int? k) (neg? k))
                                  (normalize-neg-k k val)
 
+                                 (nil? k)
+                                 [nil nil]
+
                                  :else
                                  (throw-bad-path-key path k))]
                  (-> acc
