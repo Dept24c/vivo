@@ -294,6 +294,9 @@
                         (= :vivo/subject-id path)
                         @*subject-id
 
+                        (some nil? resolved-path)
+                        nil
+
                         (= :local path-head)
                         (get-in-state local-state resolved-path :local)
 
