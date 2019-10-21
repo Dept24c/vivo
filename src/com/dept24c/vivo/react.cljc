@@ -6,7 +6,7 @@
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
-   #?(:cljs [oops.core :refer [oapply ocall oget]]))
+   #?(:cljs [oops.core :refer [oapply ocall oget oset!]]))
   #?(:cljs
      (:require-macros com.dept24c.vivo.react)))
 
@@ -115,10 +115,14 @@
                             :else
                             (u/get-cached-state vc sub-map resolution-map))
             [state update-fn] (use-state initial-state)
+            mounted? (use-ref true)
             effect (fn []
                      (let [unsub (u/subscribe! vc sub-map state
-                                               #(update-fn %)
+                                               #(when (oget mounted? :current)
+                                                  (update-fn %))
                                                component-name resolution-map)]
-                       unsub))]
+                       #(do
+                          (oset! mounted? :current false)
+                          (unsub))))]
         (use-effect effect #js [])
         state))))

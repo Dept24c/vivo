@@ -141,7 +141,7 @@
 ;; Encoding for block-ids
 ;; - Designed to work w/ allowed DDB name characters while leaving
 ;;   non-alphanumeric characters for other uses.
-;; - Left-most character changes most, spreading block ids across
+;; - Left-most character changes fastest, spreading block ids across
 ;;   DDB partitions.
 
 (def b62alphabet
