@@ -9,7 +9,7 @@
 * [API](#api)
   * [def-component](#def-component)
   * [set-state!](#set-state)
-  * [state-manager](#state-manager)
+  * [vivo-client](#vivo-client)
   * [subscribe!](#subscribe)
   * [unsubscribe!](#unsubscribe)
   * [update-state!](#update-state)
@@ -98,23 +98,23 @@ For example:
 ## Async API
 In order to work well in browsers, the Vivo API is asynchronous. Most Vivo
 functions have three forms:
-* A simple form: `(update-state! sm update-commands)` - Return value is ignored.
-* A callback form: `(update-state! sm update-commands cb)` - Return value is
+* A simple form: `(update-state! vc update-commands)` - Return value is ignored.
+* A callback form: `(update-state! vc update-commands cb)` - Return value is
 provided by calling the given callback `cb`.
-* A channel form: `(<update-state! sm update-commands)` - Returns a
+* A channel form: `(<update-state! vc update-commands)` - Returns a
 core.async channel, which will yield the function's return value.
 
 
 # API
 ---
 
-## `state-manager`
+## `vivo-client`
 ```clojure
-(state-manager)
-(state-manager opts)
+(vivo-client)
+(vivo-client opts)
 ```
-Creates a state manager with the given options, if any. Each Vivo client
-should have exactly one state manager, which must be passed to all Vivo
+Creates a vivo client with the given options, if any. An application
+should have exactly one Vivo client, which must be passed to all Vivo
 functions and components.
 
 ### Parameters
@@ -133,30 +133,30 @@ functions and components.
   * `:sys-state-schema`: The [Lancaster](https://github.com/deercreeklabs/lancaster) schema for the `:sys` state. Required if using `:sys` state.
   * `:sys-state-source`: A map describing the source branch for the `:sys` state. Defaults to `{:temp-branch/db-id nil}`. Must be one of:
     * `{:branch branch-name}` Sets the source to the given `branch-name`.
-    * `{:temp-branch/db-id nil}` Creates an empty temporary branch and sets it as the source. The branch is deleted when the state manager disconnects from the server. Useful for testing and staging environments.
-    * `{:temp-branch/db-id db-id}` Creates a temporary branch from the given `db-id` and sets it as the source. The branch is deleted when the state manager disconnects from the server. Useful for testing and staging environments.
+    * `{:temp-branch/db-id nil}` Creates an empty temporary branch and sets it as the source. The branch is deleted when the Vivo client disconnects from the server. Useful for testing and staging environments.
+    * `{:temp-branch/db-id db-id}` Creates a temporary branch from the given `db-id` and sets it as the source. The branch is deleted when the Vivo client disconnects from the server. Useful for testing and staging environments.
 
 ### Return Value
-The created state manager.
+The created Vivo client.
 
 ### Example
 ```clojure
-(defonce sm (vivo/state-manager))
+(defonce vc (vivo/vivo-client))
 ```
 
 ---
 
 ## `update-state!`
 ```clojure
-(update-state! sm update-commands)
-(update-state! sm update-commands cb)
-(<update-state! sm update-commands)
+(update-state! vc update-commands)
+(update-state! vc update-commands cb)
+(<update-state! vc update-commands)
 ```
 Updates the state by executing the given sequence of update commands. The commands are executed in order. Atomicity is guraranteed. Either all the commands will succeed or none will.
 
 
 ### Parameters
-* `sm`: The Vivo state manager instance
+* `vc`: The Vivo client instance
 * `update-commands`: A sequence of [update commmands](#update-commands).
 
 ### Return Value
@@ -165,7 +165,7 @@ Updates the state by executing the given sequence of update commands. The comman
 ### Example
 This sets the local page state to `:home`:
 ```clojure
-(vivo/update-state! sm [{:path [:local :page]
+(vivo/update-state! vc [{:path [:local :page]
                          :op :set
                          :arg :home}])
 ```
@@ -178,7 +178,7 @@ Since `:set` is the most common update command operation, Vivo provides a conven
 ```
 is shorthand for:
 ```clojure
-(vivo/update-state! sm [{:path [:local :page]
+(vivo/update-state! vc [{:path [:local :page]
                          :op :set
                          :arg :home}])
 ```
@@ -187,14 +187,14 @@ is shorthand for:
 
 ## `set-state!`
 ```clojure
-(set-state! sm path arg)
-(set-state! sm path arg cb)
-(<set-state! sm path arg)
+(set-state! vc path arg)
+(set-state! vc path arg cb)
+(<set-state! vc path arg)
 ```
 Sets the state at the given path to the given arg.
 
 ### Parameters
-* `sm`: The Vivo state manager instance
+* `vc`: The Vivo client instance
 * `path`: The state [path](#paths)
 * `arg`: The value to set
 
@@ -207,7 +207,7 @@ Sets the state at the given path to the given arg.
 ```
 This is shorthand for:
 ```clojure
-(vivo/update-state! sm [{:path [:local :page]
+(vivo/update-state! vc [{:path [:local :page]
                          :op :set
                          :arg :home}])
 ```
@@ -224,9 +224,9 @@ This is shorthand for:
 Defines a Vivo React component.
 
 ### Parameters
-* `sub-map`: Optional. A [subscription map](#subscription-maps).
 * `constructor-args`: A vector of constructor arguments. The first argument
-must be a parameter named `sm` (the state manager).
+* `sub-map`: Optional. A [subscription map](#subscription-maps).
+must be a parameter named `vc` (the Vivo client).
 * `body`: The body of the component. When evaluated, the body should
 return a Hiccup data structure.
 
@@ -236,19 +236,19 @@ The defined Vivo component
 ### Example
 ```clojure
 (def-component main
+  [vc]
   {page [:local :page]}
-  [sm]
   (case page
-    :home (home/home sm)
-    :details (details/details sm)
-    :not-found (not-found sm)))
+    :home (home/home vc)
+    :details (details/details vc)
+    :not-found (not-found vc)))
 ```
 
 ---
 
 ## `subscribe!`
 ```clojure
-(subscribe! sm sub-map cur-state update-fn)
+(subscribe! vc sub-map cur-state update-fn)
 ```
 Creates a Vivo subscription. Note that it is rare to call this function
 directly. Prefer the higher-level [def-component](#def-component) or
@@ -256,7 +256,7 @@ directly. Prefer the higher-level [def-component](#def-component) or
 directly.
 
 ### Parameters
-* `sm`: The Vivo state manager instance
+* `vc`: The Vivo client instance
 * `sub-map`: A [subscription map](#subscription-maps)
 * `update-fn`: A function that will be called when the subscribed state changes. The function will recieve a single map argument. The map's keys will be the symbols from the subscription map, and the map's values will be the pieces of state indicated by the paths in the subscription map.
 
@@ -270,7 +270,7 @@ TODO
 
 ## `unsubscribe!`
 ```clojure
-(unsubscribe! sm sub-id)
+(unsubscribe! vc sub-id)
 ```
 Deletes a Vivo subscription.  Note that it is rare to call this function
 directly. Prefer the higher-level [def-component](#def-component) or
@@ -278,7 +278,7 @@ directly. Prefer the higher-level [def-component](#def-component) or
 directly.
 
 ### Parameters
-* `sm`: The Vivo state manager instance
+* `vc`: The Vivo client instance
 * `sub-id`: The subscription id (an integer) returned from the [subscribe!](#subscribe) call.
 
 ### Example
@@ -290,7 +290,7 @@ directly.
 
 ## `use-vivo-state`
 ```clojure
-(use-vivo-state sm sub-map)
+(use-vivo-state vc sub-map)
 ```
 React custom hook for using Vivo state. Automatically re-renders the component
 when any of the subscribed state changes. Returns a state map, which is a
@@ -300,7 +300,7 @@ but with state values.
 The React [Rules of Hooks](https://reactjs.org/docs/hooks-rules.html) apply.
 
 ### Parameters
-* `sm`: The Vivo state manager instance
+* `vc`: The Vivo client instance
 * `sub-map`: A [subscription map](#subscription-maps)
 
 ### Example
@@ -312,14 +312,14 @@ The React [Rules of Hooks](https://reactjs.org/docs/hooks-rules.html) apply.
 
 ## `shutdown!`
 ```clojure
-(shutdown! sm)
+(shutdown! vc)
 ```
-Shut down the state manager, closing its connection to the server. Useful
+Shut down the Vivo client, closing its connection to the server. Useful
 in testing and code reloading to avoid having multiple connections to the
 server.
 
 ### Parameters
-* `sm`: The Vivo state manager instance
+* `vc`: The Vivo client instance
 * `sub-map`: A [subscription map](#subscription-maps)
 
 ### Example
