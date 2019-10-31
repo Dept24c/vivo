@@ -14,10 +14,13 @@
 (def repository-name "vivo-test")
 (def stop-server nil)
 
-(defn <authorized? [subject-id path read-or-write v]
+(defn <authorized? [subject-id path read-write-or-call v]
   (au/go
     ;; Note that path includes the :sys prefix.
-    (not= [:sys :secret] path)))
+    (cond
+      (= [:sys :secret] path) false
+      (= [:vivo/rpcs :authed/inc] path) (boolean subject-id)
+      :else true)))
 
 (defn stop []
   (if stop-server
@@ -30,7 +33,6 @@
   (reduce (fn [acc {:keys [user-id] :as msg}]
             (update acc user-id conj msg))
           {} msgs))
-
 
 (defn start
   ([]

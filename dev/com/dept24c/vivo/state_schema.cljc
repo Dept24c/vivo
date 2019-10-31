@@ -23,4 +23,7 @@
 (def rpc-name-kw->info
   {:inc {:arg-schema l/int-schema
          :ret-schema l/int-schema
-         :handler inc}})
+         :handler inc}
+   :authed/inc {:arg-schema l/int-schema
+                :ret-schema l/int-schema
+                :handler inc}})

@@ -587,7 +587,7 @@
                  (ex-info
                   (str "No RPC with name `" rpc-name-kw "` is registered. "
                        "Either this is a typo or you need to add `"
-                       rpc-name-kw "to the :rpc-name-kw->info map when "
+                       rpc-name-kw "` to the :rpc-name-kw->info map when "
                        "creating the Vivo server.")
                   {:known-rpcs (keys rpc-name-kw->info)
                    :given-rpc rpc-name-kw})))
@@ -643,10 +643,25 @@
     ;; TODO: Use authorization here
     (au/go
       (let [{:keys [conn-id]} metadata
-            update-cmds (au/<? (<scmds->cmds this arg conn-id))]
-        (au/<? (<modify-db this (partial <update-state-update-fn
-                                         state-schema update-cmds tx-fns)
-                           "Update state" metadata)))))
+            {:keys [subject-id]} (@*conn-id->info conn-id)
+            update-cmds (au/<? (<scmds->cmds this arg conn-id))
+            all-authed? (loop [i 0] ; Use loop to stay in same go block
+                          (let [{:keys [path arg]} (nth update-cmds i)
+                                auth-ret (authorization-fn subject-id path
+                                                           :write arg)
+                                authed? (if (au/channel? auth-ret)
+                                          (au/<? auth-ret)
+                                          auth-ret)
+                                new-i (inc i)]
+                            (cond
+                              (not authed?) false
+                              (= (count update-cmds) new-i) true
+                              :else (recur new-i))))]
+        (if-not all-authed?
+          :vivo/unauthorized
+          (au/<? (<modify-db this (partial <update-state-update-fn
+                                           state-schema update-cmds tx-fns)
+                             "Update state" metadata))))))
 
   (<get-schema-pcf [this fp metadata]
     (au/go

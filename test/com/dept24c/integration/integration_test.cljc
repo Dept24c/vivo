@@ -175,9 +175,10 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ret (au/<? (vivo/<add-subject! vc tu/test-identifier
+         (let [sid (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
+               _ (is (string? sid))
                state-ch (ca/chan)
                sub-map '{subject-id :vivo/subject-id}
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
@@ -203,7 +204,11 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [app-name "test-app"
+         (let [sid (au/<? (vivo/<add-subject! vc tu/test-identifier
+                                              tu/test-secret
+                                              tu/test-subject-id))
+               _ (is (string? sid))
+               app-name "test-app"
                ret (au/<? (vivo/<set-state! vc [:sys :app-name] app-name))
                _ (is (= true ret))
                state-ch (ca/chan)
@@ -212,8 +217,18 @@
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                expected-state {'app-name app-name
-                               'secret :vivo/unauthorized}]
-           (is (= expected-state (au/<? state-ch)))
+                               'secret :vivo/unauthorized}
+               _ (is (= expected-state (au/<? state-ch)))
+               _ (is (= :vivo/unauthorized (au/<? (vivo/<set-state!
+                                                   vc [:sys :secret] "Foo"))))
+               _ (is (thrown-with-msg?
+                      #?(:clj ExceptionInfo :cljs js/Error)
+                      #"RPC `:authed/inc` is unauthorized"
+                      (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
+               login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
+                                               tu/test-secret))]
+           (is (= true login-ret))
+           (is (= 2 (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
            (unsub!))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
@@ -263,6 +278,3 @@
            (println "Exception in test-rpc:\n" (u/ex-msg-and-stacktrace e)))
          (finally
            (vivo/shutdown! vc)))))))
-
-;; TODO: Test unauthorized rpc, both not logged in and authz denied
-;; TODO: Test unauthorized update-state

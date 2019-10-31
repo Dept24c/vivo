@@ -385,17 +385,21 @@
               sys-ret (when (seq sys-cmds)
                         (when-let [ret (au/<? (u/<update-sys-state
                                                this sys-cmds))]
-                          (let [{:keys [new-db-id prev-db-id update-infos]} ret
-                                local-db-id @*cur-db-id
-                                notify-all? (not= prev-db-id local-db-id)]
-                            (when (or (nil? local-db-id)
-                                      (block-ids/earlier? local-db-id
-                                                          new-db-id))
-                              (reset! *cur-db-id new-db-id))
-                            (u/sym-map notify-all? update-infos))))]
+                          (if (= :vivo/unauthorized ret)
+                            ret
+                            (let [{:keys [new-db-id
+                                          prev-db-id update-infos]} ret
+                                  local-db-id @*cur-db-id
+                                  notify-all? (not= prev-db-id local-db-id)]
+                              (when (or (nil? local-db-id)
+                                        (block-ids/earlier? local-db-id
+                                                            new-db-id))
+                                (reset! *cur-db-id new-db-id))
+                              (u/sym-map notify-all? update-infos)))))]
           (if (and (seq sys-cmds)
-                   (not sys-ret))
-            (cb false) ;; Don't do local/sub updates if sys updates failed
+                   (or (not sys-ret)
+                       (= :vivo/unauthorized sys-ret)))
+            (cb sys-ret) ;; Don't do local/sub updates if sys updates failed
             (loop [num-attempts 1]
               (let [cur-local-state @*local-state
                     local-ret (eval-cmds cur-local-state local-cmds :local)
@@ -511,7 +515,7 @@
                 (throw (ex-info
                         (str "No RPC with name `" rpc-name-kw "` is registered."
                              " Either this is a typo or you need to add `"
-                             rpc-name-kw "to the :rpcs map when creating the "
+                             rpc-name-kw "` to the :rpcs map when creating the "
                              "Vivo client.")
                         {:known-rpcs (keys rpc-name-kw->info)
                          :given-rpc rpc-name-kw})))
