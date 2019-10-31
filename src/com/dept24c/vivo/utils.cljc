@@ -59,11 +59,12 @@
   (handle-sys-state-changed [this arg metadata])
   (log-in! [this identifier secret cb])
   (log-out! [this])
+  (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
   (ssr-get-state! [this sub-map resolution-map])
   (ssr? [this])
   (subscribe! [this sub-map cur-state update-fn subscriber-name resolution-map])
-  (update-cmd->serializable-update-cmd [this cmds])
+  (<update-cmd->serializable-update-cmd [this i cmds])
   (update-state! [this update-cmds cb]))
 
 (defprotocol IDataStorage
@@ -342,6 +343,14 @@
   [:branch branch-name-schema]
   [:db-id db-id-schema])
 
+(l/def-record-schema rpc-arg-schema
+  [:rpc-name-kw-ns l/string-schema]
+  [:rpc-name-kw-name l/string-schema]
+  [:arg serialized-value-schema])
+
+(def rpc-ret-schema
+  (l/union-schema [l/null-schema unauthorized-schema serialized-value-schema]))
+
 ;;;;;;;;;;;;;;;;;;;; Protocols ;;;;;;;;;;;;;;;;;;;;
 
 (def client-server-protocol
@@ -375,6 +384,9 @@
           :set-state-source {:arg state-source-schema
                              :ret db-id-schema
                              :sender :client}
+          :rpc {:arg rpc-arg-schema
+                :ret rpc-ret-schema
+                :sender :client}
           :sys-state-changed {:arg sys-state-change-schema
                               :sender :server}
           ;; We need to return the state change from :update-state so
@@ -418,7 +430,7 @@
 
       (not (#{:vivo/subject-id :vivo/component-id :vivo/subscriber-id} path))
       (throw (ex-info
-              (str "Bad path. Paths must be either a sequence or  "
+              (str "Bad path. Paths must be either a sequence or "
                    "one of the special :vivo keywords. (:vivo/subject-id, "
                    ":vivo/subscriber-id, or :vivo/component-id)")
               (sym-map sym path sub-map))))))
@@ -617,6 +629,34 @@
               (reduced true)
               acc))
           false path))
+
+(defn check-rpc-name-kw->info
+  ([rpc-name-kw->info]
+   (check-rpc-name-kw->info rpc-name-kw->info false))
+  ([rpc-name-kw->info check-handler?]
+   (doseq [[k {:keys [arg-schema ret-schema handler]}] rpc-name-kw->info]
+     (when-not (keyword? k)
+       (throw
+        (ex-info (str "Keys in `rpc-name-kw->info` map must be keywords. "
+                      "Got `" k "`.")
+                 {:bad-k k
+                  :rpc-name-kw->info rpc-name-kw->info})))
+     (when-not (l/schema? arg-schema)
+       (throw
+        (ex-info (str "The value for the :arg-schema key must be a lancaster "
+                      "schema. Got: `" arg-schema "`.")
+                 (sym-map k arg-schema ret-schema))))
+     (when-not (l/schema? ret-schema)
+       (throw
+        (ex-info (str "The value for the :ret-schema key must be a lancaster "
+                      "schema. Got: `" ret-schema "`.")
+                 (sym-map k arg-schema ret-schema))))
+     (when check-handler?
+       (when-not (ifn? handler)
+         (throw
+          (ex-info (str "The value for the :handler key must be a function. "
+                        " Got: `" handler "`.")
+                   (sym-map k arg-schema ret-schema handler))))))))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

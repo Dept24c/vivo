@@ -95,8 +95,8 @@
              {} res-map))
 
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
-                       log-info log-error state-cache sys-state-cache
-                       sub-map->op-cache
+                       log-info log-error rpc-name-kw->info state-cache
+                       sys-state-cache sub-map->op-cache
                        path->schema-cache updates-ch updates-pub
                        set-subject-id! *local-state *cur-db-id
                        *conn-initialized? *stopped? *ssr-info
@@ -302,7 +302,7 @@
 
 
                         (= :sys path-head)
-                        (when db-id
+                        (when (and db-id (not @*stopped?))
                           (au/<? (u/<get-in-sys-state this db-id
                                                       resolved-path))))
                     path* (or resolved-path path)
@@ -339,24 +339,26 @@
                 (update-fn* cur-state))
               (loop [paths-to-watch cur-paths]
                 (let [[v ch] (au/alts? [update-sub-ch unsubscribe-ch])]
-                  (if (= unsubscribe-ch ch)
-                    (ca/unsub updates-pub :all update-sub-ch)
-                    (let [{:keys [update-infos
-                                  notify-all? db-id local-state]
-                           :or {db-id @*cur-db-id
-                                local-state @*local-state}} v
-                          new-paths (if-not (or notify-all?
-                                                (u/update-sub? update-infos
-                                                               paths-to-watch))
-                                      paths-to-watch
-                                      (let [si (au/<? (<make-si
-                                                       local-state db-id))
-                                            {:keys [state paths]} si]
-                                        (when (not= @*last-state state)
-                                          (reset! *last-state state)
-                                          (update-fn* state))
-                                        paths))]
-                      (recur new-paths)))))))
+                  (when-not @*stopped?
+                    (if (= unsubscribe-ch ch)
+                      (ca/unsub updates-pub :all update-sub-ch)
+                      (let [{:keys [update-infos
+                                    notify-all? db-id local-state]
+                             :or {db-id @*cur-db-id
+                                  local-state @*local-state}} v
+                            new-paths (if-not (or notify-all?
+                                                  (u/update-sub?
+                                                   update-infos
+                                                   paths-to-watch))
+                                        paths-to-watch
+                                        (let [si (au/<? (<make-si
+                                                         local-state db-id))
+                                              {:keys [state paths]} si]
+                                          (when (not= @*last-state state)
+                                            (reset! *last-state state)
+                                            (update-fn* state))
+                                          paths))]
+                        (recur new-paths))))))))
           (catch #?(:cljs js/Error :clj Exception) e
             (log-error (str "Error in subscribe!\n"
                             (u/ex-msg-and-stacktrace e))))))
@@ -424,31 +426,40 @@
     nil)
 
   (<update-sys-state [this sys-cmds]
-    (when-not capsule-client
-      (throw
-       (ex-info (str "Can't update :sys state because the :get-server-url "
-                     "option was not provided when the vivo-client was "
-                     "created.") {})))
-    (cc/<send-msg capsule-client :update-state
-                  (map (partial u/update-cmd->serializable-update-cmd this)
-                       sys-cmds)
-                  update-state-timeout-ms))
+    (au/go
+      (when-not capsule-client
+        (throw
+         (ex-info (str "Can't update :sys state because the :get-server-url "
+                       "option was not provided when the vivo-client was "
+                       "created.") {})))
+      (let [ch (ca/merge
+                (map-indexed
+                 #(u/<update-cmd->serializable-update-cmd this %1 %2)
+                 sys-cmds))
+            ;; Use i->v map to preserve original command order
+            sucs-map (au/<? (ca/reduce (fn [acc [i suc]]
+                                         (assoc acc i suc))
+                                       {} ch))
+            sucs (map sucs-map (range (count sys-cmds)))]
+        (au/<? (cc/<send-msg capsule-client :update-state
+                             sucs update-state-timeout-ms)))))
 
-  (update-cmd->serializable-update-cmd [this cmd]
-    (if-not (:arg cmd)
-      cmd
-      (let [{:keys [arg path]} cmd
-            arg-sch (or (sr/get path->schema-cache path)
-                        (let [schema-path (rest path) ; Ignore :sys
-                              sch (l/schema-at-path sys-state-schema
-                                                    schema-path)]
-                          (sr/put! path->schema-cache path sch)
-                          sch))
-            fp (l/fingerprint64 arg-sch)
-            bytes (l/serialize arg-sch (:arg cmd))
-            scmd (assoc cmd :arg (u/sym-map fp bytes))]
-        (swap! *fp->schema assoc fp arg-sch)
-        scmd)))
+  (<update-cmd->serializable-update-cmd [this i cmd]
+    (au/go
+      (if-not (:arg cmd)
+        [i cmd]
+        (let [{:keys [arg path]} cmd
+              arg-sch (or (sr/get path->schema-cache path)
+                          (let [schema-path (rest path) ; Ignore :sys
+                                sch (l/schema-at-path sys-state-schema
+                                                      schema-path)]
+                            (sr/put! path->schema-cache path sch)
+                            sch))
+              fp (au/<? (u/<schema->fp this arg-sch))
+              bytes (l/serialize arg-sch (:arg cmd))
+              scmd (assoc cmd :arg (u/sym-map fp bytes))]
+          (swap! *fp->schema assoc fp arg-sch)
+          [i scmd]))))
 
   (<get-in-sys-state [this db-id path]
     (when-not capsule-client
@@ -458,15 +469,16 @@
                      "created.") {})))
     (au/go
       (or (sr/get sys-state-cache [db-id path])
-          (let [arg (u/sym-map db-id path)
-                ret (au/<? (cc/<send-msg capsule-client :get-state arg
-                                         get-state-timeout-ms))
-                v (if (= :vivo/unauthorized ret)
-                    :vivo/unauthorized
-                    (when ret
-                      (au/<? (u/<deserialize-value this path ret))))]
-            (sr/put! sys-state-cache [db-id path] v)
-            v))))
+          (when-not @*stopped?
+            (let [arg (u/sym-map db-id path)
+                  ret (au/<? (cc/<send-msg capsule-client :get-state arg
+                                           get-state-timeout-ms))
+                  v (if (= :vivo/unauthorized ret)
+                      :vivo/unauthorized
+                      (when ret
+                        (au/<? (u/<deserialize-value this path ret))))]
+              (sr/put! sys-state-cache [db-id path] v)
+              v)))))
 
   (handle-sys-state-changed [this arg metadata]
     (try
@@ -486,7 +498,44 @@
 
   (<add-subject! [this identifier secret subject-id]
     (cc/<send-msg capsule-client :add-subject
-                  (u/sym-map identifier secret subject-id))))
+                  (u/sym-map identifier secret subject-id)))
+
+  (<rpc [this rpc-name-kw arg timeout-ms]
+    (au/go
+      (when-not (keyword? rpc-name-kw)
+        (throw (ex-info (str "rpc-name-kw must be a keyword. Got`" rpc-name-kw
+                             "`.")
+                        (u/sym-map rpc-name-kw arg))))
+      (let [rpc-info (rpc-name-kw->info rpc-name-kw)
+            _ (when-not rpc-info
+                (throw (ex-info
+                        (str "No RPC with name `" rpc-name-kw "` is registered."
+                             " Either this is a typo or you need to add `"
+                             rpc-name-kw "to the :rpcs map when creating the "
+                             "Vivo client.")
+                        {:known-rpcs (keys rpc-name-kw->info)
+                         :given-rpc rpc-name-kw})))
+            {:keys [arg-schema ret-schema]} rpc-info
+            arg {:rpc-name-kw-ns (namespace rpc-name-kw)
+                 :rpc-name-kw-name (name rpc-name-kw)
+                 :arg {:fp (au/<? (u/<schema->fp this arg-schema))
+                       :bytes (l/serialize arg-schema arg)}}
+            ret* (au/<? (cc/<send-msg capsule-client :rpc arg timeout-ms))]
+        (cond
+          (nil? ret*)
+          nil
+
+          (= :vivo/unauthorized ret*)
+          (throw (ex-info
+                  (str "RPC `" rpc-name-kw "` is unauthorized "
+                       "for this user.")
+                  {:rpc-name-kw rpc-name-kw
+                   :subject-id @*subject-id}))
+
+          :else
+          (let [{:keys [fp bytes]} ret*
+                w-schema (au/<? (u/<fp->schema this fp))]
+            (l/deserialize ret-schema w-schema bytes)))))))
 
 (defn <log-in-w-token [capsule-client set-subject-id! log-info token]
   (au/go
@@ -579,6 +628,7 @@
                 initial-local-state
                 log-error
                 log-info
+                rpc-name-kw->info
                 state-cache-num-keys
                 sys-state-cache-num-keys
                 sys-state-source
@@ -603,6 +653,8 @@
         state-cache (sr/stockroom state-cache-num-keys)
         sys-state-cache (sr/stockroom sys-state-cache-num-keys)
         sub-map->op-cache (sr/stockroom 500)
+        _ (when rpc-name-kw->info
+            (u/check-rpc-name-kw->info rpc-name-kw->info))
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
                          (make-capsule-client
@@ -610,8 +662,8 @@
                           log-error log-info *cur-db-id *conn-initialized?
                           set-subject-id!))
         vc (->VivoClient capsule-client sys-state-schema sys-state-source
-                         log-info log-error state-cache sys-state-cache
-                         sub-map->op-cache
+                         log-info log-error rpc-name-kw->info state-cache
+                         sys-state-cache sub-map->op-cache
                          path->schema-cache updates-ch updates-pub
                          set-subject-id! *local-state *cur-db-id
                          *conn-initialized? *stopped? *ssr-info

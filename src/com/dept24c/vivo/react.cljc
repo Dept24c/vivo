@@ -35,6 +35,15 @@
         (ocall React :useEffect effect dependencies)
         (ocall React :useEffect effect)))))
 
+(defn use-layout-effect
+  ([effect]
+   (use-layout-effect effect nil))
+  ([effect dependencies]
+   #?(:cljs
+      (if dependencies
+        (ocall React :useLayoutEffect effect dependencies)
+        (ocall React :useLayoutEffect effect)))))
+
 (defn use-reducer
   [reducer initial-state]
   #?(:cljs

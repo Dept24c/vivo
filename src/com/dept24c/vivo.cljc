@@ -3,7 +3,8 @@
    [clojure.core.async :as ca]
    [com.dept24c.vivo.client :as client]
    #?(:clj [com.dept24c.vivo.server :as server])
-   [com.dept24c.vivo.utils :as u]))
+   [com.dept24c.vivo.utils :as u]
+   [deercreeklabs.async-utils :as au]))
 
 #?(:clj
    (defn vivo-server
@@ -95,6 +96,27 @@
    is unknown."
   [vc fp]
   (u/<fp->schema vc fp))
+
+(defn rpc
+  "Calls a remote procedure on the server. Calls callback `cb` with result."
+  ([vc rpc-name-kw arg timeout-ms]
+   (rpc vc rpc-name-kw arg timeout-ms nil))
+  ([vc rpc-name-kw arg timeout-ms cb]
+   (ca/go
+     (try
+       (let [ret (au/<? (u/<rpc vc rpc-name-kw arg timeout-ms))]
+         (when cb
+           (cb ret)))
+       (catch #?(:cljs js/Error :clj Throwable) e
+         (print (str "Exception in log-in!" (u/ex-msg-and-stacktrace e)))
+         (when cb
+           (cb e)))))))
+
+(defn <rpc
+  "Calls a remote procedure on the server. Returns a channel which will yield
+   the result."
+  [vc rpc-name-kw arg timeout-ms]
+  (u/<rpc vc rpc-name-kw arg timeout-ms))
 
 (defn shutdown!
   "Shutdown the vivo client and its connection to the server.

@@ -19,3 +19,8 @@
   [:secret l/string-schema]
   [:users (l/map-schema user-schema)]
   [:user-id-to-msgs (l/map-schema msgs-schema)])
+
+(def rpc-name-kw->info
+  {:inc {:arg-schema l/int-schema
+         :ret-schema l/int-schema
+         :handler inc}})

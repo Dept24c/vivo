@@ -17,6 +17,7 @@
   "ws://localhost:12345/vivo-client")
 
 (def vc-opts {:get-server-url get-server-url
+              :rpc-name-kw->info ss/rpc-name-kw->info
               :sys-state-schema ss/state-schema
               :sys-state-source {:temp-branch/db-id nil}})
 
@@ -248,3 +249,20 @@
          (finally
            (vivo/shutdown! vc1)
            (vivo/shutdown! vc2)))))))
+
+(deftest test-rpc
+  (au/test-async
+   10000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [ret (au/<? (vivo/<rpc vc :inc 1 5000))]
+           (is (= 2 ret)))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e))
+           (println "Exception in test-rpc:\n" (u/ex-msg-and-stacktrace e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
+;; TODO: Test unauthorized rpc, both not logged in and authz denied
+;; TODO: Test unauthorized update-state

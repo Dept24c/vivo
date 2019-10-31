@@ -44,6 +44,7 @@
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
   (<modify-db [this <update-fn msg metadata])
+  (<rpc [this arg metadata])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
   (<update-state [this arg metadata])
@@ -256,6 +257,7 @@
                        login-lifetime-mins
                        path->schema-cache
                        perm-storage
+                       rpc-name-kw->info
                        sm-ep
                        state-schema
                        temp-storage
@@ -573,6 +575,41 @@
                   (au/<?)
                   (:cur-db-id)))))))
 
+  (<rpc [this msg-arg metadata]
+    (au/go
+      (let [{:keys [conn-id]} metadata
+            {:keys [subject-id]} (@*conn-id->info conn-id)
+            {:keys [rpc-name-kw-ns rpc-name-kw-name arg]} msg-arg
+            rpc-name-kw (keyword rpc-name-kw-ns rpc-name-kw-name)
+            rpc-info (rpc-name-kw->info rpc-name-kw)
+            _ (when-not rpc-info
+                (throw
+                 (ex-info
+                  (str "No RPC with name `" rpc-name-kw "` is registered. "
+                       "Either this is a typo or you need to add `"
+                       rpc-name-kw "to the :rpc-name-kw->info map when "
+                       "creating the Vivo server.")
+                  {:known-rpcs (keys rpc-name-kw->info)
+                   :given-rpc rpc-name-kw})))
+            {:keys [arg-schema ret-schema handler]} rpc-info
+            {:keys [fp bytes]} arg
+            w-schema (au/<? (<fp->schema this fp conn-id))
+            rpc-arg (l/deserialize arg-schema w-schema bytes)
+            authorized? (let [path [:vivo/rpcs rpc-name-kw]
+                              ret (authorization-fn subject-id path :call
+                                                    rpc-arg)]
+                          (if (au/channel? ret)
+                            (au/<? ret)
+                            ret))]
+        (if-not authorized?
+          :vivo/unauthorized
+          (let [ret* (handler rpc-arg)
+                ret (if (au/channel? ret*)
+                      (au/<? ret*)
+                      ret*)]
+            {:fp (au/<? (u/<schema->fp perm-storage ret-schema))
+             :bytes (l/serialize ret-schema ret)})))))
+
   (<scmds->cmds [this scmds conn-id]
     (au/go
       (if-not (seq scmds)
@@ -651,7 +688,13 @@
     (doseq [k required-ks]
       (when-not (config k)
         (throw (ex-info (str "Missing " k " in config.")
-                        (u/sym-map k config)))))))
+                        (u/sym-map k config))))))
+  (when-let [rpc-name-kw->info (:rpc-name-kw->info config)]
+    (when-not (map? rpc-name-kw->info)
+      (throw (ex-info (str "In config, the value of the :rpc-name-kw->info key "
+                           "must be a map. Got `" rpc-name-kw->info "`.")
+                      config)))
+    (u/check-rpc-name-kw->info rpc-name-kw->info true)))
 
 (defn on-disconnect
   [*conn-id->info *subject-id->conn-ids *branch->info temp-storage
@@ -677,6 +720,9 @@
 (defn vivo-server
   "Returns a no-arg fn that stops the server."
   [config]
+  (when-not (map? config)
+    (throw (ex-info (str "`config` argument must be a map. Got: `" config "`.")
+                    (u/sym-map config))))
   (let [config* (merge default-config config)
         _ (check-config config*)
         {:keys [additional-endpoints
@@ -690,6 +736,7 @@
                 login-lifetime-mins
                 port
                 repository-name
+                rpc-name-kw->info
                 state-schema
                 tx-fns]} config*
         perm-storage (data-storage/data-storage
@@ -720,6 +767,7 @@
                                   login-lifetime-mins
                                   path->schema-cache
                                   perm-storage
+                                  (or rpc-name-kw->info {})
                                   sm-ep
                                   state-schema
                                   temp-storage
@@ -749,6 +797,8 @@
                     (partial <set-state-source vivo-server))
     (ep/set-handler sm-ep :update-state
                     (partial <update-state vivo-server))
+    (ep/set-handler sm-ep :rpc
+                    (partial <rpc vivo-server))
     (cs/start capsule-server)
     (log-info (str "Vivo server started on port " port "."))
     #(cs/stop capsule-server)))

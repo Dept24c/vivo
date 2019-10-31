@@ -43,6 +43,7 @@
          config {:authorization-fn <authorized?
                  :port port
                  :repository-name repository-name
+                 :rpc-name-kw->info ss/rpc-name-kw->info
                  :state-schema ss/state-schema
                  :tx-fns tx-fns}]
      (alter-var-root
