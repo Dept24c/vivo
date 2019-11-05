@@ -3,6 +3,7 @@
    [clojure.core.async :as ca]
    [clojure.test :refer [deftest is]]
    [com.dept24c.vivo :as vivo]
+   [com.dept24c.vivo.admin-client :as ac]
    [com.dept24c.vivo.state-schema :as ss]
    [com.dept24c.vivo.test-user :as tu]
    [com.dept24c.vivo.utils :as u]
@@ -13,10 +14,10 @@
      (:import
       (clojure.lang ExceptionInfo))))
 
-(defn get-server-url []
-  "ws://localhost:12345/vivo-client")
+(defn make-get-server-url [ep]
+  (constantly (str "ws://localhost:12345/" ep)))
 
-(def vc-opts {:get-server-url get-server-url
+(def vc-opts {:get-server-url (make-get-server-url "vivo-client")
               :rpc-name-kw->info ss/rpc-name-kw->info
               :sys-state-schema ss/state-schema
               :sys-state-source {:temp-branch/db-id nil}})
@@ -278,3 +279,28 @@
            (println "Exception in test-rpc:\n" (u/ex-msg-and-stacktrace e)))
          (finally
            (vivo/shutdown! vc)))))))
+
+(deftest test-ddb-large-data-storage
+  (au/test-async
+   10000
+   (ca/go
+     (let [branch "test"
+           get-server-url (make-get-server-url "admin-client")
+           get-admin-creds (constantly {:subject-id "admin-client"
+                                        :subject-secret ""})
+           ac (ac/admin-client get-server-url get-admin-creds)
+           _ (is (= true (au/<? (ac/<create-branch ac branch nil))))
+           vc (vivo/vivo-client (assoc vc-opts :sys-state-source
+                                       {:branch/name branch}))]
+       (try
+         (let [huge-name (apply str (take 500000 (repeat "x")))
+               ret (au/<? (vivo/<set-state! vc [:sys :app-name] huge-name))]
+           (is (= true ret)))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e))
+           (println "Exception in test-large-data-storage:\n"
+                    (u/ex-msg-and-stacktrace e)))
+         (finally
+           (is (= true (au/<? (ac/<delete-branch ac branch))))
+           (vivo/shutdown! vc)
+           (ac/shutdown! ac)))))))

@@ -37,7 +37,8 @@
     (u/check-reference reference)
     (au/go
       (let [data-id (au/<? (u/<get-data-id this reference))]
-        (au/<? (u/<get-in this data-id schema path prefix)))))
+        (when data-id
+          (au/<? (u/<get-in this data-id schema path prefix))))))
 
   (<update [this data-id schema update-commands prefix]
     (u/<update this data-id schema update-commands prefix nil))
@@ -77,7 +78,7 @@
 
   (<update-reference! [this reference schema update-commands prefix tx-fns]
     (au/go
-      (let [num-tries 100]
+      (let [num-tries 10]
         (u/check-reference reference)
         (loop [num-tries-left (dec num-tries)]
           (let [data-id (au/<? (u/<get-data-id this reference))

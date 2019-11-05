@@ -20,7 +20,8 @@
   (:import
    (clojure.lang ExceptionInfo)
    (java.security SecureRandom)
-   (java.util UUID)))
+   (java.util UUID)
+   (java.util.concurrent ConcurrentLinkedQueue)))
 
 (set! *warn-on-reflection* true)
 
@@ -248,13 +249,71 @@
                                    nil))
       (au/<? (u/<delete-reference! storage branch-reference)))))
 
+(defn <modify-db* [branch-reference storage subject-id <update-fn msg]
+  (au/go
+    (let [num-tries 10]
+      ;; Use loop to stay in go block
+      (loop [num-tries-left (dec num-tries)]
+        (let [prev-db-id (au/<? (u/<get-data-id storage branch-reference))
+              prev-dbi (when prev-db-id
+                         (au/<? (u/<get-in storage prev-db-id
+                                           u/db-info-schema nil nil)))
+              {:keys [num-prev-dbs data-id]} prev-dbi
+              uf-ret (au/<? (<update-fn prev-dbi storage subject-id))
+              new-dbi (:dbi uf-ret)
+              new-dbi (assoc new-dbi
+                             :msg msg
+                             :timestamp-ms (u/current-time-ms)
+                             :num-prev-dbs (if num-prev-dbs
+                                             (inc num-prev-dbs)
+                                             0)
+                             :prev-db-id prev-db-id)
+              update-ret (au/<? (u/<update storage nil u/db-info-schema
+                                           [{:path []
+                                             :op :set
+                                             :arg new-dbi}]
+                                           nil))
+              new-db-id (:new-data-id update-ret)]
+          (if (au/<? (u/<compare-and-set! storage branch-reference
+                                          l/string-schema
+                                          prev-db-id
+                                          new-db-id))
+            {:new-db-id new-db-id
+             :prev-db-id prev-db-id
+             :update-infos (:update-infos uf-ret)}
+            (if (zero? num-tries-left)
+              (throw
+               (ex-info (str "Failed to commit to branch `" branch-reference
+                             "` after " num-tries " tries.")
+                        (u/sym-map branch-reference num-tries)))
+              (do
+                (au/<? (ca/timeout (rand-int 100)))
+                (recur (dec num-tries-left))))))))))
 
+
+(defn start-modify-db-loop [^ConcurrentLinkedQueue q log-error]
+  (ca/go
+    (while true
+      (try
+        (if-let [info (.poll q)]
+          (let [{:keys [cb branch-reference
+                        storage subject-id <update-fn msg]} info]
+            (try
+              (cb (au/<? (<modify-db* branch-reference storage subject-id
+                                      <update-fn msg)))
+              (catch Exception e
+                (cb e))))
+          (ca/<! (ca/timeout 5)))
+        (catch Exception e
+          (log-error "Unexpected error in txn-loop: %s"
+                     (u/ex-msg-and-stacktrace e)))))))
 
 (defrecord VivoServer [admin-secret
                        authorization-fn
                        log-error
                        log-info
                        login-lifetime-mins
+                       modify-q
                        path->schema-cache
                        perm-storage
                        rpc-name-kw->info
@@ -267,52 +326,21 @@
                        *branch->info]
   IVivoServer
   (<modify-db [this <update-fn msg metadata]
-    ;; TODO: Do these serially in a queue to minimize conflicts
     (au/go
       (let [{:keys [conn-id]} metadata
             {:keys [subject-id branch]} (@*conn-id->info conn-id)
             {:keys [conn-ids]} (@*branch->info branch)
-            num-tries 100
-            branch-reference (branch->reference branch)]
-        (loop [num-tries-left (dec num-tries)]
-          (let [storage (get-storage this branch)
-                prev-db-id (au/<? (u/<get-data-id storage branch-reference))
-                prev-dbi (when prev-db-id
-                           (au/<? (u/<get-in storage prev-db-id
-                                             u/db-info-schema nil nil)))
-                {:keys [num-prev-dbs data-id]} prev-dbi
-                uf-ret (au/<? (<update-fn prev-dbi storage subject-id))
-                new-dbi (:dbi uf-ret)
-                new-dbi (assoc new-dbi
-                               :msg msg
-                               :timestamp-ms (u/current-time-ms)
-                               :num-prev-dbs (if num-prev-dbs
-                                               (inc num-prev-dbs)
-                                               0)
-                               :prev-db-id prev-db-id)
-                update-ret (au/<? (u/<update storage nil u/db-info-schema
-                                             [{:path []
-                                               :op :set
-                                               :arg new-dbi}]
-                                             nil))
-                new-db-id (:new-data-id update-ret)]
-            (if (au/<? (u/<compare-and-set! storage branch-reference
-                                            l/string-schema
-                                            prev-db-id
-                                            new-db-id))
-              (let [change-info {:new-db-id new-db-id
-                                 :prev-db-id prev-db-id
-                                 :update-infos (:update-infos uf-ret)}]
-                (doseq [conn-id* (disj (set conn-ids) conn-id)]
-                  (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
-                change-info)
-              (if (zero? num-tries-left)
-                (throw (ex-info (str "Failed to commit to branch `" branch
-                                     "` after " num-tries " tries.")
-                                (u/sym-map branch num-tries)))
-                (do
-                  (au/<? (ca/timeout (rand-int 100)))
-                  (recur (dec num-tries-left))))))))))
+            branch-reference (branch->reference branch)
+            storage (get-storage this branch)
+            modify-ch (ca/chan)
+            cb #(ca/put! modify-ch %)
+            info (u/sym-map cb branch-reference storage subject-id
+                            <update-fn msg)
+            _ (.add ^ConcurrentLinkedQueue modify-q info)
+            change-info (au/<? modify-ch)]
+        (doseq [conn-id* (disj (set conn-ids) conn-id)]
+          (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
+        change-info)))
 
   (<add-subject [this arg metadata]
     (au/go
@@ -338,6 +366,7 @@
     (au/go
       (let [{:keys [branch db-id]
              temp-dest? :is-temp} arg
+            {:keys [subject-id]} metadata
             _ (when (> (count branch) u/max-branch-name-len)
                 (throw-branch-name-too-long branch))
             _ (when (and temp-dest?
@@ -345,27 +374,44 @@
                 (throw (ex-info (str "Temp branch names must start with `-`. "
                                      "Got `" branch "`.")
                                 (u/sym-map branch))))
-            temp-src? (and db-id (block-ids/temp-block-id? db-id))
             storage (get-storage this branch)
+            temp-src? (and db-id (block-ids/temp-block-id? db-id))
             db-id* (if temp-dest?
                      (block-ids/block-id->temp-block-id db-id)
                      db-id)
-            branch-reference (branch->reference branch)]
-        (when (and temp-src? (not temp-dest?))
-          (throw (ex-info (str "Cannot create a permanent branch from a "
-                               "temporary db-id.")
-                          (u/sym-map branch db-id temp-dest?))))
-        (when (au/<? (u/<get-data-id storage branch-reference))
-          (throw (ex-info (str "A branch named `" branch "` already "
-                               "exists in the repository.")
-                          (u/sym-map branch db-id temp-dest?))))
-        (au/<? (u/<update-reference! storage u/all-branches-reference
-                                     u/all-branches-schema
-                                     [{:path [-1]
-                                       :op :insert-after
-                                       :arg branch}]
-                                     nil))
-        true)))
+            branch-reference (branch->reference branch)
+            _ (when (and temp-src? (not temp-dest?))
+                (throw (ex-info (str "Cannot create a permanent branch from a "
+                                     "temporary db-id.")
+                                (u/sym-map branch db-id temp-dest?))))
+            _ (when (au/<? (u/<get-data-id storage branch-reference))
+                (throw (ex-info (str "A branch named `" branch "` already "
+                                     "exists in the repository.")
+                                (u/sym-map branch db-id temp-dest?))))
+            _ (au/<? (u/<update-reference! storage u/all-branches-reference
+                                           u/all-branches-schema
+                                           [{:path [-1]
+                                             :op :insert-after
+                                             :arg branch}]
+                                           nil))
+            new-db-id (or db-id*
+                          (let [create-db-ch (ca/chan)
+                                cb #(ca/put! create-db-ch %)
+                                default-data (l/default-data state-schema)
+                                update-cmds [{:path [:sys]
+                                              :op :set
+                                              :arg default-data}]
+                                <update-fn (partial <update-state-update-fn
+                                                    state-schema update-cmds
+                                                    tx-fns)
+                                msg "Create initial db for branch"
+                                create-db-info (u/sym-map cb branch-reference
+                                                          storage subject-id
+                                                          <update-fn msg)]
+                            (.add ^ConcurrentLinkedQueue modify-q
+                                  create-db-info)
+                            (:new-db-id (au/<? create-db-ch))))]
+        (au/<? (u/<set-reference! storage branch-reference new-db-id)))))
 
   (<delete-branch [this branch metadata]
     (<delete-branch* branch (get-storage this branch)))
@@ -564,16 +610,7 @@
                  (if conn-ids
                    (update info :conn-ids conj conn-id)
                    (assoc info :conn-ids #{conn-id}))))
-        (or (au/<? (<get-db-id this branch))
-            (let [default-data (l/default-data state-schema)
-                  update-cmds [{:path [:sys]
-                                :op :set
-                                :arg default-data}]]
-              (-> (<modify-db this (partial <update-state-update-fn state-schema
-                                            update-cmds tx-fns)
-                              "Create initial db" metadata)
-                  (au/<?)
-                  (:cur-db-id)))))))
+        (au/<? (<get-db-id this branch)))))
 
   (<rpc [this msg-arg metadata]
     (au/go
@@ -692,6 +729,7 @@
 
 (def default-config
   {:additional-endpoints []
+   :authenticate-admin-client (constantly false)
    :handle-http default-health-http-handler
    :http-timeout-ms 60000
    :log-info println
@@ -732,6 +770,25 @@
         (log-error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
                         (u/ex-msg-and-stacktrace e)))))))
 
+(defn set-handlers! [vivo-server vc-ep admin-ep]
+  (ep/set-handler vc-ep :add-subject (partial <add-subject vivo-server))
+  (ep/set-handler vc-ep :add-subject-identifier
+                  (partial <add-subject-identifier vivo-server))
+  (ep/set-handler vc-ep :change-secret (partial <change-secret vivo-server))
+  (ep/set-handler vc-ep :get-schema-pcf (partial <get-schema-pcf vivo-server))
+  (ep/set-handler vc-ep :store-schema-pcf
+                  (partial <store-schema-pcf vivo-server))
+  (ep/set-handler vc-ep :get-state (partial <get-state vivo-server))
+  (ep/set-handler vc-ep :log-in (partial <log-in vivo-server))
+  (ep/set-handler vc-ep :log-in-w-token (partial <log-in-w-token vivo-server))
+  (ep/set-handler vc-ep :log-out (partial <log-out vivo-server))
+  (ep/set-handler vc-ep :set-state-source
+                  (partial <set-state-source vivo-server))
+  (ep/set-handler vc-ep :update-state (partial <update-state vivo-server))
+  (ep/set-handler vc-ep :rpc (partial <rpc vivo-server))
+  (ep/set-handler admin-ep :create-branch (partial <create-branch vivo-server))
+  (ep/set-handler admin-ep :delete-branch (partial <delete-branch vivo-server)))
+
 (defn vivo-server
   "Returns a no-arg fn that stops the server."
   [config]
@@ -742,6 +799,7 @@
         _ (check-config config*)
         {:keys [additional-endpoints
                 admin-secret
+                authenticate-admin-client
                 authorization-fn
                 disable-ddb?
                 handle-http
@@ -763,57 +821,39 @@
         temp-storage (data-storage/data-storage
                       (data-block-storage/data-block-storage
                        (mem-block-storage/mem-block-storage true)))
+        modify-q (ConcurrentLinkedQueue.)
+        _ (start-modify-db-loop modify-q log-error)
         path->schema-cache (sr/stockroom 1000)
         *conn-id->info (atom {})
         *subject-id->conn-ids (atom {})
         *branch->info (atom {})
-        sm-ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
+        vc-ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
                                             *subject-id->conn-ids *branch->info
                                             temp-storage log-error log-info)}
-        sm-ep (ep/endpoint "vivo-client" (constantly true)
-                           u/client-server-protocol :server sm-ep-opts)
+        vc-ep (ep/endpoint "vivo-client" (constantly true)
+                           u/client-server-protocol :server vc-ep-opts)
+        admin-ep (ep/endpoint "admin-client" authenticate-admin-client
+                              u/admin-client-server-protocol :server)
         cs-opts (u/sym-map handle-http http-timeout-ms)
-        capsule-server (cs/server (conj additional-endpoints sm-ep)
+        capsule-server (cs/server (conj additional-endpoints vc-ep admin-ep)
                                   port cs-opts)
         vivo-server (->VivoServer admin-secret
                                   authorization-fn
                                   log-error
                                   log-info
                                   login-lifetime-mins
+                                  modify-q
                                   path->schema-cache
                                   perm-storage
                                   (or rpc-name-kw->info {})
-                                  sm-ep
+                                  vc-ep
                                   state-schema
                                   temp-storage
                                   tx-fns
                                   *conn-id->info
                                   *subject-id->conn-ids
                                   *branch->info)]
-    (ep/set-handler sm-ep :add-subject
-                    (partial <add-subject vivo-server))
-    (ep/set-handler sm-ep :add-subject-identifier
-                    (partial <add-subject-identifier vivo-server))
-    (ep/set-handler sm-ep :change-secret
-                    (partial <change-secret vivo-server))
-    (ep/set-handler sm-ep :get-schema-pcf
-                    (partial <get-schema-pcf vivo-server))
-    (ep/set-handler sm-ep :store-schema-pcf
-                    (partial <store-schema-pcf vivo-server))
-    (ep/set-handler sm-ep :get-state
-                    (partial <get-state vivo-server))
-    (ep/set-handler sm-ep :log-in
-                    (partial <log-in vivo-server))
-    (ep/set-handler sm-ep :log-in-w-token
-                    (partial <log-in-w-token vivo-server))
-    (ep/set-handler sm-ep :log-out
-                    (partial <log-out vivo-server))
-    (ep/set-handler sm-ep :set-state-source
-                    (partial <set-state-source vivo-server))
-    (ep/set-handler sm-ep :update-state
-                    (partial <update-state vivo-server))
-    (ep/set-handler sm-ep :rpc
-                    (partial <rpc vivo-server))
+    (set-handlers! vivo-server vc-ep admin-ep)
     (cs/start capsule-server)
     (log-info (str "Vivo server started on port " port "."))
     #(cs/stop capsule-server)))

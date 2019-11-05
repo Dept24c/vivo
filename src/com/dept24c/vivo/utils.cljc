@@ -339,9 +339,6 @@
 (def state-source-schema (l/union-schema [branch-state-source-schema
                                           temp-branch-state-source-schema]))
 
-(l/def-record-schema create-branch-arg-schema
-  [:branch branch-name-schema]
-  [:db-id db-id-schema])
 
 (l/def-record-schema rpc-arg-schema
   [:rpc-name-kw-ns l/string-schema]
@@ -350,6 +347,16 @@
 
 (def rpc-ret-schema
   (l/union-schema [l/null-schema unauthorized-schema serialized-value-schema]))
+
+(l/def-record-schema create-branch-arg-schema
+  [:branch branch-name-schema]
+  [:db-id db-id-schema])
+
+(l/def-enum-schema branch-exists-schema
+  :vivo/branch-exists)
+
+(def create-branch-ret-schema
+  (l/union-schema [branch-exists-schema l/boolean-schema]))
 
 ;;;;;;;;;;;;;;;;;;;; Protocols ;;;;;;;;;;;;;;;;;;;;
 
@@ -398,7 +405,7 @@
 (def admin-client-server-protocol
   {:roles [:admin-client :server]
    :msgs {:create-branch {:arg create-branch-arg-schema
-                          :ret l/boolean-schema
+                          :ret create-branch-ret-schema
                           :sender :admin-client}
           :delete-branch {:arg branch-name-schema
                           :ret l/boolean-schema

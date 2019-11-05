@@ -42,7 +42,8 @@
                   :sub-map '{msgs [:sys :msgs]}
                   :f make-user-id-to-msgs
                   :output-path [:sys :user-id-to-msgs]}]
-         config {:authorization-fn <authorized?
+         config {:authenticate-admin-client (constantly true)
+                 :authorization-fn <authorized?
                  :port port
                  :repository-name repository-name
                  :rpc-name-kw->info ss/rpc-name-kw->info

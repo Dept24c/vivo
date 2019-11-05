@@ -1,13 +1,11 @@
 (ns com.dept24c.vivo.client
   (:require
    [clojure.core.async :as ca]
-   [clojure.string :as str]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.react :as react]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
-   [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.client :as cc]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]))
@@ -379,46 +377,50 @@
 
   (<handle-updates [this update-info cb*]
     (ca/go
-      (when (au/<? (u/<wait-for-conn-init this))
-        (let [{:keys [sys-cmds local-cmds]} update-info
-              cb (or cb* (constantly nil))
-              sys-ret (when (seq sys-cmds)
-                        (when-let [ret (au/<? (u/<update-sys-state
-                                               this sys-cmds))]
-                          (if (= :vivo/unauthorized ret)
-                            ret
-                            (let [{:keys [new-db-id
-                                          prev-db-id update-infos]} ret
-                                  local-db-id @*cur-db-id
-                                  notify-all? (not= prev-db-id local-db-id)]
-                              (when (or (nil? local-db-id)
-                                        (block-ids/earlier? local-db-id
-                                                            new-db-id))
-                                (reset! *cur-db-id new-db-id))
-                              (u/sym-map notify-all? update-infos)))))]
-          (if (and (seq sys-cmds)
-                   (or (not sys-ret)
-                       (= :vivo/unauthorized sys-ret)))
-            (cb sys-ret) ;; Don't do local/sub updates if sys updates failed
-            (loop [num-attempts 1]
-              (let [cur-local-state @*local-state
-                    local-ret (eval-cmds cur-local-state local-cmds :local)
-                    local-state (:state local-ret)]
-                (if (compare-and-set! *local-state cur-local-state
-                                      local-state)
-                  (let [update-infos (concat (:update-infos sys-ret)
-                                             (:update-infos local-ret))
-                        {:keys [notify-all?]} sys-ret]
-                    (ca/put! updates-ch (u/sym-map update-infos notify-all?
-                                                   local-state))
-                    (cb true))
-                  (if (< num-attempts max-commit-attempts)
-                    (recur (inc num-attempts))
-                    (cb (ex-info
-                         (str "Failed to commit updates after "
-                              num-attempts " attempts.")
-                         (u/sym-map max-commit-attempts
-                                    sys-cmds local-cmds))))))))))))
+      (try
+        (when (au/<? (u/<wait-for-conn-init this))
+          (let [{:keys [sys-cmds local-cmds]} update-info
+                cb (or cb* (constantly nil))
+                sys-ret (when (seq sys-cmds)
+                          (when-let [ret (au/<? (u/<update-sys-state
+                                                 this sys-cmds))]
+                            (if (= :vivo/unauthorized ret)
+                              ret
+                              (let [{:keys [new-db-id
+                                            prev-db-id update-infos]} ret
+                                    local-db-id @*cur-db-id
+                                    notify-all? (not= prev-db-id local-db-id)]
+                                (when (or (nil? local-db-id)
+                                          (block-ids/earlier? local-db-id
+                                                              new-db-id))
+                                  (reset! *cur-db-id new-db-id))
+                                (u/sym-map notify-all? update-infos)))))]
+            (if (and (seq sys-cmds)
+                     (or (not sys-ret)
+                         (= :vivo/unauthorized sys-ret)))
+              (cb sys-ret) ;; Don't do local/sub updates if sys updates failed
+              (loop [num-attempts 1]
+                (let [cur-local-state @*local-state
+                      local-ret (eval-cmds cur-local-state local-cmds :local)
+                      local-state (:state local-ret)]
+                  (if (compare-and-set! *local-state cur-local-state
+                                        local-state)
+                    (let [update-infos (concat (:update-infos sys-ret)
+                                               (:update-infos local-ret))
+                          {:keys [notify-all?]} sys-ret]
+                      (ca/put! updates-ch (u/sym-map update-infos notify-all?
+                                                     local-state))
+                      (cb true))
+                    (if (< num-attempts max-commit-attempts)
+                      (recur (inc num-attempts))
+                      (cb (ex-info
+                           (str "Failed to commit updates after "
+                                num-attempts " attempts.")
+                           (u/sym-map max-commit-attempts
+                                      sys-cmds local-cmds))))))))))
+        (catch #?(:cljs js/Error :clj Throwable) e
+          (when cb*
+            (cb* e))))))
 
   (update-state! [this update-cmds cb]
     (when-not (sequential? update-cmds)
@@ -441,8 +443,12 @@
                  #(u/<update-cmd->serializable-update-cmd this %1 %2)
                  sys-cmds))
             ;; Use i->v map to preserve original command order
-            sucs-map (au/<? (ca/reduce (fn [acc [i suc]]
-                                         (assoc acc i suc))
+            sucs-map (au/<? (ca/reduce (fn [acc v]
+                                         (when (instance? #?(:cljs js/Error
+                                                             :clj Throwable) v)
+                                           (throw v))
+                                         (let [[i suc] v]
+                                           (assoc acc i suc)))
                                        {} ch))
             sucs (map sucs-map (range (count sys-cmds)))]
         (au/<? (cc/<send-msg capsule-client :update-state

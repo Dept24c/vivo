@@ -108,7 +108,8 @@
          (when cb
            (cb ret)))
        (catch #?(:cljs js/Error :clj Throwable) e
-         (print (str "Exception in log-in!" (u/ex-msg-and-stacktrace e)))
+         (when-let [logger (:log-error vc)]
+           (logger (str "Exception in rpc:\n" (u/ex-msg-and-stacktrace e))))
          (when cb
            (cb e)))))))
 

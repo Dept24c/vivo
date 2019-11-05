@@ -1,6 +1,7 @@
 (ns com.dept24c.vivo.bristlecone.ddb-block-storage
   (:require
    [clojure.core.async :as ca]
+   [clojure.string :as str]
    [cognitect.aws.client.api :as aws]
    [cognitect.aws.client.api.async :as aws-async]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
@@ -15,7 +16,7 @@
   {:block-cache-size 1000
    :create-table-if-absent true})
 (def last-block-num-key "_LAST_BLOCK_NUM")
-(def max-data-block-bytes (- (* 400 1024) 10))
+(def max-data-block-bytes (- (* 400 1024) 20))
 
 (defn check-block-id [block-id]
   (when-not (string? block-id)
@@ -44,10 +45,10 @@
                   ret (au/<? (aws-async/invoke ddb arg))]
               (if-not (and (= :cognitect.anomalies/incorrect
                               (:cognitect.anomalies/category ret))
-                           (#{(str "com.amazonaws.dynamodb.v20120810"
-                                   "#ResourceNotFoundException")
-                              "com.amazon.coral.validate#ValidationException"}
-                            (:__type ret)))
+                           (or (str/includes? (:__type ret)
+                                              "ResourceNotFoundException")
+                               (str/includes? (:__type ret)
+                                              "ValidationException")))
                 (-> ret :Attributes :v :N Long/parseLong
                     block-ids/block-num->block-id)
                 (let [arg {:op :PutItem
@@ -67,20 +68,29 @@
             arg {:op :UpdateItem
                  :request {:TableName table-name
                            :Key {"k" {:S reference}}
-                           :ExpressionAttributeValues {":old-v" {:B old-b64}
-                                                       ":new-v" {:B new-b64}}
-                           :UpdateExpression "SET v = :new-v"
-                           :ConditionExpression "v = :old-v"
+                           :ExpressionAttributeValues {":oldv"
+                                                       (if old-b64
+                                                         {:B old-b64}
+                                                         {:NULL true})
+                                                       ":newv" {:B new-b64}}
+                           :UpdateExpression "SET v = :newv"
+                           :ConditionExpression
+                           "attribute_not_exists(v) OR v = :oldv"
                            :ReturnValues "UPDATED_NEW"}}
             ret  (au/<? (aws-async/invoke ddb arg))]
-        (if (and (= :cognitect.anomalies/incorrect
-                    (:cognitect.anomalies/category ret))
-                 (#{(str "com.amazonaws.dynamodb.v20120810"
-                         "#ResourceNotFoundException")
-                    "com.amazon.coral.validate#ValidationException"}
-                  (:__type ret)))
-          (au/<? (u/<write-block this reference new-bytes true))
-          (= new-b64 (-> ret :Attributes :v :B))))))
+        (if-not (= :cognitect.anomalies/incorrect
+                   (:cognitect.anomalies/category ret))
+          (= new-b64 (some-> ret :Attributes :v :B slurp))
+          (cond
+            (str/includes? (:__type ret) "ResourceNotFoundException")
+            (au/<? (u/<write-block this reference new-bytes true))
+
+            (str/includes? (:__type ret) "ConditionalCheckFailedException")
+            false
+
+            :else
+            (throw (ex-info (str "Unknown error in UpdateItem: " (:__type ret))
+                            ret)))))))
 
   (<read-block [this block-id]
     (u/<read-block this block-id false))
