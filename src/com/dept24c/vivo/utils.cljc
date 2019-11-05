@@ -25,6 +25,7 @@
 (def branch-reference-root "_BRANCH_")
 (def fp-to-schema-reference-root "_FP_")
 (def max-branch-name-len 64)
+(def max-data-block-bytes (* 300 1000)) ;; Approx. DDB max via Cognitect API
 
 (defmacro sym-map
   "Builds a map from symbols.

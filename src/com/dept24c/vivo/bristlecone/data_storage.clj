@@ -8,8 +8,18 @@
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
+   [deercreeklabs.baracus :as ba]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]))
+
+(defprotocol IDataStorageInternals
+  (<read-data [this db-id schema])
+  (<write-data [this schema state]))
+
+(l/def-record-schema state-store-info-schema
+  [:schema-fp :required l/long-schema]
+  [:block-ids (l/array-schema l/string-schema)]
+  [:inline-bytes l/bytes-schema])
 
 (defrecord DataStorage [data-block-storage sub-map->op-cache]
   u/ISchemaStore
@@ -18,6 +28,63 @@
 
   (<fp->schema [this fp]
     (u/<fp->schema data-block-storage fp))
+
+  IDataStorageInternals
+  (<read-data [this db-id schema]
+    (au/go
+      (let [info (au/<? (u/<read-data-block data-block-storage db-id
+                                            state-store-info-schema))
+            {:keys [schema-fp block-ids inline-bytes]} info
+            writer-schema (au/<? (u/<fp->schema this schema-fp))]
+        (if inline-bytes
+          (l/deserialize schema writer-schema inline-bytes)
+          ;; Use loop to stay in go block
+          (let [bytes (loop [i 0
+                             blocks []]
+                        (let [block-id (nth block-ids i)
+                              block (au/<? (u/<read-data-block
+                                            data-block-storage block-id
+                                            l/bytes-schema))
+                              new-i (inc i)
+                              new-blocks (conj blocks block)]
+                          (if (= (count block-ids) new-i)
+                            (ba/concat-byte-arrays new-blocks)
+                            (recur new-i new-blocks))))]
+            (l/deserialize schema writer-schema bytes))))))
+
+  (<write-data [this schema state]
+    (au/go
+      (let [encoded (l/serialize schema state)
+            info-id (au/<? (u/<allocate-data-block-id data-block-storage))
+            info {:schema-fp (au/<? (u/<schema->fp this schema))}
+            block-size (- u/max-data-block-bytes 50)]
+        (if (< (count encoded) block-size)
+          (au/<? (u/<write-data-block data-block-storage info-id
+                                      state-store-info-schema
+                                      (assoc info :inline-bytes encoded)))
+          (let [num-blocks (inc (quot (count encoded) block-size))
+                ;; Use loop to stay in go block
+                ids (loop [i 0
+                           block-ids []]
+                      (let [block-id (au/<? (u/<allocate-data-block-id
+                                             data-block-storage))
+                            new-i (inc i)
+                            new-block-ids (conj block-ids block-id)
+                            start (* i block-size)
+                            end (if (= num-blocks new-i)
+                                  (count encoded)
+                                  (+ start block-size))
+                            block (ba/slice-byte-array encoded start end)]
+                        (au/<? (u/<write-data-block data-block-storage
+                                                    block-id l/bytes-schema
+                                                    block))
+                        (if (= num-blocks new-i)
+                          new-block-ids
+                          (recur new-i new-block-ids))))]
+            (au/<? (u/<write-data-block data-block-storage info-id
+                                        state-store-info-schema
+                                        (assoc info :block-ids ids)))))
+        info-id)))
 
   u/IDataStorage
   (<delete-reference! [this reference]
@@ -28,7 +95,7 @@
     ;; TODO: Support structural sharing
     (u/check-data-id data-id)
     (au/go
-      (some-> (u/<read-data-block data-block-storage data-id schema)
+      (some-> (<read-data this data-id schema)
               (au/<?)
               (commands/get-in-state path prefix)
               (:val))))
@@ -36,21 +103,19 @@
   (<get-in-reference [this reference schema path prefix]
     (u/check-reference reference)
     (au/go
-      (let [data-id (au/<? (u/<get-data-id this reference))]
-        (when data-id
-          (au/<? (u/<get-in this data-id schema path prefix))))))
+      (when-let [data-id (au/<? (u/<get-data-id this reference))]
+        (au/<? (u/<get-in this data-id schema path prefix)))))
 
   (<update [this data-id schema update-commands prefix]
     (u/<update this data-id schema update-commands prefix nil))
 
   (<update [this data-id schema update-commands prefix tx-fns]
     ;; TODO: Support structural sharing
-    (when data-id ;; Allow nil for the creating a new data item
+    (when data-id ;; Allow nil for creating a new data item
       (u/check-data-id data-id))
     (au/go
       (let [old-state (when data-id
-                        (au/<? (u/<read-data-block data-block-storage
-                                                   data-id schema)))
+                        (au/<? (<read-data this data-id schema)))
             uc-ret (reduce
                     (fn [{:keys [state] :as acc} cmd]
                       (let [ret (commands/eval-cmd state cmd prefix)]
@@ -68,9 +133,7 @@
                           (:state txf-ret)
                           (:state uc-ret))
             update-infos (concat (:update-infos uc-ret) (:update-infos txf-ret))
-            new-data-id (au/<? (u/<allocate-data-block-id data-block-storage))]
-        (au/<? (u/<write-data-block data-block-storage new-data-id schema
-                                    final-state))
+            new-data-id (au/<? (<write-data this schema final-state))]
         (u/sym-map new-data-id update-infos))))
 
   (<update-reference! [this reference schema update-commands prefix]

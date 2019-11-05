@@ -260,8 +260,7 @@
                                            u/db-info-schema nil nil)))
               {:keys [num-prev-dbs data-id]} prev-dbi
               uf-ret (au/<? (<update-fn prev-dbi storage subject-id))
-              new-dbi (:dbi uf-ret)
-              new-dbi (assoc new-dbi
+              new-dbi (assoc (:dbi uf-ret)
                              :msg msg
                              :timestamp-ms (u/current-time-ms)
                              :num-prev-dbs (if num-prev-dbs
@@ -677,7 +676,6 @@
               new-out))))))
 
   (<update-state [this arg metadata]
-    ;; TODO: Use authorization here
     (au/go
       (let [{:keys [conn-id]} metadata
             {:keys [subject-id]} (@*conn-id->info conn-id)

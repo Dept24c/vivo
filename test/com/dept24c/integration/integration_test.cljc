@@ -294,8 +294,15 @@
                                        {:branch/name branch}))]
        (try
          (let [huge-name (apply str (take 500000 (repeat "x")))
-               ret (au/<? (vivo/<set-state! vc [:sys :app-name] huge-name))]
-           (is (= true ret)))
+               set-ret (au/<? (vivo/<set-state! vc [:sys :app-name] huge-name))
+               _ (is (= true set-ret))
+               state-ch (ca/chan)
+               sub-map '{app-name [:sys :app-name]}
+               unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
+                                       "test")
+               state-ret (au/<? state-ch)]
+           (is (= huge-name ('app-name state-ret)))
+           (unsub!))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e))
            (println "Exception in test-large-data-storage:\n"

@@ -16,7 +16,6 @@
   {:block-cache-size 1000
    :create-table-if-absent true})
 (def last-block-num-key "_LAST_BLOCK_NUM")
-(def max-data-block-bytes (- (* 400 1024) 20))
 
 (defn check-block-id [block-id]
   (when-not (string? block-id)
@@ -117,10 +116,10 @@
 
   (<write-block [this block-id data skip-cache?]
     (check-block-id block-id)
-    (when (> (count data) max-data-block-bytes)
+    (when (> (count data) u/max-data-block-bytes)
       (throw (ex-info "Data is too big to be written in one block."
                       {:data-size (count data)
-                       :max-data-size max-data-block-bytes})))
+                       :max-data-size u/max-data-block-bytes})))
     (when-not (ba/byte-array? data)
       (throw (ex-info (str "Data must be a byte array. Got `"
                            (or data "nil") "`.")
