@@ -3,7 +3,7 @@
    [clojure.tools.namespace.repl :refer [refresh refresh-all]]
    [cognitect.aws.client.api :as aws]
    [com.dept24c.vivo.bristlecone.ddb-block-storage :as ddb]
-   [com.dept24c.vivo.server :as server]
+   [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.state-schema :as ss]
    [com.dept24c.vivo.test-user :as tu]
    [com.dept24c.vivo.utils :as u]
@@ -46,13 +46,18 @@
                  :authorization-fn <authorized?
                  :port port
                  :repository-name repository-name
-                 :rpc-name-kw->info ss/rpc-name-kw->info
+                 :rpcs ss/rpcs
                  :state-schema ss/state-schema
-                 :tx-fns tx-fns}]
+                 :tx-fns tx-fns}
+         server (vivo/vivo-server config)]
+     (vivo/set-rpc-handler! server :inc (fn [server subject-id arg]
+                                          (inc arg)))
+     (vivo/set-rpc-handler! server :authed/inc (fn [server subject-id arg]
+                                                 (inc arg)))
      (alter-var-root
       #'stop-server
       (fn [_]
-        (let [stopper (server/vivo-server config)]
+        (let [stopper #(vivo/shutdown-server! server)]
           (u/configure-capsule-logging :info)
           stopper))))))
 

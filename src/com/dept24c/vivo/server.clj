@@ -50,7 +50,9 @@
   (<store-schema-pcf [this arg metadata])
   (<update-state [this arg metadata])
   (<scmds->cmds [this scmds conn-id])
-  (get-storage [this branch]))
+  (get-storage [this branch])
+  (set-rpc-handler! [this rpc-name-kw handler])
+  (shutdown! [this]))
 
 (defn generate-token []
   (let [rng (SecureRandom.)
@@ -309,20 +311,22 @@
 
 (defrecord VivoServer [admin-secret
                        authorization-fn
+                       capsule-server
                        log-error
                        log-info
                        login-lifetime-mins
                        modify-q
                        path->schema-cache
                        perm-storage
-                       rpc-name-kw->info
+                       rpcs
                        sm-ep
                        state-schema
                        temp-storage
                        tx-fns
                        *conn-id->info
                        *subject-id->conn-ids
-                       *branch->info]
+                       *branch->info
+                       *rpc->handler]
   IVivoServer
   (<modify-db [this <update-fn msg metadata]
     (au/go
@@ -617,17 +621,26 @@
             {:keys [subject-id]} (@*conn-id->info conn-id)
             {:keys [rpc-name-kw-ns rpc-name-kw-name arg]} msg-arg
             rpc-name-kw (keyword rpc-name-kw-ns rpc-name-kw-name)
-            rpc-info (rpc-name-kw->info rpc-name-kw)
+            rpc-info (rpcs rpc-name-kw)
             _ (when-not rpc-info
                 (throw
                  (ex-info
                   (str "No RPC with name `" rpc-name-kw "` is registered. "
                        "Either this is a typo or you need to add `"
-                       rpc-name-kw "` to the :rpc-name-kw->info map when "
+                       rpc-name-kw "` to the :rpcs map when "
                        "creating the Vivo server.")
-                  {:known-rpcs (keys rpc-name-kw->info)
+                  {:known-rpcs (keys rpcs)
                    :given-rpc rpc-name-kw})))
-            {:keys [arg-schema ret-schema handler]} rpc-info
+            handler (@*rpc->handler rpc-name-kw)
+            _ (when-not handler
+                (throw
+                 (ex-info
+                  (str "No RPC handler for `" rpc-name-kw "` is registered. "
+                       "Call `set-rpc-handler!` on the server instance to "
+                       "set an RPC handler.")
+                  {:known-rpcs (keys rpcs)
+                   :given-rpc rpc-name-kw})))
+            {:keys [arg-schema ret-schema]} rpc-info
             {:keys [fp bytes]} arg
             w-schema (au/<? (<fp->schema this fp conn-id))
             rpc-arg (l/deserialize arg-schema w-schema bytes)
@@ -639,7 +652,7 @@
                             ret))]
         (if-not authorized?
           :vivo/unauthorized
-          (let [ret* (handler rpc-arg)
+          (let [ret* (handler this subject-id rpc-arg)
                 ret (if (au/channel? ret*)
                       (au/<? ret*)
                       ret*)]
@@ -714,7 +727,13 @@
   (get-storage [this branch]
     (if (str/starts-with? branch "-")
       temp-storage
-      perm-storage)))
+      perm-storage))
+
+  (set-rpc-handler! [this rpc-name-kw handler]
+    (swap! *rpc->handler assoc rpc-name-kw handler))
+
+  (shutdown! [this]
+    (cs/stop capsule-server)))
 
 (defn default-health-http-handler [req]
   (if (= "/health" (:uri req))
@@ -740,12 +759,12 @@
       (when-not (config k)
         (throw (ex-info (str "Missing " k " in config.")
                         (u/sym-map k config))))))
-  (when-let [rpc-name-kw->info (:rpc-name-kw->info config)]
-    (when-not (map? rpc-name-kw->info)
-      (throw (ex-info (str "In config, the value of the :rpc-name-kw->info key "
-                           "must be a map. Got `" rpc-name-kw->info "`.")
+  (when-let [rpcs (:rpcs config)]
+    (when-not (map? rpcs)
+      (throw (ex-info (str "In config, the value of the :rpcs key "
+                           "must be a map. Got `" rpcs "`.")
                       config)))
-    (u/check-rpc-name-kw->info rpc-name-kw->info true)))
+    (u/check-rpcs rpcs)))
 
 (defn on-disconnect
   [*conn-id->info *subject-id->conn-ids *branch->info temp-storage
@@ -807,7 +826,7 @@
                 login-lifetime-mins
                 port
                 repository-name
-                rpc-name-kw->info
+                rpcs
                 state-schema
                 tx-fns]} config*
         perm-storage (data-storage/data-storage
@@ -825,6 +844,7 @@
         *conn-id->info (atom {})
         *subject-id->conn-ids (atom {})
         *branch->info (atom {})
+        *rpc->handler (atom {})
         vc-ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
                                             *subject-id->conn-ids *branch->info
                                             temp-storage log-error log-info)}
@@ -837,21 +857,23 @@
                                   port cs-opts)
         vivo-server (->VivoServer admin-secret
                                   authorization-fn
+                                  capsule-server
                                   log-error
                                   log-info
                                   login-lifetime-mins
                                   modify-q
                                   path->schema-cache
                                   perm-storage
-                                  (or rpc-name-kw->info {})
+                                  (or rpcs {})
                                   vc-ep
                                   state-schema
                                   temp-storage
                                   tx-fns
                                   *conn-id->info
                                   *subject-id->conn-ids
-                                  *branch->info)]
+                                  *branch->info
+                                  *rpc->handler)]
     (set-handlers! vivo-server vc-ep admin-ep)
     (cs/start capsule-server)
     (log-info (str "Vivo server started on port " port "."))
-    #(cs/stop capsule-server)))
+    vivo-server))

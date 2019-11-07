@@ -18,7 +18,7 @@
   (constantly (str "ws://localhost:12345/" ep)))
 
 (def vc-opts {:get-server-url (make-get-server-url "vivo-client")
-              :rpc-name-kw->info ss/rpc-name-kw->info
+              :rpcs ss/rpcs
               :sys-state-schema ss/state-schema
               :sys-state-source {:temp-branch/db-id nil}})
 

@@ -638,33 +638,25 @@
               acc))
           false path))
 
-(defn check-rpc-name-kw->info
-  ([rpc-name-kw->info]
-   (check-rpc-name-kw->info rpc-name-kw->info false))
-  ([rpc-name-kw->info check-handler?]
-   (doseq [[k {:keys [arg-schema ret-schema handler]}] rpc-name-kw->info]
-     (when-not (keyword? k)
-       (throw
-        (ex-info (str "Keys in `rpc-name-kw->info` map must be keywords. "
-                      "Got `" k "`.")
-                 {:bad-k k
-                  :rpc-name-kw->info rpc-name-kw->info})))
-     (when-not (l/schema? arg-schema)
-       (throw
-        (ex-info (str "The value for the :arg-schema key must be a lancaster "
-                      "schema. Got: `" arg-schema "`.")
-                 (sym-map k arg-schema ret-schema))))
-     (when-not (l/schema? ret-schema)
-       (throw
-        (ex-info (str "The value for the :ret-schema key must be a lancaster "
-                      "schema. Got: `" ret-schema "`.")
-                 (sym-map k arg-schema ret-schema))))
-     (when check-handler?
-       (when-not (ifn? handler)
-         (throw
-          (ex-info (str "The value for the :handler key must be a function. "
-                        " Got: `" handler "`.")
-                   (sym-map k arg-schema ret-schema handler))))))))
+(defn check-rpcs
+  [rpcs]
+  (doseq [[k {:keys [arg-schema ret-schema handler]}] rpcs]
+    (when-not (keyword? k)
+      (throw
+       (ex-info (str "Keys in `rpcs` map must be keywords. "
+                     "Got `" k "`.")
+                {:bad-k k
+                 :rpcs rpcs})))
+    (when-not (l/schema? arg-schema)
+      (throw
+       (ex-info (str "The value for the :arg-schema key must be a lancaster "
+                     "schema. Got: `" arg-schema "`.")
+                (sym-map k arg-schema ret-schema))))
+    (when-not (l/schema? ret-schema)
+      (throw
+       (ex-info (str "The value for the :ret-schema key must be a lancaster "
+                     "schema. Got: `" ret-schema "`.")
+                (sym-map k arg-schema ret-schema))))))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

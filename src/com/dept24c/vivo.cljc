@@ -6,11 +6,23 @@
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]))
 
+;;;;;;;;;;;;;;;;;;;; Server fns ;;;;;;;;;;;;;;;;;;;;
+
 #?(:clj
    (defn vivo-server
      "Returns a no-arg fn that stops the server."
      [config]
      (server/vivo-server config)))
+
+#?(:clj
+   (defn set-rpc-handler! [server rpc-name-kw handler]
+     (server/set-rpc-handler! server rpc-name-kw handler)))
+
+#?(:clj
+   (defn shutdown-server! [server]
+     (server/shutdown! server)))
+
+;;;;;;;;;;;;;;;;;;;; Client fns ;;;;;;;;;;;;;;;;;;;;
 
 (defn vivo-client
   "Creates a Vivo client."

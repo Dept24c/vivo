@@ -93,7 +93,7 @@
              {} res-map))
 
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
-                       log-info log-error rpc-name-kw->info state-cache
+                       log-info log-error rpcs state-cache
                        sys-state-cache sub-map->op-cache
                        path->schema-cache updates-ch updates-pub
                        set-subject-id! *local-state *cur-db-id
@@ -516,14 +516,14 @@
         (throw (ex-info (str "rpc-name-kw must be a keyword. Got`" rpc-name-kw
                              "`.")
                         (u/sym-map rpc-name-kw arg))))
-      (let [rpc-info (rpc-name-kw->info rpc-name-kw)
+      (let [rpc-info (get rpcs rpc-name-kw)
             _ (when-not rpc-info
                 (throw (ex-info
                         (str "No RPC with name `" rpc-name-kw "` is registered."
                              " Either this is a typo or you need to add `"
-                             rpc-name-kw "` to the :rpcs map when creating the "
-                             "Vivo client.")
-                        {:known-rpcs (keys rpc-name-kw->info)
+                             rpc-name-kw "` to the `:rpcs map "
+                             "when creating the Vivo client.")
+                        {:known-rpcs (keys rpcs)
                          :given-rpc rpc-name-kw})))
             {:keys [arg-schema ret-schema]} rpc-info
             arg {:rpc-name-kw-ns (namespace rpc-name-kw)
@@ -638,7 +638,7 @@
                 initial-local-state
                 log-error
                 log-info
-                rpc-name-kw->info
+                rpcs
                 state-cache-num-keys
                 sys-state-cache-num-keys
                 sys-state-source
@@ -663,8 +663,8 @@
         state-cache (sr/stockroom state-cache-num-keys)
         sys-state-cache (sr/stockroom sys-state-cache-num-keys)
         sub-map->op-cache (sr/stockroom 500)
-        _ (when rpc-name-kw->info
-            (u/check-rpc-name-kw->info rpc-name-kw->info))
+        _ (when rpcs
+            (u/check-rpcs rpcs))
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
                          (make-capsule-client
@@ -672,7 +672,7 @@
                           log-error log-info *cur-db-id *conn-initialized?
                           set-subject-id!))
         vc (->VivoClient capsule-client sys-state-schema sys-state-source
-                         log-info log-error rpc-name-kw->info state-cache
+                         log-info log-error rpcs state-cache
                          sys-state-cache sub-map->op-cache
                          path->schema-cache updates-ch updates-pub
                          set-subject-id! *local-state *cur-db-id

@@ -20,10 +20,8 @@
   [:users (l/map-schema user-schema)]
   [:user-id-to-msgs (l/map-schema msgs-schema)])
 
-(def rpc-name-kw->info
+(def rpcs
   {:inc {:arg-schema l/int-schema
-         :ret-schema l/int-schema
-         :handler inc}
+         :ret-schema l/int-schema}
    :authed/inc {:arg-schema l/int-schema
-                :ret-schema l/int-schema
-                :handler inc}})
+                :ret-schema l/int-schema}})
