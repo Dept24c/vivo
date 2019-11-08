@@ -618,7 +618,8 @@
   (<rpc [this msg-arg metadata]
     (au/go
       (let [{:keys [conn-id]} metadata
-            {:keys [subject-id]} (@*conn-id->info conn-id)
+            {:keys [subject-id branch]} (@*conn-id->info conn-id)
+            db-id (au/<? (<get-db-id this branch))
             {:keys [rpc-name-kw-ns rpc-name-kw-name arg]} msg-arg
             rpc-name-kw (keyword rpc-name-kw-ns rpc-name-kw-name)
             rpc-info (rpcs rpc-name-kw)
@@ -652,7 +653,9 @@
                             ret))]
         (if-not authorized?
           :vivo/unauthorized
-          (let [ret* (handler this subject-id rpc-arg)
+          (let [rpc-metadata (assoc (u/sym-map conn-id subject-id branch db-id)
+                                    :server this)
+                ret* (handler rpc-arg rpc-metadata)
                 ret (if (au/channel? ret*)
                       (au/<? ret*)
                       ret*)]

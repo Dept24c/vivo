@@ -50,9 +50,9 @@
                  :state-schema ss/state-schema
                  :tx-fns tx-fns}
          server (vivo/vivo-server config)]
-     (vivo/set-rpc-handler! server :inc (fn [server subject-id arg]
+     (vivo/set-rpc-handler! server :inc (fn [arg metadata]
                                           (inc arg)))
-     (vivo/set-rpc-handler! server :authed/inc (fn [server subject-id arg]
+     (vivo/set-rpc-handler! server :authed/inc (fn [arg metadata]
                                                  (inc arg)))
      (alter-var-root
       #'stop-server
