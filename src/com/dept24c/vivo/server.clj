@@ -654,7 +654,7 @@
         (if-not authorized?
           :vivo/unauthorized
           (let [rpc-metadata (assoc (u/sym-map conn-id subject-id branch db-id)
-                                    :server this)
+                                    :vivo-server this)
                 ret* (handler rpc-arg rpc-metadata)
                 ret (if (au/channel? ret*)
                       (au/<? ret*)
