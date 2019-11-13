@@ -144,7 +144,7 @@
 
 (deftest test-empty-sequence-join
   (au/test-async
-   1000
+   3000
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
@@ -163,6 +163,69 @@
                                            {:path [:sys :users]
                                             :op :set
                                             :arg users}]))
+           (vivo/subscribe! vc sub-map nil update-fn "test")
+           (is (= expected (au/<? ch))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
+(deftest test-explicit-seq-in-path
+  (au/test-async
+   3000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [ch (ca/chan 1)
+               users {"123" {:name "Alice" :nickname "A"}
+                      "456" {:name "Bob" :nickname "Bobby"}
+                      "789" {:name "Candace" :nickname "Candy"}}
+               sub-map '{core-user-names [:sys :users ["123" "789"] :name]}
+               update-fn #(ca/put! ch %)
+               expected {'core-user-names ["Alice" "Candace"]}]
+           (au/<? (vivo/<set-state! vc [:sys :users] users))
+           (vivo/subscribe! vc sub-map nil update-fn "test")
+           (is (= expected (au/<? ch))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
+(deftest test-nil-return
+  (au/test-async
+   3000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [ch (ca/chan 1)
+               users {"123" {:name "Alice" :nickname "A"}
+                      "456" {:name "Bob" :nickname "Bobby"}
+                      "789" {:name "Candace" :nickname "Candy"}}
+               sub-map '{user-name [:sys :users "999" :name]}
+               update-fn #(ca/put! ch %)
+               expected {'user-name nil}]
+           (au/<? (vivo/<set-state! vc [:sys :users] users))
+           (vivo/subscribe! vc sub-map nil update-fn "test")
+           (is (= expected (au/<? ch))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
+(deftest test-seq-w-nil-return
+  (au/test-async
+   3000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [ch (ca/chan 1)
+               users {"123" {:name "Alice" :nickname "A"}
+                      "456" {:name "Bob" :nickname "Bobby"}
+                      "789" {:name "Candace" :nickname "Candy"}}
+               sub-map '{core-users [:sys :users ["999"]]}
+               update-fn #(ca/put! ch %)
+               expected '{core-users [nil]}]
+           (au/<? (vivo/<set-state! vc [:sys :users] users))
            (vivo/subscribe! vc sub-map nil update-fn "test")
            (is (= expected (au/<? ch))))
          (catch #?(:clj Exception :cljs js/Error) e

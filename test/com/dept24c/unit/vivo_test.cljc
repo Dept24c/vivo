@@ -567,3 +567,60 @@
                        :value "hi"}]
         sub-paths [[:local :page]]]
     (is (= false (u/update-sub? update-infos sub-paths)))))
+
+(deftest test-explicit-seq-in-path
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{my-titles [:local :books ["123" "789"] :title]}
+             update-fn #(ca/put! ch %)
+             expected {'my-titles ["Treasure Island" "Dr Jekyll and Mr Hyde"]}]
+         (au/<? (vivo/<set-state! vc [:local :books] books))
+         (vivo/subscribe! vc sub-map nil update-fn "test")
+         (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-nil-return
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{title-999 [:local :books "999" :title]}
+             update-fn #(ca/put! ch %)
+             expected {'title-999 nil}]
+         (au/<? (vivo/<set-state! vc [:local :books] books))
+         (vivo/subscribe! vc sub-map nil update-fn "test")
+         (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-seq-w-nil-return
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{my-titles [:local :books ["999"] :title]}
+             update-fn #(ca/put! ch %)
+             expected {'my-titles [nil]}]
+         (au/<? (vivo/<set-state! vc [:local :books] books))
+         (vivo/subscribe! vc sub-map nil update-fn "test")
+         (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))

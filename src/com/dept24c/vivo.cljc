@@ -128,8 +128,10 @@
 (defn <rpc
   "Calls a remote procedure on the server. Returns a channel which will yield
    the result."
-  [vc rpc-name-kw arg timeout-ms]
-  (u/<rpc vc rpc-name-kw arg timeout-ms))
+  ([vc rpc-name-kw arg]
+   (<rpc vc rpc-name-kw arg 30000))
+  ([vc rpc-name-kw arg timeout-ms]
+   (u/<rpc vc rpc-name-kw arg timeout-ms)))
 
 (defn shutdown!
   "Shutdown the vivo client and its connection to the server.

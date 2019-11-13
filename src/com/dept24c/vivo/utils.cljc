@@ -427,20 +427,11 @@
       (throw (ex-info (str "Bad key `" sym "` in subscription map. Keys must "
                            "be symbols.")
                       {:bad-key sym})))
-    (cond
-      (sequential? path)
-      (let [[head & tail] path]
-        (when (and (#{:subscriber :component} head)
-                   (not (seq tail)))
-          (throw (ex-info
-                  (str "Missing " (name head) " id in " head " path. ")
-                  (sym-map path)))))
-
-      (not (#{:vivo/subject-id :vivo/component-id :vivo/subscriber-id} path))
+    (when (and (not (sequential? path))
+               (not (#{:vivo/subject-id} path)))
       (throw (ex-info
-              (str "Bad path. Paths must be either a sequence or "
-                   "one of the special :vivo keywords. (:vivo/subject-id, "
-                   ":vivo/subscriber-id, or :vivo/component-id)")
+              (str "Bad path. Paths must be either a sequence or one of the "
+                   " special :vivo keywords (:vivo/subject-id, etc.)")
               (sym-map sym path sub-map))))))
 
 (defn local-or-vivo-only? [sub-map]
@@ -503,7 +494,7 @@
     (or (sr/get path->schema-cache path)
         (let [sch (l/schema-at-path state-schema sch-path)
               sch* (if seq-path?
-                     (l/array-schema sch)
+                     (l/array-schema (l/maybe sch))
                      sch)]
           (sr/put! path->schema-cache path sch*)
           sch*))))
@@ -562,8 +553,8 @@
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
         disp-head (or head "nil")]
-    (throw (ex-info (str "Paths must begin with :local, :sys, :subscriber, or "
-                         ":component. Got `" disp-head "` in path `" path "`.")
+    (throw (ex-info (str "Paths must begin with :local or :sys. Got `"
+                         disp-head "` in path `" path "`.")
                     (sym-map path head)))))
 
 (defn throw-bad-path-key [path k]
@@ -585,7 +576,7 @@
     path
     (reduce (fn [acc k]
               (if-not (or (nil? k) (keyword? k) (int? k)
-                          (string? k) (symbol? k))
+                          (string? k) (symbol? k) (sequential? k))
                 (throw-bad-path-key path k)
                 (conj acc k)))
             [] path)))
@@ -600,13 +591,11 @@
                               (str "All keys in sub-map must be symbols. Got `"
                                    sym "`.")
                               (sym-map sym sub-map))))
-                    (if (#{:vivo/subject-id
-                           :vivo/subscriber-id
-                           :vivo/component-id} path)
+                    (if (#{:vivo/subject-id} path)
                       (update acc :sym->path assoc sym path)
                       (let [[head & tail] (check-path path sub-map)
                             deps (filter symbol? path)]
-                        (when-not (#{:subscriber :component :local :sys} head)
+                        (when-not (#{:local :sys} head)
                           (throw-bad-path-root path))
                         (cond-> (update acc :sym->path assoc sym path)
                           (seq deps) (update :g #(reduce
