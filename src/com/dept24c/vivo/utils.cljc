@@ -47,7 +47,6 @@
     [this identifier secret subject-id])
   (<deserialize-value [this path ret])
   (<get-in-sys-state [this db-id path])
-  (<handle-updates [this updates cb])
   (<make-state-info
     [this sub-map-or-ordered-pairs subscriber-name resolution-map]
     [this sub-map-or-ordered-pairs subscriber-name resolution-map
@@ -58,6 +57,7 @@
   (get-cached-state [this sub-map resolution-map])
   (get-local-state [this sub-map resolution-map component-name])
   (handle-sys-state-changed [this arg metadata])
+  (handle-updates [this updates cb])
   (log-in! [this identifier secret cb])
   (log-out! [this])
   (<rpc [this rpc-name-kw arg timeout-ms])

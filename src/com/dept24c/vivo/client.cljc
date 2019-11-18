@@ -86,11 +86,19 @@
            :update-infos []}
           cmds))
 
-(defn xf-res-map [res-map]
-  (reduce-kv (fn [acc k v]
-               (assoc acc k (when-not (fn? v)
-                              v)))
-             {} res-map))
+(defn strip-fns [v]
+  (cond
+    (fn? v) nil
+    (map? v) (reduce-kv (fn [acc k v*]
+                          (assoc acc k (strip-fns v*)))
+                        {} v)
+    (sequential? v) (reduce (fn [acc v*]
+                              (conj acc (strip-fns v*)))
+                            [] v)
+    (set? v) (reduce (fn [acc v*]
+                       (conj acc (strip-fns v*)))
+                     #{} v)
+    :else v))
 
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
                        log-info log-error rpcs state-cache
@@ -131,7 +139,7 @@
     (boolean @*ssr-info))
 
   (ssr-get-state! [this sub-map resolution-map]
-    (or (get (:resolved @*ssr-info) [sub-map (xf-res-map resolution-map)])
+    (or (get (:resolved @*ssr-info) [sub-map (strip-fns resolution-map)])
         (do
           (swap! *ssr-info update :needed conj [sub-map resolution-map])
           nil)))
@@ -159,7 +167,7 @@
                        (react/render-to-static-markup el)
                        (react/render-to-string el))
                    {:keys [needed]} @*ssr-info]
-               (if-not (seq needed)
+               (if (empty? needed)
                  s
                  (do
                    (doseq [[sub-map resolution-map] needed]
@@ -169,14 +177,14 @@
                                                    resolution-map))]
                        (swap! *ssr-info update
                               :resolved assoc
-                              [sub-map (xf-res-map resolution-map)] state)))
+                              [sub-map (strip-fns resolution-map)] state)))
                    (swap! *ssr-info assoc :needed #{})
                    (recur)))))
            (finally
              (reset! *ssr-info nil))))))
 
   (get-cached-state [this sub-map resolution-map]
-    (sr/get state-cache [sub-map (xf-res-map resolution-map)]))
+    (sr/get state-cache [sub-map (strip-fns resolution-map)]))
 
   (get-local-state [this sub-map resolution-map component-name]
     (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
@@ -331,7 +339,7 @@
             (let [{cur-state :state
                    cur-paths :paths} (au/<? (<make-si))
                   *last-state (atom cur-state)]
-              (sr/put! state-cache [sub-map (xf-res-map resolution-map)]
+              (sr/put! state-cache [sub-map (strip-fns resolution-map)]
                        cur-state)
               (when (not= initial-state cur-state)
                 (update-fn* cur-state))
@@ -375,7 +383,7 @@
                   (ca/<! (ca/timeout 200))
                   (recur (dec tries-remaining)))))))
 
-  (<handle-updates [this update-info cb*]
+  (handle-updates [this update-info cb*]
     (ca/go
       (try
         (when (au/<? (u/<wait-for-conn-init this))
@@ -419,8 +427,9 @@
                            (u/sym-map max-commit-attempts
                                       sys-cmds local-cmds))))))))))
         (catch #?(:cljs js/Error :clj Throwable) e
-          (when cb*
-            (cb* e))))))
+          (if cb*
+            (cb* e)
+            (log-error (u/ex-msg-and-stacktrace e)))))))
 
   (update-state! [this update-cmds cb]
     (when-not (sequential? update-cmds)
@@ -428,7 +437,7 @@
         (cb (ex-info "The update-cmds parameter must be a sequence."
                      (u/sym-map update-cmds)))))
     (let [update-info (make-update-info update-cmds)]
-      (u/<handle-updates this update-info cb))
+      (u/handle-updates this update-info cb))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -444,12 +453,14 @@
                  sys-cmds))
             ;; Use i->v map to preserve original command order
             sucs-map (au/<? (ca/reduce (fn [acc v]
-                                         (when (instance? #?(:cljs js/Error
-                                                             :clj Throwable) v)
-                                           (throw v))
-                                         (let [[i suc] v]
-                                           (assoc acc i suc)))
+                                         (if (instance? #?(:cljs js/Error
+                                                           :clj Throwable) v)
+                                           (reduced v)
+                                           (let [[i suc] v]
+                                             (assoc acc i suc))))
                                        {} ch))
+            _ (when (instance? #?(:cljs js/Error :clj Throwable) sucs-map)
+                (throw sucs-map))
             sucs (map sucs-map (range (count sys-cmds)))]
         (au/<? (cc/<send-msg capsule-client :update-state
                              sucs update-state-timeout-ms)))))
