@@ -335,36 +335,36 @@
       (ca/sub updates-pub :all update-sub-ch)
       (ca/go
         (try
-          (when (au/<? (u/<wait-for-conn-init this))
-            (let [{cur-state :state
-                   cur-paths :paths} (au/<? (<make-si))
-                  *last-state (atom cur-state)]
-              (sr/put! state-cache [sub-map (strip-fns resolution-map)]
-                       cur-state)
-              (when (not= initial-state cur-state)
-                (update-fn* cur-state))
-              (loop [paths-to-watch cur-paths]
-                (let [[v ch] (au/alts? [update-sub-ch unsubscribe-ch])]
-                  (when-not @*stopped?
-                    (if (= unsubscribe-ch ch)
-                      (ca/unsub updates-pub :all update-sub-ch)
-                      (let [{:keys [update-infos
-                                    notify-all? db-id local-state]
-                             :or {db-id @*cur-db-id
-                                  local-state @*local-state}} v
-                            new-paths (if-not (or notify-all?
-                                                  (u/update-sub?
-                                                   update-infos
-                                                   paths-to-watch))
-                                        paths-to-watch
-                                        (let [si (au/<? (<make-si
-                                                         local-state db-id))
-                                              {:keys [state paths]} si]
-                                          (when (not= @*last-state state)
-                                            (reset! *last-state state)
-                                            (update-fn* state))
-                                          paths))]
-                        (recur new-paths))))))))
+          (au/<? (u/<wait-for-conn-init this))
+          (let [{cur-state :state
+                 cur-paths :paths} (au/<? (<make-si))
+                *last-state (atom cur-state)]
+            (sr/put! state-cache [sub-map (strip-fns resolution-map)]
+                     cur-state)
+            (when (not= initial-state cur-state)
+              (update-fn* cur-state))
+            (loop [paths-to-watch cur-paths]
+              (let [[v ch] (au/alts? [update-sub-ch unsubscribe-ch])]
+                (when-not @*stopped?
+                  (if (= unsubscribe-ch ch)
+                    (ca/unsub updates-pub :all update-sub-ch)
+                    (let [{:keys [update-infos
+                                  notify-all? db-id local-state]
+                           :or {db-id @*cur-db-id
+                                local-state @*local-state}} v
+                          new-paths (if-not (or notify-all?
+                                                (u/update-sub?
+                                                 update-infos
+                                                 paths-to-watch))
+                                      paths-to-watch
+                                      (let [si (au/<? (<make-si
+                                                       local-state db-id))
+                                            {:keys [state paths]} si]
+                                        (when (not= @*last-state state)
+                                          (reset! *last-state state)
+                                          (update-fn* state))
+                                        paths))]
+                      (recur new-paths)))))))
           (catch #?(:cljs js/Error :clj Exception) e
             (log-error (str "Error in subscribe!\n"
                             (u/ex-msg-and-stacktrace e))))))
@@ -386,46 +386,46 @@
   (handle-updates [this update-info cb*]
     (ca/go
       (try
-        (when (au/<? (u/<wait-for-conn-init this))
-          (let [{:keys [sys-cmds local-cmds]} update-info
-                cb (or cb* (constantly nil))
-                sys-ret (when (seq sys-cmds)
-                          (when-let [ret (au/<? (u/<update-sys-state
-                                                 this sys-cmds))]
-                            (if (= :vivo/unauthorized ret)
-                              ret
-                              (let [{:keys [new-db-id
-                                            prev-db-id update-infos]} ret
-                                    local-db-id @*cur-db-id
-                                    notify-all? (not= prev-db-id local-db-id)]
-                                (when (or (nil? local-db-id)
-                                          (block-ids/earlier? local-db-id
-                                                              new-db-id))
-                                  (reset! *cur-db-id new-db-id))
-                                (u/sym-map notify-all? update-infos)))))]
-            (if (and (seq sys-cmds)
-                     (or (not sys-ret)
-                         (= :vivo/unauthorized sys-ret)))
-              (cb sys-ret) ;; Don't do local/sub updates if sys updates failed
-              (loop [num-attempts 1]
-                (let [cur-local-state @*local-state
-                      local-ret (eval-cmds cur-local-state local-cmds :local)
-                      local-state (:state local-ret)]
-                  (if (compare-and-set! *local-state cur-local-state
-                                        local-state)
-                    (let [update-infos (concat (:update-infos sys-ret)
-                                               (:update-infos local-ret))
-                          {:keys [notify-all?]} sys-ret]
-                      (ca/put! updates-ch (u/sym-map update-infos notify-all?
-                                                     local-state))
-                      (cb true))
-                    (if (< num-attempts max-commit-attempts)
-                      (recur (inc num-attempts))
-                      (cb (ex-info
-                           (str "Failed to commit updates after "
-                                num-attempts " attempts.")
-                           (u/sym-map max-commit-attempts
-                                      sys-cmds local-cmds))))))))))
+        (au/<? (u/<wait-for-conn-init this))
+        (let [{:keys [sys-cmds local-cmds]} update-info
+              cb (or cb* (constantly nil))
+              sys-ret (when (seq sys-cmds)
+                        (when-let [ret (au/<? (u/<update-sys-state
+                                               this sys-cmds))]
+                          (if (= :vivo/unauthorized ret)
+                            ret
+                            (let [{:keys [new-db-id
+                                          prev-db-id update-infos]} ret
+                                  local-db-id @*cur-db-id
+                                  notify-all? (not= prev-db-id local-db-id)]
+                              (when (or (nil? local-db-id)
+                                        (block-ids/earlier? local-db-id
+                                                            new-db-id))
+                                (reset! *cur-db-id new-db-id))
+                              (u/sym-map notify-all? update-infos)))))]
+          (if (and (seq sys-cmds)
+                   (or (not sys-ret)
+                       (= :vivo/unauthorized sys-ret)))
+            (cb sys-ret) ;; Don't do local/sub updates if sys updates failed
+            (loop [num-attempts 1]
+              (let [cur-local-state @*local-state
+                    local-ret (eval-cmds cur-local-state local-cmds :local)
+                    local-state (:state local-ret)]
+                (if (compare-and-set! *local-state cur-local-state
+                                      local-state)
+                  (let [update-infos (concat (:update-infos sys-ret)
+                                             (:update-infos local-ret))
+                        {:keys [notify-all?]} sys-ret]
+                    (ca/put! updates-ch (u/sym-map update-infos notify-all?
+                                                   local-state))
+                    (cb true))
+                  (if (< num-attempts max-commit-attempts)
+                    (recur (inc num-attempts))
+                    (cb (ex-info
+                         (str "Failed to commit updates after "
+                              num-attempts " attempts.")
+                         (u/sym-map max-commit-attempts
+                                    sys-cmds local-cmds)))))))))
         (catch #?(:cljs js/Error :clj Throwable) e
           (if cb*
             (cb* e)
@@ -527,6 +527,7 @@
         (throw (ex-info (str "rpc-name-kw must be a keyword. Got`" rpc-name-kw
                              "`.")
                         (u/sym-map rpc-name-kw arg))))
+      (au/<? (u/<wait-for-conn-init this))
       (let [rpc-info (get rpcs rpc-name-kw)
             _ (when-not rpc-info
                 (throw (ex-info

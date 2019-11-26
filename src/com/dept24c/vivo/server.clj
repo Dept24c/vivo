@@ -439,10 +439,9 @@
           all-branches))))
 
   (<get-db-id [this branch]
-    (au/go
-      (let [storage (get-storage this branch)
-            branch-reference (branch->reference branch)]
-        (au/<? (u/<get-data-id storage branch-reference)))))
+    (let [storage (get-storage this branch)
+          branch-reference (branch->reference branch)]
+      (u/<get-data-id storage branch-reference)))
 
   (<get-in [this db-id path]
     (au/go

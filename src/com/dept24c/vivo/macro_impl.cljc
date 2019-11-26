@@ -65,13 +65,17 @@
 (defn make-sub-body [parts component-name]
   (let [{:keys [sub-map arglist body]} parts
         sub-syms (keys sub-map)
-        cname (name component-name)]
+        cname (name component-name)
+        inner-component-name (symbol (str cname "-inner"))]
     `(let [resolution-map# (zipmap (next '~arglist)
                                    (next (vector ~@arglist)))
-           ~'*vivo-state* (com.dept24c.vivo.react/use-vivo-state
-                           ~'vc '~sub-map ~cname resolution-map#)
-           {:syms [~@sub-syms]} ~'*vivo-state*]
-       ~@body)))
+           vivo-state# (com.dept24c.vivo.react/use-vivo-state
+                        ~'vc '~sub-map ~cname resolution-map#)
+           {:syms [~@sub-syms]} vivo-state#]
+       (when vivo-state#
+         (com.dept24c.vivo.react/create-element
+          (fn ~inner-component-name [props#]
+            ~@body))))))
 
 (defn build-component
   ([component-name args]
