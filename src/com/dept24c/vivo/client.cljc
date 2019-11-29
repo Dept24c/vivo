@@ -372,7 +372,7 @@
 
   (<wait-for-conn-init [this]
     (au/go
-      (loop [tries-remaining 300]
+      (loop [tries-remaining 600]
         (when (zero? tries-remaining)
           (throw (ex-info "Timed out waiting for connection to initialize."
                           {:cause :init-timeout})))
@@ -380,7 +380,7 @@
           @*conn-initialized? true
           @*stopped? false
           :else (do
-                  (ca/<! (ca/timeout 200))
+                  (ca/<! (ca/timeout 100))
                   (recur (dec tries-remaining)))))))
 
   (handle-updates [this update-info cb*]
