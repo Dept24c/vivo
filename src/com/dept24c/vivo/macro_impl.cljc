@@ -4,7 +4,10 @@
    [clojure.set :as set]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au])
-  #?(:clj
+  #?(:cljs
+     (:require-macros
+      [com.dept24c.vivo.macro-impl :refer [get-locals-map]])
+     :clj
      (:import
       (clojure.lang ExceptionInfo))))
 
@@ -25,16 +28,7 @@
                      " (the vivo client). Got: `" first-arg "`.")
                 (u/sym-map component-name first-arg arglist))))))
 
-(defn check-constructor-args [subscriber-name args num-args-defined]
-  (let [num-args-passed (count args)]
-    (when-not (= num-args-defined num-args-passed)
-      (throw
-       (ex-info (str "Wrong number of arguments passed to `" subscriber-name
-                     "`. Should have gotten " num-args-defined " arg(s), got "
-                     num-args-passed".")
-                (u/sym-map subscriber-name args num-args-passed
-                           num-args-defined))))))
-
+;; TODO: Improve error msgs for incorrect args (wrong num args, etc.)
 (defn parse-def-component-args [component-name args]
   (let [parts (if (string? (nth args 0))
                 (if (map? (nth args 2))
@@ -62,15 +56,17 @@
                 (u/sym-map repeated-syms sub-map arglist component-name))))
     parts))
 
+(defmacro get-locals-map []
+  (let [ks (keys (:locals &env))]
+    `(zipmap (quote ~(vec ks)) ~(vec ks))))
+
 (defn make-sub-body [parts component-name]
   (let [{:keys [sub-map arglist body]} parts
         sub-syms (keys sub-map)
         cname (name component-name)
         inner-component-name (symbol (str cname "-inner"))]
-    `(let [resolution-map# (zipmap (next '~arglist)
-                                   (next (vector ~@arglist)))
-           vivo-state# (com.dept24c.vivo.react/use-vivo-state
-                        ~'vc '~sub-map ~cname resolution-map#)
+    `(let [vivo-state# (com.dept24c.vivo.react/use-vivo-state
+                        ~'vc '~sub-map ~cname ~'*vivo-locals*)
            {:syms [~@sub-syms]} vivo-state#]
        (when vivo-state#
          (com.dept24c.vivo.react/create-element
@@ -92,7 +88,7 @@
                           body)]
      `(~@first-line
        [~@arglist]
-       (check-constructor-args ~component-name '~arglist ~(count arglist))
-       (com.dept24c.vivo.react/create-element
-        (fn ~component-name [props#]
-          ~@component-body))))))
+       (let [~'*vivo-locals* (get-locals-map)]
+         (com.dept24c.vivo.react/create-element
+          (fn ~component-name [props#]
+            ~@component-body)))))))

@@ -63,12 +63,6 @@
        (macro-impl/parse-def-component-args
         'foo ['[vc a] '{a [:local :a]}]))))
 
-(deftest test-check-constructor-args
-  (is (thrown-with-msg?
-       #?(:clj ExceptionInfo :cljs js/Error)
-       #"Wrong number of arguments .+ Should have gotten 3 .+ got 1"
-       (macro-impl/check-constructor-args "foo" [1] 3))))
-
 (deftest test-edn<->str
   (are [edn] (= edn (u/str->edn (u/edn->str edn)))
     "string"
