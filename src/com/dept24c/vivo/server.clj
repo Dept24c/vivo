@@ -44,11 +44,12 @@
   (<log-in [this arg metadata])
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
-  (<modify-db [this <update-fn msg metadata])
+  (<modify-db [this <update-fn msg subject-id branch conn-id])
   (<rpc [this arg metadata])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
   (<update-state [this arg metadata])
+  (<update-db [this update-cmds msg subject-id branch])
   (<scmds->cmds [this scmds conn-id])
   (get-storage [this branch])
   (set-rpc-handler! [this rpc-name-kw handler])
@@ -291,7 +292,6 @@
                 (au/<? (ca/timeout (rand-int 100)))
                 (recur (dec num-tries-left))))))))))
 
-
 (defn start-modify-db-loop [^ConcurrentLinkedQueue q log-error]
   (ca/go
     (while true
@@ -328,11 +328,9 @@
                        *branch->info
                        *rpc->handler]
   IVivoServer
-  (<modify-db [this <update-fn msg metadata]
+  (<modify-db [this <update-fn msg subject-id branch conn-id]
     (au/go
-      (let [{:keys [conn-id]} metadata
-            {:keys [subject-id branch]} (@*conn-id->info conn-id)
-            {:keys [conn-ids]} (@*branch->info branch)
+      (let [{:keys [conn-ids]} (@*branch->info branch)
             branch-reference (branch->reference branch)
             storage (get-storage this branch)
             modify-ch (ca/chan)
@@ -349,21 +347,30 @@
     (au/go
       (let [{:keys [identifier secret subject-id]
              :or {subject-id (.toString ^UUID (UUID/randomUUID))}} arg
+            {:keys [conn-id]} metadata
+            {:keys [branch]} (@*conn-id->info conn-id)
             hashed-secret (bcrypt/encrypt secret work-factor)]
         (au/<? (<modify-db this (partial <add-subject-update-fn subject-id
                                          identifier hashed-secret)
-                           (str "Add subject " subject-id) metadata))
+                           (str "Add subject " subject-id)
+                           subject-id branch conn-id))
         subject-id)))
 
+
   (<add-subject-identifier [this identifier metadata]
-    (<modify-db this (partial <add-subject-identifier-update-fn identifier)
-                (str "Add subject indentifier `" identifier) metadata)
+    (let [{:keys [conn-id]} metadata
+          {:keys [branch subject-id]} (@*conn-id->info conn-id)]
+      (<modify-db this (partial <add-subject-identifier-update-fn identifier)
+                  (str "Add subject indentifier `" identifier)
+                  subject-id branch conn-id))
     true)
 
   (<change-secret [this new-secret metadata]
-    (let [hashed-secret (bcrypt/encrypt new-secret work-factor)]
+    (let [hashed-secret (bcrypt/encrypt new-secret work-factor)
+          {:keys [conn-id]} metadata
+          {:keys [branch subject-id]} (@*conn-id->info conn-id)]
       (<modify-db this (partial <change-secret-update-fn hashed-secret)
-                  "Change secret" metadata)))
+                  "Change secret" subject-id branch conn-id)))
 
   (<create-branch [this arg metadata]
     (au/go
@@ -553,7 +560,7 @@
                      (conj (or conn-ids #{}) conn-id)))
             (au/<? (<modify-db this (partial <log-in-update-fn
                                              token token-info)
-                               "Log in" metadata))
+                               "Log in" subject-id branch conn-id))
             (u/sym-map subject-id token))))))
 
   (<log-in-w-token [this token metadata]
@@ -575,7 +582,8 @@
           (if (>= now-mins expiration-time-mins)
             (do
               (au/<? (<modify-db this (partial <delete-token-update-fn token)
-                                 "Delete expired token" metadata))
+                                 "Delete expired token"
+                                 subject-id branch conn-id))
               nil)
             (do
               (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
@@ -587,9 +595,10 @@
   (<log-out [this arg metadata]
     (au/go
       (let [{:keys [conn-id]} metadata
-            {:keys [subject-id]} (@*conn-id->info conn-id)
+            {:keys [subject-id branch]} (@*conn-id->info conn-id)
             conn-ids (@*subject-id->conn-ids subject-id)]
-        (au/<? (<modify-db this <log-out-update-fn "Log out"  metadata))
+        (au/<? (<modify-db this <log-out-update-fn "Log out"
+                           subject-id branch conn-id))
         (doseq [conn-id conn-ids]
           (ep/close-conn sm-ep conn-id)))))
 
@@ -693,7 +702,7 @@
   (<update-state [this arg metadata]
     (au/go
       (let [{:keys [conn-id]} metadata
-            {:keys [subject-id]} (@*conn-id->info conn-id)
+            {:keys [subject-id branch]} (@*conn-id->info conn-id)
             update-cmds (au/<? (<scmds->cmds this arg conn-id))
             all-authed? (loop [i 0] ; Use loop to stay in same go block
                           (let [{:keys [path arg]} (nth update-cmds i)
@@ -711,7 +720,12 @@
           :vivo/unauthorized
           (au/<? (<modify-db this (partial <update-state-update-fn
                                            state-schema update-cmds tx-fns)
-                             "Update state" metadata))))))
+                             "Update state" subject-id branch conn-id))))))
+
+  (<update-db [this update-cmds msg subject-id branch]
+    (<modify-db this (partial <update-state-update-fn
+                              state-schema update-cmds tx-fns)
+                "Update db" subject-id branch nil))
 
   (<get-schema-pcf [this fp metadata]
     (au/go
@@ -727,9 +741,10 @@
       true))
 
   (get-storage [this branch]
-    (if (str/starts-with? branch "-")
-      temp-storage
-      perm-storage))
+    (when branch
+      (if (str/starts-with? branch "-")
+        temp-storage
+        perm-storage)))
 
   (set-rpc-handler! [this rpc-name-kw handler]
     (swap! *rpc->handler assoc rpc-name-kw handler))

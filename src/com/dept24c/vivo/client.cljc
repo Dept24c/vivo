@@ -115,8 +115,8 @@
                       {:given-fp fp})))
     (au/go
       (or (@*fp->schema fp)
-          (let [pcf (au/<? (cc/<send-msg capsule-client
-                                         :get-schema-pcf fp))
+          (let [_ (au/<? (u/<wait-for-conn-init this))
+                pcf (au/<? (cc/<send-msg capsule-client :get-schema-pcf fp))
                 schema (l/json->schema pcf)]
             (swap! *fp->schema assoc fp schema)
             schema))))
@@ -130,6 +130,7 @@
       (let [fp (l/fingerprint64 schema)]
         (when-not (@*fp->schema fp)
           (swap! *fp->schema assoc fp schema)
+          (au/<? (u/<wait-for-conn-init this))
           (au/<? (cc/<send-msg capsule-client :store-schema-pcf
                                (l/pcf schema))))
         fp)))
@@ -226,6 +227,7 @@
       (try
         (sr/flush! state-cache)
         (sr/flush! sys-state-cache)
+        (au/<? (u/<wait-for-conn-init this))
         (let [arg (u/sym-map identifier secret)
               {:keys [subject-id token]} (au/<? (cc/<send-msg capsule-client
                                                               :log-in arg))
@@ -518,8 +520,10 @@
     (u/<add-subject! this identifier secret) nil)
 
   (<add-subject! [this identifier secret subject-id]
-    (cc/<send-msg capsule-client :add-subject
-                  (u/sym-map identifier secret subject-id)))
+    (au/go
+      (au/<? (u/<wait-for-conn-init this))
+      (au/<? (cc/<send-msg capsule-client :add-subject
+                           (u/sym-map identifier secret subject-id)))))
 
   (<rpc [this rpc-name-kw arg timeout-ms]
     (au/go
