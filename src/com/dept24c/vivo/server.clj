@@ -605,14 +605,30 @@
     (au/go
       (let [{:keys [conn-id]} metadata
             perm-branch (:branch/name source)
-            branch (or perm-branch
-                       (let [branch* (str "-temp-branch-" (rand-int 1e9))]
+            branch (if  perm-branch
+                     (let [all-branches (set (au/<? (<get-all-branches this)))]
+                       (when-not (all-branches perm-branch)
                          (au/<? (<create-branch
-                                 this {:branch branch*
-                                       :db-id (:temp-branch/db-id source)
-                                       :is-temp true}
-                                 metadata))
-                         branch*))]
+                                 this {:branch perm-branch
+                                       :db-id nil
+                                       :is-temp false}
+                                 metadata)))
+                       perm-branch)
+                     (let [branch* (str "-temp-branch-" (rand-int 1e9))]
+                       (when-not (contains? source :temp-branch/db-id)
+                         (throw
+                          (ex-info
+                           (str ":sys-state-source must include either "
+                                ":branch/name or :temp-branch/db-id. Got: "
+                                source)
+                           source)))
+                       (au/<? (<create-branch
+                               this {:branch branch*
+                                     :db-id (:temp-branch/db-id source)
+                                     :is-temp true}
+                               metadata))
+                       branch*))]
+        (when-not (all-branches))
         (swap! *conn-id->info update conn-id assoc
                :branch branch :temp-branch? (not perm-branch))
         (swap! *branch->info update branch
