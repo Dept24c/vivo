@@ -605,7 +605,7 @@
     (au/go
       (let [{:keys [conn-id]} metadata
             perm-branch (:branch/name source)
-            branch (if  perm-branch
+            branch (if perm-branch
                      (let [all-branches (set (au/<? (<get-all-branches this)))]
                        (when-not (all-branches perm-branch)
                          (au/<? (<create-branch
@@ -628,7 +628,6 @@
                                      :is-temp true}
                                metadata))
                        branch*))]
-        (when-not (all-branches))
         (swap! *conn-id->info update conn-id assoc
                :branch branch :temp-branch? (not perm-branch))
         (swap! *branch->info update branch
