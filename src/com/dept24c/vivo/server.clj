@@ -309,8 +309,7 @@
           (log-error "Unexpected error in txn-loop: %s"
                      (u/ex-msg-and-stacktrace e)))))))
 
-(defrecord VivoServer [admin-secret
-                       authorization-fn
+(defrecord VivoServer [authorization-fn
                        capsule-server
                        log-error
                        log-info
@@ -832,7 +831,6 @@
   (let [config* (merge default-config config)
         _ (check-config config*)
         {:keys [additional-endpoints
-                admin-secret
                 authenticate-admin-client
                 authorization-fn
                 disable-ddb?
@@ -872,8 +870,7 @@
         cs-opts (u/sym-map handle-http http-timeout-ms)
         capsule-server (cs/server (conj additional-endpoints vc-ep admin-ep)
                                   port cs-opts)
-        vivo-server (->VivoServer admin-secret
-                                  authorization-fn
+        vivo-server (->VivoServer authorization-fn
                                   capsule-server
                                   log-error
                                   log-info
