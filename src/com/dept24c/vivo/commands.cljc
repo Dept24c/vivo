@@ -41,7 +41,7 @@
                (let [[k* val*] (cond
                                  (or (keyword? k) (nat-int? k) (string? k))
                                  [k (when val
-                                      (val k))]
+                                      (get val k))]
 
                                  (and (int? k) (neg? k))
                                  (normalize-neg-k k val)
