@@ -29,6 +29,7 @@
 
 (defprotocol IVivoServer
   (<add-subject [this arg metadata])
+  (<add-subject* [this identifier secret subject-id branch conn-id])
   (<add-subject-identifier [this arg metadata])
   (<change-secret [this arg metadata])
   (<create-branch [this arg metadata])
@@ -342,18 +343,22 @@
           (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
         change-info)))
 
-  (<add-subject [this arg metadata]
+  (<add-subject* [this identifier secret subject-id branch conn-id]
     (au/go
-      (let [{:keys [identifier secret subject-id]
-             :or {subject-id (.toString ^UUID (UUID/randomUUID))}} arg
-            {:keys [conn-id]} metadata
-            {:keys [branch]} (@*conn-id->info conn-id)
-            hashed-secret (bcrypt/encrypt secret work-factor)]
+      (let [hashed-secret (bcrypt/encrypt secret work-factor)]
         (au/<? (<modify-db this (partial <add-subject-update-fn subject-id
                                          identifier hashed-secret)
                            (str "Add subject " subject-id)
                            subject-id branch conn-id))
         subject-id)))
+
+  (<add-subject [this arg metadata]
+    (let [{:keys [identifier secret subject-id]
+           :or {subject-id (.toString ^UUID (UUID/randomUUID))}} arg
+          {:keys [conn-id]} metadata
+          {:keys [branch]} (@*conn-id->info conn-id)
+          hashed-secret (bcrypt/encrypt secret work-factor)]
+      (<add-subject* this identifier secret subject-id branch conn-id)))
 
 
   (<add-subject-identifier [this identifier metadata]
@@ -607,12 +612,14 @@
             perm-branch (:branch/name source)
             branch (if perm-branch
                      (let [all-branches (set (au/<? (<get-all-branches this)))]
-                       (when-not (all-branches perm-branch)
-                         (au/<? (<create-branch
-                                 this {:branch perm-branch
-                                       :db-id nil
-                                       :is-temp false}
-                                 metadata)))
+                       ;; TODO: Fix <get-all-branches to use a scan,
+                       ;;       then re-enable this
+                       #_(when-not (all-branches perm-branch)
+                           (au/<? (<create-branch
+                                   this {:branch perm-branch
+                                         :db-id nil
+                                         :is-temp false}
+                                   metadata)))
                        perm-branch)
                      (let [branch* (str "-temp-branch-" (rand-int 1e9))]
                        (when-not (contains? source :temp-branch/db-id)
