@@ -1,16 +1,18 @@
 (ns com.dept24c.vivo.bristlecone.block-ids
   (:require
    [clojure.string :as string]
-   #?(:cljs [goog.math :as gm])))
+   #?(:cljs [goog.math :as gm]))
+  #?(:cljs
+     (:import
+      (goog.math Long))))
 
 #?(:cljs (def class type))
-#?(:cljs (def Long gm/Long))
 
 (def max-int 2147483647)
 (def min-int -2147483648)
-(def one #?(:clj 1 :cljs (gm/Long.getOne)))
-(def sixty-two #?(:clj 62 :cljs (gm/Long.fromInt 62)))
-(def zero #?(:clj 0 :cljs  (gm/Long.fromInt 0)))
+(def one #?(:clj 1 :cljs (Long.getOne)))
+(def sixty-two #?(:clj 62 :cljs (Long.fromInt 62)))
+(def zero #?(:clj 0 :cljs  (Long.fromInt 0)))
 
 (defn long? [x]
   (if x
@@ -62,8 +64,8 @@
     #?(:clj (if (and (<= ^Long l max-int) (>= ^Long l min-int))
               (.intValue ^Long l)
               (throw-long->int-err l))
-       :cljs (if (and (.lessThanOrEqual ^Long l (gm/Long.fromInt max-int))
-                      (.greaterThanOrEqual ^Long l (gm/Long.fromInt min-int)))
+       :cljs (if (and (.lessThanOrEqual ^Long l (Long.fromInt max-int))
+                      (.greaterThanOrEqual ^Long l (Long.fromInt min-int)))
                (.toInt ^Long l)
                (throw-long->int-err ^Long l)))))
 
@@ -80,7 +82,7 @@
 
 (defn str->long [s]
   #?(:clj (Long/parseLong s)
-     :cljs (gm/Long.fromString s)))
+     :cljs (Long.fromString s)))
 
 (defn long->str [l]
   #?(:clj (str l)

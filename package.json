@@ -4,8 +4,6 @@
     },
     "devDependencies": {
         "isomorphic-ws": "4.0.1",
-        "react": "16.9.0",
-        "react-dom": "16.9.0",
         "ws": "7.1.0"
     }
 }

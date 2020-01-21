@@ -5,13 +5,14 @@
    #?(:cljs [goog.math :as gm]))
   #?(:clj
      (:import
-      (clojure.lang ExceptionInfo))))
-
-#?(:cljs (def Long gm/Long))
+      (clojure.lang ExceptionInfo)))
+  #?(:cljs
+     (:import
+      (goog.math Long))))
 
 (def max-long
   #?(:clj Long/MAX_VALUE
-     :cljs (gm/Long.getMaxValue)))
+     :cljs (Long.getMaxValue)))
 
 (deftest test-ulong->b62->long
   (let [tcases [[0 "A"]

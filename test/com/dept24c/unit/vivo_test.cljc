@@ -307,7 +307,7 @@
 
 (deftest test-bad-insert*-path
   (is (thrown-with-msg?
-       #?(:clj ExceptionInfo :cljs xo js/Error)
+       #?(:clj ExceptionInfo :cljs js/Error)
        #"the last element of the path must be an integer"
        (commands/insert* [] [] :local :insert-before :new))))
 

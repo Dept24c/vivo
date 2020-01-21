@@ -311,7 +311,6 @@
                      (u/ex-msg-and-stacktrace e)))))))
 
 (defrecord VivoServer [authorization-fn
-                       capsule-server
                        log-error
                        log-info
                        login-lifetime-mins
@@ -321,6 +320,7 @@
                        rpcs
                        sm-ep
                        state-schema
+                       stop-server
                        temp-storage
                        tx-fns
                        *conn-id->info
@@ -771,7 +771,7 @@
     (swap! *rpc->handler assoc rpc-name-kw handler))
 
   (shutdown! [this]
-    (cs/stop capsule-server)))
+    (stop-server)))
 
 (defn default-health-http-handler [req]
   (if (= "/health" (:uri req))
@@ -890,10 +890,9 @@
         admin-ep (ep/endpoint "admin-client" authenticate-admin-client
                               u/admin-client-server-protocol :server)
         cs-opts (u/sym-map handle-http http-timeout-ms)
-        capsule-server (cs/server (conj additional-endpoints vc-ep admin-ep)
-                                  port cs-opts)
+        stop-server (cs/server (conj additional-endpoints vc-ep admin-ep)
+                               port cs-opts)
         vivo-server (->VivoServer authorization-fn
-                                  capsule-server
                                   log-error
                                   log-info
                                   login-lifetime-mins
@@ -903,6 +902,7 @@
                                   (or rpcs {})
                                   vc-ep
                                   state-schema
+                                  stop-server
                                   temp-storage
                                   tx-fns
                                   *conn-id->info
@@ -910,6 +910,5 @@
                                   *branch->info
                                   *rpc->handler)]
     (set-handlers! vivo-server vc-ep admin-ep)
-    (cs/start capsule-server)
     (log-info (str "Vivo server started on port " port "."))
     vivo-server))

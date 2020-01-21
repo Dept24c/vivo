@@ -1,11 +1,11 @@
 {:deps
  {binaryage/oops {:mvn/version "0.7.0"}
-  com.cognitect.aws/api {:mvn/version "0.8.408"}
+  com.cognitect.aws/api {:mvn/version "0.8.423"}
   com.cognitect.aws/dynamodb {:mvn/version "776.2.580.0"}
-  com.cognitect.aws/endpoints {:mvn/version "1.1.11.686"}
+  com.cognitect.aws/endpoints {:mvn/version "1.1.11.710"}
   crypto-password {:mvn/version "0.2.1"}
-  deercreeklabs/capsule {:mvn/version "0.4.14"}
-  deercreeklabs/stockroom {:mvn/version "0.3.3"}
+  deercreeklabs/capsule {:mvn/version "0.4.15"}
+  deercreeklabs/stockroom {:mvn/version "0.3.4"}
   mvxcvi/puget {:mvn/version "1.2.0"}
   org.clojure/clojure {:mvn/version "1.10.1"}
   org.clojure/clojurescript {:mvn/version "1.10.597"}
@@ -17,23 +17,25 @@
              "clojars" {:url "https://repo.clojars.org/"}}
 
  :aliases
- {:cider-clj {:extra-deps {cider/cider-nrepl {:mvn/version "0.22.4"}}
+ {:cider-clj {:extra-deps {cider/cider-nrepl {:mvn/version "0.23.0"}}
               :main-opts ["-m" "nrepl.cmdline" "--middleware"
                           "[cider.nrepl/cider-middleware]"]}
 
-  :cider-cljs {:extra-deps {cider/cider-nrepl {:mvn/version "0.22.4"}
+  :cider-cljs {:extra-deps {cider/cider-nrepl {:mvn/version "0.23.0"}
                             cider/piggieback {:mvn/version "0.4.2"}}
                :main-opts
                ["-m" "nrepl.cmdline" "--middleware"
                 "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
 
-  :dev {:extra-deps {org.clojure/tools.namespace {:mvn/version "0.2.11"}}
+  :dev {:extra-deps {org.clojure/tools.namespace {:mvn/version "0.3.1"}
+                     cljsjs/react {:mvn/version "16.12.0-1"}
+                     cljsjs/react-dom {:mvn/version "16.12.0-1"}}
         :extra-paths ["dev"]}
 
   :run-test-server {:main-opts ["-m" "user"]
                     :extra-paths ["dev"]}
 
   :test {:extra-paths ["test"]
-         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-554"}
-                      lambdaisland/kaocha-cljs {:mvn/version "0.0-59"}
+         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-573"}
+                      lambdaisland/kaocha-cljs {:mvn/version "0.0-68"}
                       lambdaisland/kaocha-cloverage {:mvn/version "0.0-41"}}}}}
