@@ -855,6 +855,7 @@
         {:keys [additional-endpoints
                 authenticate-admin-client
                 authorization-fn
+                certificate-str
                 disable-ddb?
                 handle-http
                 http-timeout-ms
@@ -862,6 +863,7 @@
                 log-info
                 login-lifetime-mins
                 port
+                private-key-str
                 repository-name
                 rpcs
                 state-schema
@@ -889,7 +891,8 @@
                            u/client-server-protocol :server vc-ep-opts)
         admin-ep (ep/endpoint "admin-client" authenticate-admin-client
                               u/admin-client-server-protocol :server)
-        cs-opts (u/sym-map handle-http http-timeout-ms)
+        cs-opts (u/sym-map handle-http http-timeout-ms
+                           certificate-str private-key-str)
         stop-server (cs/server (conj additional-endpoints vc-ep admin-ep)
                                port cs-opts)
         vivo-server (->VivoServer authorization-fn
