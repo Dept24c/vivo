@@ -313,6 +313,7 @@
 (defrecord VivoServer [authorization-fn
                        log-error
                        log-info
+                       login-identifier-case-sensitive?
                        login-lifetime-mins
                        modify-q
                        path->schema-cache
@@ -345,7 +346,10 @@
 
   (<add-subject* [this identifier secret subject-id branch conn-id]
     (au/go
-      (let [hashed-secret (bcrypt/encrypt secret work-factor)]
+      (let [hashed-secret (bcrypt/encrypt secret work-factor)
+            identifier* (if login-identifier-case-sensitive?
+                          identifier
+                          (str/lower-case identifier))]
         (au/<? (<modify-db this (partial <add-subject-update-fn subject-id
                                          identifier hashed-secret)
                            (str "Add subject " subject-id)
@@ -363,9 +367,12 @@
 
   (<add-subject-identifier [this identifier metadata]
     (let [{:keys [conn-id]} metadata
-          {:keys [branch subject-id]} (@*conn-id->info conn-id)]
-      (<modify-db this (partial <add-subject-identifier-update-fn identifier)
-                  (str "Add subject indentifier `" identifier)
+          {:keys [branch subject-id]} (@*conn-id->info conn-id)
+          identifier* (if login-identifier-case-sensitive?
+                        identifier
+                        (str/lower-case identifier))]
+      (<modify-db this (partial <add-subject-identifier-update-fn identifier*)
+                  (str "Add subject indentifier `" identifier*)
                   subject-id branch conn-id))
     true)
 
@@ -539,6 +546,9 @@
       (let [{:keys [identifier secret]} arg
             {:keys [conn-id]} metadata
             {:keys [branch]} (@*conn-id->info conn-id)
+            identifier* (if login-identifier-case-sensitive?
+                          identifier
+                          (str/lower-case identifier))
             branch-reference (branch->reference branch)
             storage (get-storage this branch)
             db-id (au/<? (u/<get-data-id storage branch-reference))
@@ -547,7 +557,7 @@
              sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
             subject-id (au/<? (u/<get-in storage id->sid-data-id
                                          u/string-map-schema
-                                         [identifier] nil))
+                                         [identifier*] nil))
             hashed-secret (when subject-id
                             (au/<? (u/<get-in storage sid->hs-data-id
                                               u/string-map-schema
@@ -861,6 +871,7 @@
                 http-timeout-ms
                 log-error
                 log-info
+                login-identifier-case-sensitive?
                 login-lifetime-mins
                 port
                 private-key-str
@@ -898,6 +909,7 @@
         vivo-server (->VivoServer authorization-fn
                                   log-error
                                   log-info
+                                  login-identifier-case-sensitive?
                                   login-lifetime-mins
                                   modify-q
                                   path->schema-cache

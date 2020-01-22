@@ -1,6 +1,7 @@
 (ns com.dept24c.integration.integration-test
   (:require
    [clojure.core.async :as ca]
+   [clojure.string :as str]
    [clojure.test :refer [deftest is]]
    [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.admin-client :as ac]
@@ -248,8 +249,9 @@
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
-               login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
-                                               tu/test-secret))]
+               login-ret (au/<? (vivo/<log-in!
+                                 vc (str/upper-case tu/test-identifier)
+                                 tu/test-secret))]
            (when-not login-ret
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))
