@@ -206,6 +206,7 @@
        (ex-info (str "Can't log in because the :get-server-url "
                      "option was not provided when the vivo-client was "
                      "created.") {})))
+    (u/check-secret-len secret)
     (ca/go
       (try
         (sr/flush! state-cache)
@@ -495,9 +496,16 @@
 
   (<add-subject! [this identifier secret subject-id]
     (au/go
+      (u/check-secret-len secret)
       (au/<? (u/<wait-for-conn-init this))
       (au/<? (cc/<send-msg capsule-client :add-subject
                            (u/sym-map identifier secret subject-id)))))
+
+  (<change-secret! [this new-secret]
+    (u/check-secret-len new-secret)
+    (when-not @*subject-id
+      (throw (ex-info "Must be logged in to change secret." {})))
+    (cc/<send-msg capsule-client :change-secret new-secret))
 
   (<rpc [this rpc-name-kw arg timeout-ms]
     (au/go

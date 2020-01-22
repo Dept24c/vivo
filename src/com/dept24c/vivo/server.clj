@@ -346,6 +346,7 @@
 
   (<add-subject* [this identifier secret subject-id branch conn-id]
     (au/go
+      (u/check-secret-len secret)
       (let [hashed-secret (bcrypt/encrypt secret work-factor)
             identifier* (if login-identifier-case-sensitive?
                           identifier
@@ -360,8 +361,8 @@
     (let [{:keys [identifier secret subject-id]
            :or {subject-id (.toString ^UUID (UUID/randomUUID))}} arg
           {:keys [conn-id]} metadata
-          {:keys [branch]} (@*conn-id->info conn-id)
-          hashed-secret (bcrypt/encrypt secret work-factor)]
+          {:keys [branch]} (@*conn-id->info conn-id)]
+      (u/check-secret-len secret)
       (<add-subject* this identifier secret subject-id branch conn-id)))
 
 
@@ -377,9 +378,10 @@
     true)
 
   (<change-secret [this new-secret metadata]
-    (let [hashed-secret (bcrypt/encrypt new-secret work-factor)
-          {:keys [conn-id]} metadata
-          {:keys [branch subject-id]} (@*conn-id->info conn-id)]
+    (let [{:keys [conn-id]} metadata
+          {:keys [branch subject-id]} (@*conn-id->info conn-id)
+          _ (u/check-secret-len new-secret)
+          hashed-secret (bcrypt/encrypt new-secret work-factor)]
       (<modify-db this (partial <change-secret-update-fn hashed-secret)
                   "Change secret" subject-id branch conn-id)))
 
@@ -562,6 +564,7 @@
                             (au/<? (u/<get-in storage sid->hs-data-id
                                               u/string-map-schema
                                               [subject-id] nil)))]
+        (u/check-secret-len secret)
         (when (and hashed-secret
                    (bcrypt/check secret hashed-secret))
           (let [token (generate-token)

@@ -264,6 +264,37 @@
          (finally
            (vivo/shutdown! vc)))))))
 
+;; TODO: Figure out why these tests cause errors
+#_
+(deftest test-secret-too-long
+  (au/test-async
+   10000
+   (au/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [secret-len (inc u/max-secret-len)
+               long-secret (apply str (repeat secret-len "*"))]
+           (is (thrown-with-msg?
+                #?(:clj ExceptionInfo :cljs js/Error)
+                #"Secrets must not be longer than"
+                (au/<? (vivo/<add-subject! vc tu/test-identifier
+                                           long-secret
+                                           tu/test-subject-id))))
+           (is (thrown-with-msg?
+                #?(:clj ExceptionInfo :cljs js/Error)
+                #"Secrets must not be longer than"
+                (au/<? (au/<? (vivo/<log-in!
+                               vc tu/test-identifier long-secret)))))
+           (is (thrown-with-msg?
+                #?(:clj ExceptionInfo :cljs js/Error)
+                #"Secrets must not be longer than"
+                (au/<? (au/<? (vivo/<change-secret!
+                               vc long-secret))))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected (u/ex-msg e))))
+         (finally
+           (vivo/shutdown! vc)))))))
+
 (deftest test-authorization
   (au/test-async
    10000

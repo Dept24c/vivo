@@ -26,6 +26,7 @@
 (def fp-to-schema-reference-root "_FP_")
 (def max-branch-name-len 64)
 (def max-data-block-bytes (* 300 1000)) ;; Approx. DDB max via Cognitect API
+(def max-secret-len 64) ;; To prevent DoS attacks against bcrypt
 
 (defmacro sym-map
   "Builds a map from symbols.
@@ -45,6 +46,7 @@
   (<add-subject!
     [this identifier secret]
     [this identifier secret subject-id])
+  (<change-secret! [this new-secret])
   (<deserialize-value [this path ret])
   (<get-in-sys-state [this db-id path])
   (<make-state-info
@@ -646,6 +648,14 @@
        (ex-info (str "The value for the :ret-schema key must be a lancaster "
                      "schema. Got: `" ret-schema "`.")
                 (sym-map k arg-schema ret-schema))))))
+
+(defn check-secret-len [secret]
+  (let [secret-len (count secret)]
+    (when (> secret-len max-secret-len)
+      (throw (ex-info
+              (str "Secrets must not be longer than " max-secret-len
+                   " characters. Got " secret-len " characters.")
+              (sym-map secret-len max-secret-len))))))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 

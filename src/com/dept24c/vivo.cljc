@@ -95,6 +95,10 @@
   ([vc identifier secret subject-id]
    (u/<add-subject! vc identifier secret subject-id)))
 
+(defn <change-secret!
+  [vc new-secret]
+  (u/<change-secret! vc new-secret))
+
 (defn <schema->fp
   "Get the fingerprint for the given schema and durably store the schema
    for future use by <fp->schema.
