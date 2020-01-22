@@ -18,25 +18,8 @@
 
 (def get-state-timeout-ms 30000)
 (def initial-ssr-info {:resolved {} :needed #{}})
-(def login-token-local-storage-key "login-token")
 (def max-commit-attempts 100)
 (def update-state-timeout-ms 30000)
-
-(defn get-login-token []
-  #?(:cljs
-     (when (u/browser?)
-       (.getItem (.-localStorage js/window) login-token-local-storage-key))))
-
-(defn set-login-token [token]
-  #?(:cljs
-     (when (u/browser?)
-       (.setItem (.-localStorage js/window)
-                 login-token-local-storage-key token))))
-
-(defn delete-login-token []
-  #?(:cljs
-     (when (u/browser?)
-       (.removeItem (.-localStorage js/window) login-token-local-storage-key))))
 
 (defn make-update-info [update-cmds]
   (reduce
@@ -229,18 +212,10 @@
         (sr/flush! sys-state-cache)
         (au/<? (u/<wait-for-conn-init this))
         (let [arg (u/sym-map identifier secret)
-              {:keys [subject-id token]} (au/<? (cc/<send-msg capsule-client
-                                                              :log-in arg))
-              ret (if-not subject-id
-                    (do
-                      (delete-login-token)
-                      (log-info "Login failed.")
-                      false)
-                    (do
-                      (set-login-token token)
-                      (set-subject-id! subject-id)
-                      (log-info "Login succeeded.")
-                      true))]
+              ret (au/<? (cc/<send-msg capsule-client :log-in arg))
+              {:keys [subject-id]} ret]
+          (when subject-id
+            (set-subject-id! subject-id))
           (when cb
             (cb ret)))
         (catch #?(:cljs js/Error :clj Throwable) e
@@ -256,7 +231,6 @@
                      "created.") {})))
     (ca/go
       (try
-        (delete-login-token)
         (set-subject-id! nil)
         (sr/flush! state-cache)
         (sr/flush! sys-state-cache)
@@ -569,10 +543,8 @@
                                              :log-in-w-token token))]
       (do
         (set-subject-id! subject-id)
-        (log-info "Token-based login succeeded."))
-      (do
-        (delete-login-token)
-        (log-info "Token-based login failed")))))
+        true)
+      false)))
 
 (defn <init-conn
   [capsule-client sys-state-source log-error log-info *cur-db-id
@@ -581,9 +553,6 @@
     (try
       (let [db-id (au/<? (cc/<send-msg capsule-client :set-state-source
                                        sys-state-source))]
-        (when-let [token (get-login-token)]
-          (au/<? (<log-in-w-token capsule-client set-subject-id!
-                                  log-info token)))
         (reset! *cur-db-id db-id)
         (reset! *conn-initialized? true)
         (log-info "Vivo client connection initialized."))

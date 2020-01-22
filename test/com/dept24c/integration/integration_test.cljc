@@ -290,8 +290,10 @@
                       #"RPC `:authed/inc` is unauthorized"
                       (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
                login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
-                                               tu/test-secret))]
-           (is (= true login-ret))
+                                               tu/test-secret))
+               {:keys [subject-id token]} login-ret]
+           (is (= tu/test-subject-id subject-id))
+           (is (string? token))
            (is (= 2 (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
            (unsub!))
          (catch #?(:clj Exception :cljs js/Error) e
