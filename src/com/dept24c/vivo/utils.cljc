@@ -61,6 +61,7 @@
   (handle-sys-state-changed [this arg metadata])
   (handle-updates [this updates cb])
   (log-in! [this identifier secret cb])
+  (<log-in-w-token [this token])
   (log-out! [this])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])

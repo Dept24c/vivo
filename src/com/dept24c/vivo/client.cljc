@@ -224,6 +224,15 @@
           (when cb
             (cb e))))))
 
+  (<log-in-w-token [this token]
+    (au/go
+      (if-let [subject-id (au/<? (cc/<send-msg capsule-client
+                                               :log-in-w-token token))]
+        (do
+          (set-subject-id! subject-id)
+          true)
+        false)))
+
   (log-out! [this]
     (when-not capsule-client
       (throw
@@ -544,15 +553,6 @@
           (let [{:keys [fp bytes]} ret*
                 w-schema (au/<? (u/<fp->schema this fp))]
             (l/deserialize ret-schema w-schema bytes)))))))
-
-(defn <log-in-w-token [capsule-client set-subject-id! log-info token]
-  (au/go
-    (if-let [subject-id (au/<? (cc/<send-msg capsule-client
-                                             :log-in-w-token token))]
-      (do
-        (set-subject-id! subject-id)
-        true)
-      false)))
 
 (defn <init-conn
   [capsule-client sys-state-source log-error log-info *cur-db-id

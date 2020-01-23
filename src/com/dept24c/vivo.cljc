@@ -84,6 +84,10 @@
     (u/log-in! vc identifier secret cb)
     ch))
 
+(defn <log-in-w-token
+  [vc token]
+  (u/<log-in-w-token vc token))
+
 (defn log-out!
   "Log out from the Vivo server."
   [vc]

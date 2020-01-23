@@ -617,7 +617,8 @@
         (au/<? (<modify-db this <log-out-update-fn "Log out"
                            subject-id branch conn-id))
         (doseq [conn-id conn-ids]
-          (ep/close-conn sm-ep conn-id)))))
+          (ep/close-conn sm-ep conn-id))
+        true)))
 
   (<set-state-source [this source metadata]
     (au/go
