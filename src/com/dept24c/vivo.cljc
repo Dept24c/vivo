@@ -84,14 +84,19 @@
     (u/log-in! vc identifier secret cb)
     ch))
 
-(defn <log-in-w-token
+(defn <log-in-w-token!
   [vc token]
-  (u/<log-in-w-token vc token))
+  (u/<log-in-w-token! vc token))
 
-(defn log-out!
+(defn <log-out!
   "Log out from the Vivo server."
   [vc]
-  (u/log-out! vc))
+  (u/<log-out! vc))
+
+(defn <log-out-w-token!
+  "Log out a user from the Vivo server using their token"
+  [vc token]
+  (u/<log-out-w-token! vc token))
 
 (defn <add-subject!
   ([vc identifier secret]

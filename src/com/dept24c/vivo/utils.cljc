@@ -61,8 +61,9 @@
   (handle-sys-state-changed [this arg metadata])
   (handle-updates [this updates cb])
   (log-in! [this identifier secret cb])
-  (<log-in-w-token [this token])
-  (log-out! [this])
+  (<log-in-w-token! [this token])
+  (<log-out! [this])
+  (<log-out-w-token! [this token])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
   (ssr-get-state! [this sub-map resolution-map])
@@ -391,7 +392,11 @@
                            :ret (l/maybe subject-id-schema)
                            :sender :client}
           :log-out {:arg l/null-schema
+                    :ret l/boolean-schema
                     :sender :client}
+          :log-out-w-token {:arg token-schema
+                            :ret l/boolean-schema
+                            :sender :client}
           :set-state-source {:arg state-source-schema
                              :ret db-id-schema
                              :sender :client}

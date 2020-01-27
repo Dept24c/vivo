@@ -45,6 +45,7 @@
   (<log-in [this arg metadata])
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
+  (<log-out-w-token [this token metadata])
   (<modify-db [this <update-fn msg subject-id branch conn-id])
   (<rpc [this arg metadata])
   (<set-state-source [this arg metadata])
@@ -320,6 +321,7 @@
                        perm-storage
                        rpcs
                        sm-ep
+                       repository-name
                        state-schema
                        stop-server
                        temp-storage
@@ -616,9 +618,51 @@
             conn-ids (@*subject-id->conn-ids subject-id)]
         (au/<? (<modify-db this <log-out-update-fn "Log out"
                            subject-id branch conn-id))
-        (doseq [conn-id conn-ids]
-          (ep/close-conn sm-ep conn-id))
+        (log-info (str "Logging out subject " subject-id ". " (count conn-ids)
+                       " active connection(s)."))
+        (ca/go
+          ;; Wait for `true` response to be rcvd before closing conns
+          (ca/<! (ca/timeout 500))
+          (doseq [conn-id conn-ids]
+            (ep/close-conn sm-ep conn-id)))
         true)))
+
+  (<log-out-w-token [this token metadata]
+    (au/go
+      (let [{:keys [conn-id]} metadata
+            {:keys [branch]} (@*conn-id->info conn-id)
+            branch-reference (branch->reference branch)
+            storage (get-storage this branch)
+            db-id (au/<? (u/<get-data-id storage branch-reference))
+            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
+            {:keys [token-to-token-info-data-id]} db-info
+            info (when token-to-token-info-data-id
+                   (au/<? (u/<get-in storage token-to-token-info-data-id
+                                     u/token-map-schema [token] nil)))]
+        (if-not info
+          false
+          (let [{:keys [subject-id expiration-time-mins]} info
+                conn-ids (@*subject-id->conn-ids subject-id)
+                now-mins (-> (u/current-time-ms)
+                             (u/ms->mins))]
+            (if (>= now-mins expiration-time-mins)
+              (do
+                (au/<? (<modify-db this (partial <delete-token-update-fn token)
+                                   "Delete expired token"
+                                   subject-id branch conn-id))
+                false)
+              (do
+                (au/<? (<modify-db this <log-out-update-fn "Log out"
+                                   subject-id branch conn-id))
+                (log-info (str "Logging out subject " subject-id ". "
+                               (count conn-ids) " active connections."))
+                (ca/go
+                  ;; Wait for `true` response to be rcvd before closing conns
+                  (ca/<! (ca/timeout 500))
+                  (doseq [conn-id conn-ids]
+                    (log-info (str "Closing conn " conn-id))
+                    (ep/close-conn sm-ep conn-id)))
+                true)))))))
 
   (<set-state-source [this source metadata]
     (au/go
@@ -696,7 +740,8 @@
                             ret))]
         (if-not authorized?
           :vivo/unauthorized
-          (let [rpc-metadata (assoc (u/sym-map conn-id subject-id branch db-id)
+          (let [rpc-metadata (assoc (u/sym-map conn-id subject-id branch db-id
+                                               repository-name)
                                     :vivo-server this)
                 ret* (handler rpc-arg rpc-metadata)
                 ret (if (au/channel? ret*)
@@ -851,6 +896,7 @@
   (ep/set-handler vc-ep :log-in (partial <log-in vivo-server))
   (ep/set-handler vc-ep :log-in-w-token (partial <log-in-w-token vivo-server))
   (ep/set-handler vc-ep :log-out (partial <log-out vivo-server))
+  (ep/set-handler vc-ep :log-out-w-token (partial <log-out-w-token vivo-server))
   (ep/set-handler vc-ep :set-state-source
                   (partial <set-state-source vivo-server))
   (ep/set-handler vc-ep :update-state (partial <update-state vivo-server))
@@ -920,6 +966,7 @@
                                   perm-storage
                                   (or rpcs {})
                                   vc-ep
+                                  repository-name
                                   state-schema
                                   stop-server
                                   temp-storage

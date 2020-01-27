@@ -224,7 +224,12 @@
           (when cb
             (cb e))))))
 
-  (<log-in-w-token [this token]
+  (<log-in-w-token! [this token]
+    (when-not capsule-client
+      (throw
+       (ex-info (str "Can't log in because the :get-server-url "
+                     "option was not provided when the vivo-client was "
+                     "created.") {})))
     (au/go
       (if-let [subject-id (au/<? (cc/<send-msg capsule-client
                                                :log-in-w-token token))]
@@ -233,22 +238,18 @@
           true)
         false)))
 
-  (log-out! [this]
-    (when-not capsule-client
-      (throw
-       (ex-info (str "Can't log in because the :get-server-url "
-                     "option was not provided when the vivo-client was "
-                     "created.") {})))
-    (ca/go
-      (try
-        (set-subject-id! nil)
-        (sr/flush! state-cache)
-        (sr/flush! sys-state-cache)
-        (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
-          (log-info (str "Logout " (if ret "succeeded." "failed."))))
-        (catch #?(:cljs js/Error :clj Throwable) e
-          (log-error (str "Exception in log-out!"
-                          (u/ex-msg-and-stacktrace e)))))))
+  (<log-out! [this]
+    (au/go
+      (set-subject-id! nil)
+      (sr/flush! state-cache)
+      (sr/flush! sys-state-cache)
+      (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
+        (log-info (str "Logout " (if ret "succeeded." "failed."))))))
+
+  (<log-out-w-token! [this token]
+    (au/go
+      (let [ret (au/<? (cc/<send-msg capsule-client :log-out-w-token token))]
+        (log-info (str "Token logout " (if ret "succeeded." "failed."))))))
 
   (shutdown! [this]
     (reset! *stopped? true)
