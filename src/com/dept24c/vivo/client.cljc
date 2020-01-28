@@ -251,6 +251,9 @@
       (let [ret (au/<? (cc/<send-msg capsule-client :log-out-w-token token))]
         (log-info (str "Token logout " (if ret "succeeded." "failed."))))))
 
+  (logged-in? [this]
+    (boolean @*subject-id))
+
   (shutdown! [this]
     (reset! *stopped? true)
     (cc/shutdown capsule-client)
@@ -556,7 +559,7 @@
             (l/deserialize ret-schema w-schema bytes)))))))
 
 (defn <init-conn
-  [capsule-client sys-state-source log-error log-info *cur-db-id
+  [capsule-client on-connect* sys-state-source log-error log-info *cur-db-id
    *conn-initialized? set-subject-id!]
   (ca/go
     (try
@@ -564,23 +567,27 @@
                                        sys-state-source))]
         (reset! *cur-db-id db-id)
         (reset! *conn-initialized? true)
-        (log-info "Vivo client connection initialized."))
+        (log-info "Vivo client connection initialized.")
+        (on-connect*))
       (catch #?(:cljs js/Error :clj Throwable) e
         (log-error (str "Error initializing vivo client:\n"
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn <on-connect
-  [sys-state-source log-error log-info *cur-db-id *conn-initialized?
+  [on-connect* sys-state-source log-error log-info *cur-db-id *conn-initialized?
    set-subject-id! capsule-client]
   (ca/go
     (try
-      (au/<? (<init-conn capsule-client sys-state-source log-error log-info
-                         *cur-db-id *conn-initialized? set-subject-id!))
+      (au/<? (<init-conn capsule-client on-connect* sys-state-source log-error
+                         log-info *cur-db-id *conn-initialized?
+                         set-subject-id!))
       (catch #?(:clj Exception :cljs js/Error) e
         (log-error (str "Error in <on-connect: "
                         (u/ex-msg-and-stacktrace e)))))))
 
-(defn on-disconnect [*conn-initialized? capsule-client]
+(defn on-disconnect
+  [on-disconnect* *conn-initialized? capsule-client]
+  (on-disconnect*)
   (reset! *conn-initialized? false))
 
 (defn check-sys-state-source [sys-state-source]
@@ -610,18 +617,19 @@
               (u/sym-map sys-state-source))))))
 
 (defn make-capsule-client
-  [get-server-url sys-state-schema sys-state-source log-error log-info
-   *cur-db-id *conn-initialized? set-subject-id!]
+  [get-server-url on-connect* on-disconnect* sys-state-schema sys-state-source
+   log-error log-info *cur-db-id *conn-initialized? set-subject-id!]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in vivo-client "
                          "constructor.")
                     {})))
   (let [get-credentials (constantly {:subject-id "vivo-client"
                                      :subject-secret ""})
-        opts {:on-connect (partial <on-connect sys-state-source log-error
-                                   log-info *cur-db-id *conn-initialized?
-                                   set-subject-id!)
-              :on-disconnect (partial on-disconnect *conn-initialized?)}]
+        opts {:on-connect (partial <on-connect on-connect* sys-state-source
+                                   log-error log-info *cur-db-id
+                                   *conn-initialized? set-subject-id!)
+              :on-disconnect (partial on-disconnect on-disconnect*
+                                      *conn-initialized?)}]
     (cc/client get-server-url get-credentials
                u/client-server-protocol :client opts)))
 
@@ -632,6 +640,8 @@
                 initial-local-state
                 log-error
                 log-info
+                on-connect
+                on-disconnect
                 rpcs
                 state-cache-num-keys
                 sys-state-cache-num-keys
@@ -644,7 +654,11 @@
         *ssr-info (atom nil)
         *fp->schema (atom {})
         *subject-id (atom nil)
-
+        *vc (atom nil)
+        on-connect* #(when on-connect
+                       (on-connect @*vc))
+        on-disconnect* #(when on-disconnect
+                          (on-disconnect @*vc @*local-state))
         updates-ch (ca/chan (ca/sliding-buffer 100))
         updates-pub (ca/pub updates-ch (constantly :all))
         set-subject-id! (fn [subject-id]
@@ -662,7 +676,8 @@
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
                          (make-capsule-client
-                          get-server-url sys-state-schema sys-state-source
+                          get-server-url on-connect* on-disconnect*
+                          sys-state-schema sys-state-source
                           log-error log-info *cur-db-id *conn-initialized?
                           set-subject-id!))
         vc (->VivoClient capsule-client sys-state-schema sys-state-source
@@ -672,6 +687,7 @@
                          set-subject-id! *local-state *cur-db-id
                          *conn-initialized? *stopped? *ssr-info
                          *fp->schema *subject-id)]
+    (reset! *vc vc)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
                       (partial u/handle-sys-state-changed vc))

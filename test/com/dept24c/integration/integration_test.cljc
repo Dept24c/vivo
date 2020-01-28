@@ -256,7 +256,7 @@
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))
            (is (= tu/test-subject-id ('subject-id (au/<? state-ch))))
-           (vivo/log-out! vc)
+           (au/<? (vivo/<log-out! vc))
            (is (= {'subject-id nil} (au/<? state-ch)))
            (unsub!))
          (catch #?(:clj Exception :cljs js/Error) e

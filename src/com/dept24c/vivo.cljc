@@ -71,6 +71,9 @@
      (set-state! vc path arg cb)
      ch)))
 
+(defn logged-in? [vc]
+  (u/logged-in? vc))
+
 (defn log-in!
   ([vc identifier secret]
    (u/log-in! vc identifier secret nil))
