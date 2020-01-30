@@ -879,7 +879,7 @@
                      (dissoc m subject-id)))))
         (when temp-branch?
           (au/<? (<delete-branch* branch temp-storage)))
-        (log-info "Client disconnected (conn-info: " conn-info ")."))
+        (log-info (str "Client disconnected (conn-info: " conn-info ").")))
       (catch Throwable e
         (log-error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
                         (u/ex-msg-and-stacktrace e)))))))
