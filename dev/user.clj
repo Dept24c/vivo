@@ -1,14 +1,10 @@
 (ns user
   (:require
    [clojure.tools.namespace.repl :refer [refresh refresh-all]]
-   [cognitect.aws.client.api :as aws]
-   [com.dept24c.vivo.bristlecone.ddb-block-storage :as ddb]
    [com.dept24c.vivo :as vivo]
    [com.dept24c.vivo.state-schema :as ss]
-   [com.dept24c.vivo.test-user :as tu]
    [com.dept24c.vivo.utils :as u]
-   [deercreeklabs.async-utils :as au]
-   [puget.printer :refer [cprint]]))
+   [deercreeklabs.async-utils :as au]))
 
 (def default-server-port 12345)
 (def repository-name "vivo-test")
@@ -61,7 +57,6 @@
           (u/configure-capsule-logging :info)
           stopper))))))
 
-;; Note: This has problems due to not having socket address reuse
 (defn restart []
   (stop)
   (refresh :after 'user/start))
