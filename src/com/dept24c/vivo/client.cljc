@@ -457,7 +457,7 @@
 
   (<update-cmd->serializable-update-cmd [this i cmd]
     (au/go
-      (if-not (:arg cmd)
+      (if-not (contains? cmd :arg)
         [i cmd]
         (let [{:keys [arg path]} cmd
               arg-sch (or (sr/get path->schema-cache path)
