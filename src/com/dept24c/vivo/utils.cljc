@@ -296,7 +296,9 @@
   :vivo/unauthorized)
 
 (def get-state-ret-schema
-  (l/union-schema [l/null-schema unauthorized-schema serialized-value-schema]))
+  (l/union-schema [l/null-schema
+                   unauthorized-schema
+                   serialized-value-schema]))
 
 (l/def-record-schema update-info-schema
   [:norm-path path-schema]

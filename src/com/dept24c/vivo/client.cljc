@@ -479,17 +479,20 @@
                      "option was not provided when the vivo-client was "
                      "created.") {})))
     (au/go
-      (or (sr/get sys-state-cache [db-id path])
-          (when-not @*stopped?
-            (let [arg (u/sym-map db-id path)
-                  ret (au/<? (cc/<send-msg capsule-client :get-state arg
-                                           get-state-timeout-ms))
-                  v (if (= :vivo/unauthorized ret)
-                      :vivo/unauthorized
-                      (when ret
-                        (au/<? (u/<deserialize-value this path ret))))]
-              (sr/put! sys-state-cache [db-id path] v)
-              v)))))
+      (when db-id
+        (or (sr/get sys-state-cache [db-id path])
+            (when-not @*stopped?
+              (let [arg (u/sym-map db-id path)
+                    ret (au/<? (cc/<send-msg capsule-client :get-state arg
+                                             get-state-timeout-ms))
+                    v (if (#{:vivo/unauthorized :vivo/db-id-does-not-exist}
+                           ret)
+                        ret
+                        (when ret
+                          (au/<? (u/<deserialize-value this path ret))))]
+                (when-not (= :vivo/db-id-does-not-exist)
+                  (sr/put! sys-state-cache [db-id path] v))
+                v))))))
 
   (handle-sys-state-changed [this arg metadata]
     (try
@@ -586,9 +589,10 @@
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn on-disconnect
-  [on-disconnect* *conn-initialized? capsule-client]
+  [on-disconnect* *conn-initialized? *cur-db-id capsule-client]
   (on-disconnect*)
-  (reset! *conn-initialized? false))
+  (reset! *conn-initialized? false)
+  (reset! *cur-db-id nil))
 
 (defn check-sys-state-source [sys-state-source]
   ;; sys-state-source must be either:
@@ -629,7 +633,7 @@
                                    log-error log-info *cur-db-id
                                    *conn-initialized? set-subject-id!)
               :on-disconnect (partial on-disconnect on-disconnect*
-                                      *conn-initialized?)}]
+                                      *conn-initialized? *cur-db-id)}]
     (cc/client get-server-url get-credentials
                u/client-server-protocol :client opts)))
 

@@ -481,22 +481,24 @@
                       perm-storage)
             data-id (au/<? (u/<get-in storage db-id u/db-info-schema
                                       [:data-id] nil))]
-        (if-not (some sequential? path)
-          (au/<? (u/<get-in storage data-id state-schema path* :sys))
-          (when-not (u/empty-sequence-in-path? path)
-            (let [expanded-paths (u/expand-path path*)
-                  num-results (count expanded-paths)]
-              ;; Use loop to stay in the go block
-              (loop [out []
-                     i 0]
-                (let [expanded-path (nth expanded-paths i)
-                      v (au/<? (u/<get-in storage data-id state-schema
-                                          expanded-path :sys))
-                      new-out (conj out v)
-                      new-i (inc i)]
-                  (if (= num-results new-i)
-                    new-out
-                    (recur new-out new-i))))))))))
+        (if-not data-id
+          :vivo/unauthorized ;; bad db-id
+          (if-not (some sequential? path)
+            (au/<? (u/<get-in storage data-id state-schema path* :sys))
+            (when-not (u/empty-sequence-in-path? path)
+              (let [expanded-paths (u/expand-path path*)
+                    num-results (count expanded-paths)]
+                ;; Use loop to stay in the go block
+                (loop [out []
+                       i 0]
+                  (let [expanded-path (nth expanded-paths i)
+                        v (au/<? (u/<get-in storage data-id state-schema
+                                            expanded-path :sys))
+                        new-out (conj out v)
+                        new-i (inc i)]
+                    (if (= num-results new-i)
+                      new-out
+                      (recur new-out new-i)))))))))))
 
   (<get-log [this branch limit]
     (au/go
@@ -535,7 +537,8 @@
                           (if (au/channel? ret)
                             (au/<? ret)
                             ret))]
-        (if-not authorized?
+        (if (or (not authorized?)
+                (= :vivo/unauthorized v))
           :vivo/unauthorized
           (when v
             (let [schema-path (rest path) ; Ignore :sys
@@ -905,7 +908,6 @@
   (ep/set-handler admin-ep :delete-branch (partial <delete-branch vivo-server)))
 
 (defn vivo-server
-  "Returns a no-arg fn that stops the server."
   [config]
   (when-not (map? config)
     (throw (ex-info (str "`config` argument must be a map. Got: `" config "`.")
