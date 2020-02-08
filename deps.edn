@@ -2,9 +2,9 @@
  {binaryage/oops {:mvn/version "0.7.0"}
   com.cognitect.aws/api {:mvn/version "0.8.423"}
   com.cognitect.aws/dynamodb {:mvn/version "776.2.580.0"}
-  com.cognitect.aws/endpoints {:mvn/version "1.1.11.710"}
+  com.cognitect.aws/endpoints {:mvn/version "1.1.11.714"}
   crypto-password {:mvn/version "0.2.1"}
-  deercreeklabs/capsule {:mvn/version "0.4.18"}
+  deercreeklabs/capsule {:mvn/version "0.4.19"}
   deercreeklabs/stockroom {:mvn/version "0.3.4"}
   mvxcvi/puget {:mvn/version "1.2.0"}
   org.clojure/clojure {:mvn/version "1.10.1"}
@@ -36,6 +36,6 @@
                     :extra-paths ["dev"]}
 
   :test {:extra-paths ["test"]
-         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-573"}
+         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-590"}
                       lambdaisland/kaocha-cljs {:mvn/version "0.0-68"}
                       lambdaisland/kaocha-cloverage {:mvn/version "0.0-41"}}}}}
