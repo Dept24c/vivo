@@ -347,7 +347,6 @@
 (def state-source-schema (l/union-schema [branch-state-source-schema
                                           temp-branch-state-source-schema]))
 
-
 (l/def-record-schema rpc-arg-schema
   [:rpc-name-kw-ns l/string-schema]
   [:rpc-name-kw-name l/string-schema]

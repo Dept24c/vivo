@@ -531,7 +531,7 @@
     (au/go
       (let [{:keys [path db-id]} arg
             {:keys [conn-id]} metadata
-            {:keys [subject-id branch]} (@*conn-id->info conn-id)
+            {:keys [subject-id]} (@*conn-id->info conn-id)
             v (au/<? (<get-in this db-id path))
             authorized? (let [ret (authorization-fn subject-id path :read v)]
                           (if (au/channel? ret)
