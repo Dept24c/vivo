@@ -683,13 +683,6 @@
                                    metadata)))
                        perm-branch)
                      (let [branch* (str "-temp-branch-" (rand-int 1e9))]
-                       (when-not (contains? source :temp-branch/db-id)
-                         (throw
-                          (ex-info
-                           (str ":sys-state-source must include either "
-                                ":branch/name or :temp-branch/db-id. Got: "
-                                source)
-                           source)))
                        (au/<? (<create-branch
                                this {:branch branch*
                                      :db-id (:temp-branch/db-id source)
