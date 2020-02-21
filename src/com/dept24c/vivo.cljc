@@ -6,6 +6,11 @@
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]))
 
+(defn put? [port x]
+  (if (nil? x)
+    (ca/close! port)
+    (ca/put! port x)))
+
 ;;;;;;;;;;;;;;;;;;;; Server fns ;;;;;;;;;;;;;;;;;;;;
 
 #?(:clj
@@ -52,7 +57,7 @@
 (defn <update-state!
   ([vc update-commands]
    (let [ch (ca/chan)
-         cb #(ca/put! ch %)]
+         cb #(put? ch %)]
      (u/update-state! vc update-commands cb)
      ch)))
 
@@ -67,7 +72,7 @@
 (defn <set-state!
   ([vc path arg]
    (let [ch (ca/chan)
-         cb #(ca/put! ch %)]
+         cb #(put? ch %)]
      (set-state! vc path arg cb)
      ch)))
 
@@ -83,7 +88,7 @@
 (defn <log-in!
   [vc identifier secret]
   (let [ch (ca/chan)
-        cb #(ca/put! ch %)]
+        cb #(put? ch %)]
     (u/log-in! vc identifier secret cb)
     ch))
 

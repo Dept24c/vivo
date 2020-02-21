@@ -248,6 +248,9 @@
                sub-map '{subject-id :vivo/subject-id}
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
+               login-fail (au/<? (vivo/<log-in!
+                                  vc (str/upper-case tu/test-identifier)
+                                  tu/test-incorrect-secret))
                _ (is (= {'subject-id nil} (au/<? state-ch)))
                login-ret (au/<? (vivo/<log-in!
                                  vc (str/upper-case tu/test-identifier)
