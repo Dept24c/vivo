@@ -249,9 +249,9 @@
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
-               login-ret (au/<? (vivo/<log-in!
-                                 vc (str/upper-case tu/test-identifier)
-                                 tu/test-secret))]
+               login-ret (vivo/log-in!
+                           vc (str/upper-case tu/test-identifier)
+                           tu/test-secret)]
            (when-not login-ret
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))

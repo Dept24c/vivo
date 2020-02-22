@@ -200,7 +200,7 @@
               writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
           (l/deserialize value-sch writer-sch (:bytes ret))))))
 
-  (log-in! [this identifier secret cb]
+  (<log-in! [this identifier secret cb]
     (when-not capsule-client
       (throw
        (ex-info (str "Can't log in because the :get-server-url "
@@ -217,12 +217,10 @@
               {:keys [subject-id]} ret]
           (when subject-id
             (set-subject-id! subject-id))
-          (when cb
-            (cb ret)))
+          (cb ret))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in log-in!" (u/ex-msg-and-stacktrace e)))
-          (when cb
-            (cb e))))))
+          (cb e)))))
 
   (<log-in-w-token! [this token]
     (when-not capsule-client

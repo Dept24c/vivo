@@ -60,7 +60,7 @@
   (get-local-state [this sub-map resolution-map component-name])
   (handle-sys-state-changed [this arg metadata])
   (handle-updates [this updates cb])
-  (log-in! [this identifier secret cb])
+  (<log-in! [this identifier secret cb])
   (logged-in? [this])
   (<log-in-w-token! [this token])
   (<log-out! [this])

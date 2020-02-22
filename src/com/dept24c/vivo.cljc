@@ -76,16 +76,15 @@
 
 (defn log-in!
   ([vc identifier secret]
-   (u/log-in! vc identifier secret nil))
+   (log-in! vc identifier secret identity))
   ([vc identifier secret cb]
-   (u/log-in! vc identifier secret cb)))
+   (au/<?? (u/<log-in! vc identifier secret cb))))
 
 (defn <log-in!
-  [vc identifier secret]
-  (let [ch (ca/chan)
-        cb #(ca/put! ch %)]
-    (u/log-in! vc identifier secret cb)
-    ch))
+  ([vc identifier secret]
+   (<log-in! vc identifier secret identity))
+  ([vc identifier secret cb]
+   (u/<log-in! vc identifier secret cb)))
 
 (defn <log-in-w-token!
   [vc token]
