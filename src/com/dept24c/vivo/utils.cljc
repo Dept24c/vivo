@@ -231,8 +231,8 @@
 (def fp-schema l/long-schema)
 (def identifier-schema l/string-schema)
 (def secret-schema l/string-schema)
-(def subject-id-schema l/string-schema)
-(def token-schema l/string-schema)
+(def subject-id-schema (l/maybe l/string-schema))
+(def token-schema (l/maybe l/string-schema))
 (def valid-ops  [:set :remove :insert-before :insert-after
                  :plus :minus :multiply :divide :mod])
 

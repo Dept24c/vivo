@@ -249,12 +249,18 @@
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                _ (is (= {'subject-id nil} (au/<? state-ch)))
+               login-fail (au/<? (vivo/<log-in!
+                                  vc (str/upper-case tu/test-identifier)
+                                  tu/test-incorrect-secret))
                login-ret (au/<? (vivo/<log-in!
                                  vc (str/upper-case tu/test-identifier)
                                  tu/test-secret))]
            (when-not login-ret
              (throw (ex-info "Login failed. This is unexpected."
                              (u/sym-map login-ret))))
+           ;; Because the first login attempt failed it's results will be on
+           ;; the state chan first, then the successful login.
+           (is (= nil ('subject-id (au/<? state-ch))))
            (is (= tu/test-subject-id ('subject-id (au/<? state-ch))))
            (au/<? (vivo/<log-out! vc))
            (is (= {'subject-id nil} (au/<? state-ch)))

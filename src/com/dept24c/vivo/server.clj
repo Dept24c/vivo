@@ -583,7 +583,8 @@
             (au/<? (<modify-db this (partial <log-in-update-fn
                                              token token-info)
                                "Log in" subject-id branch conn-id))
-            (u/sym-map subject-id token))))))
+            (u/sym-map subject-id token))
+          {:subject-id nil :token nil}))))
 
   (<log-in-w-token [this token metadata]
     (au/go
