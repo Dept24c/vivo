@@ -570,8 +570,8 @@
                                               u/string-map-schema
                                               [subject-id] nil)))]
         (u/check-secret-len secret)
-        (when (and hashed-secret
-                   (bcrypt/check secret hashed-secret))
+        (if (and hashed-secret
+                  (bcrypt/check secret hashed-secret))
           (let [token (generate-token)
                 expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
                                         login-lifetime-mins)
