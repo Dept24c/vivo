@@ -46,7 +46,7 @@
   (<add-subject!
     [this identifier secret]
     [this identifier secret subject-id])
-  (<change-secret! [this new-secret])
+  (<change-secret! [this old-secret new-secret])
   (<deserialize-value [this path ret])
   (<get-in-sys-state [this db-id path])
   (<make-state-info
@@ -60,7 +60,7 @@
   (get-local-state [this sub-map resolution-map component-name])
   (handle-sys-state-changed [this arg metadata])
   (handle-updates [this updates cb])
-  (log-in! [this identifier secret cb])
+  (<log-in! [this identifier secret])
   (logged-in? [this])
   (<log-in-w-token! [this token])
   (<log-out! [this])
@@ -317,8 +317,9 @@
   [:secret secret-schema])
 
 (l/def-record-schema log-in-ret-schema
-  [:subject-id subject-id-schema]
-  [:token token-schema])
+  [:subject-id (l/maybe subject-id-schema)]
+  [:token (l/maybe token-schema)]
+  [:was-successful l/boolean-schema])
 
 (l/def-record-schema add-subject-arg-schema
   [:identifier identifier-schema]
@@ -362,6 +363,10 @@
 (l/def-enum-schema branch-exists-schema
   :vivo/branch-exists)
 
+(l/def-record-schema change-secret-arg-schema
+  [:old-secret l/string-schema]
+  [:new-secret l/string-schema])
+
 (def create-branch-ret-schema
   (l/union-schema [branch-exists-schema l/boolean-schema]))
 
@@ -375,7 +380,7 @@
           :add-subject-identifier {:arg l/string-schema
                                    :ret l/boolean-schema
                                    :sender :client}
-          :change-secret {:arg l/string-schema
+          :change-secret {:arg change-secret-arg-schema
                           :ret l/boolean-schema
                           :sender :client}
           :get-schema-pcf {:arg l/long-schema
@@ -388,7 +393,7 @@
                       :ret get-state-ret-schema
                       :sender :client}
           :log-in {:arg log-in-arg-schema
-                   :ret (l/maybe log-in-ret-schema)
+                   :ret log-in-ret-schema
                    :sender :client}
           :log-in-w-token {:arg token-schema
                            :ret (l/maybe subject-id-schema)

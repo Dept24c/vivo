@@ -200,29 +200,23 @@
               writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
           (l/deserialize value-sch writer-sch (:bytes ret))))))
 
-  (log-in! [this identifier secret cb]
-    (when-not capsule-client
-      (throw
-       (ex-info (str "Can't log in because the :get-server-url "
-                     "option was not provided when the vivo-client was "
-                     "created.") {})))
-    (u/check-secret-len secret)
-    (ca/go
-      (try
-        (sr/flush! state-cache)
-        (sr/flush! sys-state-cache)
-        (au/<? (u/<wait-for-conn-init this))
-        (let [arg (u/sym-map identifier secret)
-              ret (au/<? (cc/<send-msg capsule-client :log-in arg))
-              {:keys [subject-id]} ret]
-          (when subject-id
-            (set-subject-id! subject-id))
-          (when cb
-            (cb ret)))
-        (catch #?(:cljs js/Error :clj Throwable) e
-          (log-error (str "Exception in log-in!" (u/ex-msg-and-stacktrace e)))
-          (when cb
-            (cb e))))))
+  (<log-in! [this identifier secret]
+    (au/go
+      (when-not capsule-client
+        (throw
+         (ex-info (str "Can't log in because the :get-server-url "
+                       "option was not provided when the vivo-client was "
+                       "created.") {})))
+      (u/check-secret-len secret)
+      (sr/flush! state-cache)
+      (sr/flush! sys-state-cache)
+      (au/<? (u/<wait-for-conn-init this))
+      (let [arg (u/sym-map identifier secret)
+            ret (au/<? (cc/<send-msg capsule-client :log-in arg))
+            {:keys [subject-id]} ret]
+        (when subject-id
+          (set-subject-id! subject-id))
+        ret)))
 
   (<log-in-w-token! [this token]
     (when-not capsule-client
@@ -244,7 +238,8 @@
       (sr/flush! state-cache)
       (sr/flush! sys-state-cache)
       (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
-        (log-info (str "Logout " (if ret "succeeded." "failed."))))))
+        (log-info (str "Logout " (if ret "succeeded." "failed.")))
+        ret)))
 
   (<log-out-w-token! [this token]
     (au/go
@@ -517,11 +512,12 @@
       (au/<? (cc/<send-msg capsule-client :add-subject
                            (u/sym-map identifier secret subject-id)))))
 
-  (<change-secret! [this new-secret]
-    (u/check-secret-len new-secret)
-    (when-not @*subject-id
-      (throw (ex-info "Must be logged in to change secret." {})))
-    (cc/<send-msg capsule-client :change-secret new-secret))
+  (<change-secret! [this old-secret new-secret]
+    (au/go
+      (u/check-secret-len old-secret)
+      (u/check-secret-len new-secret)
+      (au/<? (cc/<send-msg capsule-client :change-secret
+                           (u/sym-map old-secret new-secret)))))
 
   (<rpc [this rpc-name-kw arg timeout-ms]
     (au/go

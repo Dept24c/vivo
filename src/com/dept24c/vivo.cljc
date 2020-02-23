@@ -74,18 +74,9 @@
 (defn logged-in? [vc]
   (u/logged-in? vc))
 
-(defn log-in!
-  ([vc identifier secret]
-   (u/log-in! vc identifier secret nil))
-  ([vc identifier secret cb]
-   (u/log-in! vc identifier secret cb)))
-
 (defn <log-in!
   [vc identifier secret]
-  (let [ch (ca/chan)
-        cb #(ca/put! ch %)]
-    (u/log-in! vc identifier secret cb)
-    ch))
+  (u/<log-in! vc identifier secret))
 
 (defn <log-in-w-token!
   [vc token]
@@ -108,8 +99,8 @@
    (u/<add-subject! vc identifier secret subject-id)))
 
 (defn <change-secret!
-  [vc new-secret]
-  (u/<change-secret! vc new-secret))
+  [vc old-secret new-secret]
+  (u/<change-secret! vc old-secret new-secret))
 
 (defn <schema->fp
   "Get the fingerprint for the given schema and durably store the schema

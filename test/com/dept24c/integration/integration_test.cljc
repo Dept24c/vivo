@@ -264,8 +264,6 @@
          (finally
            (vivo/shutdown! vc)))))))
 
-;; TODO: Figure out why these tests cause errors
-#_
 (deftest test-secret-too-long
   (au/test-async
    10000
@@ -273,25 +271,63 @@
      (let [vc (vivo/vivo-client vc-opts)]
        (try
          (let [secret-len (inc u/max-secret-len)
-               long-secret (apply str (repeat secret-len "*"))]
-           (is (thrown-with-msg?
-                #?(:clj ExceptionInfo :cljs js/Error)
-                #"Secrets must not be longer than"
-                (au/<? (vivo/<add-subject! vc tu/test-identifier
-                                           long-secret
-                                           tu/test-subject-id))))
-           (is (thrown-with-msg?
-                #?(:clj ExceptionInfo :cljs js/Error)
-                #"Secrets must not be longer than"
-                (au/<? (au/<? (vivo/<log-in!
-                               vc tu/test-identifier long-secret)))))
-           (is (thrown-with-msg?
-                #?(:clj ExceptionInfo :cljs js/Error)
-                #"Secrets must not be longer than"
-                (au/<? (au/<? (vivo/<change-secret!
-                               vc long-secret))))))
+               long-secret (apply str (repeat secret-len "*"))
+               short-secret "short"
+               ;; Bizarrely, these `thrown-with-msg?` calls must be inside
+               ;; the `let` or they cause extraneous errors
+               _ (is (thrown-with-msg?
+                      #?(:clj ExceptionInfo :cljs js/Error)
+                      #"Secrets must not be longer than"
+                      (au/<? (vivo/<add-subject! vc nil long-secret nil))))
+               _ (is (thrown-with-msg?
+                      #?(:clj ExceptionInfo :cljs js/Error)
+                      #"Secrets must not be longer than"
+                      (au/<? (vivo/<log-in!
+                              vc tu/test-identifier long-secret))))
+               _ (is (thrown-with-msg?
+                      #?(:clj ExceptionInfo :cljs js/Error)
+                      #"Secrets must not be longer than"
+                      (au/<? (vivo/<change-secret!
+                              vc short-secret long-secret))))
+               _ (is (thrown-with-msg?
+                      #?(:clj ExceptionInfo :cljs js/Error)
+                      #"Secrets must not be longer than"
+                      (au/<? (vivo/<change-secret!
+                              vc long-secret short-secret))))])
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected (u/ex-msg e))))
+         (finally
+           (vivo/shutdown! vc)))))))
+
+(deftest test-change-secret
+  (au/test-async
+   10000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [sid (au/<? (vivo/<add-subject! vc tu/test-identifier
+                                              tu/test-secret
+                                              tu/test-subject-id))
+               _ (is (= tu/test-subject-id sid))
+               login-1-ret (au/<? (vivo/<log-in! vc tu/test-identifier
+                                                 tu/test-secret))
+               _ (is (= tu/test-subject-id (:subject-id login-1-ret)))
+               new-secret "new-secret!!"
+               change-ret (au/<? (vivo/<change-secret! vc tu/test-secret
+                                                       new-secret))
+               _ (is (= true change-ret))
+               logout-ret (au/<? (vivo/<log-out! vc))
+               _ (is (= true logout-ret))
+               login-2-ret (au/<? (vivo/<log-in! vc tu/test-identifier
+                                                 tu/test-secret))
+               _ (is (= false (:was-successful login-2-ret)))
+               login-3-ret (au/<? (vivo/<log-in! vc tu/test-identifier
+                                                 new-secret))]
+           (is (= true (:was-successful login-3-ret)))
+           (is (string? (:token login-3-ret)))
+           (is (= tu/test-subject-id (:subject-id login-3-ret))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
          (finally
            (vivo/shutdown! vc)))))))
 

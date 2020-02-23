@@ -379,13 +379,30 @@
                   subject-id branch conn-id))
     true)
 
-  (<change-secret [this new-secret metadata]
-    (let [{:keys [conn-id]} metadata
-          {:keys [branch subject-id]} (@*conn-id->info conn-id)
-          _ (u/check-secret-len new-secret)
-          hashed-secret (bcrypt/encrypt new-secret work-factor)]
-      (<modify-db this (partial <change-secret-update-fn hashed-secret)
-                  "Change secret" subject-id branch conn-id)))
+  (<change-secret [this arg metadata]
+    (au/go
+      (let [{:keys [old-secret new-secret]} arg
+            {:keys [conn-id]} metadata
+            {:keys [branch subject-id]} (@*conn-id->info conn-id)
+            _ (u/check-secret-len old-secret)
+            _ (u/check-secret-len new-secret)
+            branch-reference (branch->reference branch)
+            storage (get-storage this branch)
+            db-id (au/<? (u/<get-data-id storage branch-reference))
+            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
+            {sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
+            hashed-old-secret (when subject-id
+                                (au/<? (u/<get-in storage sid->hs-data-id
+                                                  u/string-map-schema
+                                                  [subject-id] nil)))]
+        (if-not (and hashed-old-secret
+                     (bcrypt/check old-secret hashed-old-secret))
+          false
+          (let [hashed-new-secret (bcrypt/encrypt new-secret work-factor)]
+            (au/<? (<modify-db this (partial <change-secret-update-fn
+                                             hashed-new-secret)
+                               "Change secret" subject-id branch conn-id))
+            true)))))
 
   (<create-branch [this arg metadata]
     (au/go
@@ -570,12 +587,16 @@
                                               u/string-map-schema
                                               [subject-id] nil)))]
         (u/check-secret-len secret)
-        (when (and hashed-secret
-                   (bcrypt/check secret hashed-secret))
+        (if-not (and hashed-secret
+                     (bcrypt/check secret hashed-secret))
+          {:subject-id nil
+           :token nil
+           :was-successful false}
           (let [token (generate-token)
                 expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
                                         login-lifetime-mins)
-                token-info (u/sym-map expiration-time-mins subject-id)]
+                token-info (u/sym-map expiration-time-mins subject-id)
+                was-successful true]
             (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
             (swap! *subject-id->conn-ids update subject-id
                    (fn [conn-ids]
@@ -583,7 +604,7 @@
             (au/<? (<modify-db this (partial <log-in-update-fn
                                              token token-info)
                                "Log in" subject-id branch conn-id))
-            (u/sym-map subject-id token))))))
+            (u/sym-map subject-id token was-successful))))))
 
   (<log-in-w-token [this token metadata]
     (au/go
@@ -625,7 +646,7 @@
                        " active connection(s)."))
         (ca/go
           ;; Wait for `true` response to be rcvd before closing conns
-          (ca/<! (ca/timeout 500))
+          (ca/<! (ca/timeout 5000))
           (doseq [conn-id conn-ids]
             (ep/close-conn sm-ep conn-id)))
         true)))
