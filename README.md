@@ -14,7 +14,9 @@
   * [unsubscribe!](#unsubscribe)
   * [update-state!](#update-state)
   * [use-vivo-state](#use-vivo-state)
+* [Development](#development)
 * [License](#license)
+
 
 
 # About
@@ -326,6 +328,28 @@ server.
 ```clojure
 (vivo/unsubscribe 789)
 ```
+
+# Development
+
+* Unit tests
+  * To run the clj unit tests:
+    `bin/kaocha unit`
+  * To run the cljs/node unit tests:
+  `bin/kaocha unit-node`
+  * To run the cljs/browser unit tests:
+  `bin/kaocha unit-browser`
+
+* Integration tests
+  * First, start the test server: `bin/run-test-server`
+  * To run the clj integration tests:
+    `bin/kaocha integration`
+  * To run the cljs/node integration tests:
+  `bin/kaocha integration-node`
+  * To run the cljs/browser integration tests:
+  `bin/kaocha integration-browser`
+
+
+
 
 # License
 Copyright Department 24C, LLC
