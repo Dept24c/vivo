@@ -46,6 +46,7 @@
   (<add-subject!
     [this identifier secret]
     [this identifier secret subject-id])
+  (<add-subject-identifier! [this identifier])
   (<change-secret! [this old-secret new-secret])
   (<deserialize-value [this path ret])
   (<get-in-sys-state [this db-id path])
@@ -65,6 +66,7 @@
   (<log-in-w-token! [this token])
   (<log-out! [this])
   (<log-out-w-token! [this token])
+  (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
   (ssr-get-state! [this sub-map resolution-map])
@@ -404,12 +406,15 @@
           :log-out-w-token {:arg token-schema
                             :ret l/boolean-schema
                             :sender :client}
-          :set-state-source {:arg state-source-schema
-                             :ret db-id-schema
-                             :sender :client}
+          :remove-subject-identifier {:arg identifier-schema
+                                      :ret l/boolean-schema
+                                      :sender :client}
           :rpc {:arg rpc-arg-schema
                 :ret rpc-ret-schema
                 :sender :client}
+          :set-state-source {:arg state-source-schema
+                             :ret db-id-schema
+                             :sender :client}
           :sys-state-changed {:arg sys-state-change-schema
                               :sender :server}
           ;; We need to return the state change from :update-state so

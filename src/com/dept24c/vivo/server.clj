@@ -37,6 +37,7 @@
   (<fp->schema [this fp conn-id])
   (<get-all-branches [this])
   (<get-db-id [this branch])
+  (<get-db-info [this branch storage])
   (<get-in [this db-id path])
   (<get-log [this branch limit])
   (<get-num-commits [this branch])
@@ -47,6 +48,7 @@
   (<log-out [this arg metadata])
   (<log-out-w-token [this token metadata])
   (<modify-db [this <update-fn msg subject-id branch conn-id])
+  (<remove-subject-identifier [this identifier metadata])
   (<rpc [this arg metadata])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
@@ -116,19 +118,56 @@
       {:dbi new-dbi
        :update-infos []})))
 
-(defn <change-secret-update-fn [hashed-secret dbi storage subject-id]
+(defn <remove-subject-identifier-update-fn [identifier dbi storage subject-id]
   (au/go
-    (let [{:keys [subject-id-to-hashed-secret-data-id]} dbi
+    (let [{:keys [identifier-to-subject-id-data-id]} dbi
           new-dbi (assoc dbi
-                         :subject-id-to-hashed-secret-data-id
+                         :identifier-to-subject-id-data-id
                          (:new-data-id
                           (au/<? (u/<update storage
-                                            subject-id-to-hashed-secret-data-id
+                                            identifier-to-subject-id-data-id
                                             u/string-map-schema
-                                            [{:path [subject-id]
-                                              :op :set
-                                              :arg hashed-secret}]
+                                            [{:path [identifier]
+                                              :op :remove}]
                                             nil))))]
+      {:dbi new-dbi
+       :update-infos []})))
+
+(defn <change-secret-update-fn [hashed-secret dbi storage subject-id]
+  (au/go
+    (let [{:keys [subject-id-to-hashed-secret-data-id
+                  subject-id-to-tokens-data-id
+                  token-to-token-info-data-id]} dbi
+          dbi* (assoc dbi
+                      :subject-id-to-hashed-secret-data-id
+                      (:new-data-id
+                       (au/<? (u/<update storage
+                                         subject-id-to-hashed-secret-data-id
+                                         u/string-map-schema
+                                         [{:path [subject-id]
+                                           :op :set
+                                           :arg hashed-secret}]
+                                         nil))))
+          ;; Invalidate existing tokens for this user
+          tokens (au/<? (u/<get-in storage subject-id-to-tokens-data-id
+                                   u/subject-id-to-tokens-schema
+                                   [subject-id] nil))
+          ;; Use loop here to stay in go block
+          new-dbi (loop [new-dbi dbi*
+                         [token & more] tokens]
+                    (let [new-dbi* (assoc new-dbi
+                                          :token-to-token-info-data-id
+                                          (:new-data-id
+                                           (au/<? (u/<update
+                                                   storage
+                                                   token-to-token-info-data-id
+                                                   u/token-map-schema
+                                                   [{:path [token]
+                                                     :op :remove}]
+                                                   nil))))]
+                      (if (seq more)
+                        (recur new-dbi* more)
+                        new-dbi*)))]
       {:dbi new-dbi
        :update-infos []})))
 
@@ -162,9 +201,6 @@
   (au/go
     (let [{:keys [token-to-token-info-data-id
                   subject-id-to-tokens-data-id]} dbi
-          tokens (au/<? (u/<get-in storage subject-id-to-tokens-data-id
-                                   u/subject-id-to-tokens-schema
-                                   [subject-id] nil))
           dbi* (assoc dbi
                       :subject-id-to-tokens-data-id
                       (:new-data-id
@@ -174,6 +210,9 @@
                                          [{:path [subject-id]
                                            :op :remove}]
                                          nil))))
+          tokens (au/<? (u/<get-in storage subject-id-to-tokens-data-id
+                                   u/subject-id-to-tokens-schema
+                                   [subject-id] nil))
           ;; Use loop here to stay in go block
           new-dbi (loop [new-dbi dbi*
                          [token & more] tokens]
@@ -346,6 +385,12 @@
           (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
         change-info)))
 
+  (<get-db-info [this branch storage]
+    (au/go
+      (let [branch-reference (branch->reference branch)
+            db-id (au/<? (u/<get-data-id storage branch-reference))]
+        (au/<? (u/<get-in storage db-id u/db-info-schema nil nil)))))
+
   (<add-subject* [this identifier secret subject-id branch conn-id]
     (au/go
       (u/check-secret-len secret)
@@ -367,17 +412,47 @@
       (u/check-secret-len secret)
       (<add-subject* this identifier secret subject-id branch conn-id)))
 
-
   (<add-subject-identifier [this identifier metadata]
-    (let [{:keys [conn-id]} metadata
-          {:keys [branch subject-id]} (@*conn-id->info conn-id)
-          identifier* (if login-identifier-case-sensitive?
-                        identifier
-                        (str/lower-case identifier))]
-      (<modify-db this (partial <add-subject-identifier-update-fn identifier*)
-                  (str "Add subject indentifier `" identifier*)
-                  subject-id branch conn-id))
-    true)
+    (au/go
+      (let [{:keys [conn-id]} metadata
+            {:keys [branch subject-id]} (@*conn-id->info conn-id)
+            identifier* (if login-identifier-case-sensitive?
+                          identifier
+                          (str/lower-case identifier))]
+        (if-not subject-id
+          false ;; Must be logged in
+          (do
+            (au/<? (<modify-db this
+                               (partial <add-subject-identifier-update-fn
+                                        identifier*)
+                               (str "Add subject indentifier `" identifier*)
+                               subject-id branch conn-id))
+            true)))))
+
+  (<remove-subject-identifier [this identifier metadata]
+    (au/go
+      (let [{:keys [conn-id]} metadata
+            {:keys [branch subject-id]} (@*conn-id->info conn-id)
+            storage (get-storage this branch)
+            db-info (au/<? (<get-db-info this branch storage))
+            id->sid-data-id (:identifier-to-subject-id-data-id db-info)
+            identifier* (if login-identifier-case-sensitive?
+                          identifier
+                          (str/lower-case identifier))
+            id-subject-id (au/<? (u/<get-in storage id->sid-data-id
+                                            u/string-map-schema
+                                            [identifier*] nil))
+            my-identifier? (and subject-id
+                                (= subject-id id-subject-id))]
+        (if-not my-identifier?
+          false
+          (do
+            (au/<? (<modify-db this
+                               (partial <remove-subject-identifier-update-fn
+                                        identifier*)
+                               (str "Remove subject indentifier `" identifier*)
+                               subject-id branch conn-id))
+            true)))))
 
   (<change-secret [this arg metadata]
     (au/go
@@ -573,10 +648,8 @@
             identifier* (if login-identifier-case-sensitive?
                           identifier
                           (str/lower-case identifier))
-            branch-reference (branch->reference branch)
             storage (get-storage this branch)
-            db-id (au/<? (u/<get-data-id storage branch-reference))
-            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
+            db-info (au/<? (<get-db-info this branch storage))
             {id->sid-data-id :identifier-to-subject-id-data-id
              sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
             subject-id (au/<? (u/<get-in storage id->sid-data-id
@@ -610,10 +683,8 @@
     (au/go
       (let [{:keys [conn-id]} metadata
             {:keys [branch]} (@*conn-id->info conn-id)
-            branch-reference (branch->reference branch)
             storage (get-storage this branch)
-            db-id (au/<? (u/<get-data-id storage branch-reference))
-            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
+            db-info (au/<? (<get-db-info this branch storage))
             {:keys [token-to-token-info-data-id]} db-info
             info (when token-to-token-info-data-id
                    (au/<? (u/<get-in storage token-to-token-info-data-id
@@ -655,10 +726,8 @@
     (au/go
       (let [{:keys [conn-id]} metadata
             {:keys [branch]} (@*conn-id->info conn-id)
-            branch-reference (branch->reference branch)
             storage (get-storage this branch)
-            db-id (au/<? (u/<get-data-id storage branch-reference))
-            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
+            db-info (au/<? (<get-db-info this branch storage))
             {:keys [token-to-token-info-data-id]} db-info
             info (when token-to-token-info-data-id
                    (au/<? (u/<get-in storage token-to-token-info-data-id
@@ -902,24 +971,27 @@
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn set-handlers! [vivo-server vc-ep admin-ep]
+  (ep/set-handler admin-ep :create-branch (partial <create-branch vivo-server))
+  (ep/set-handler admin-ep :delete-branch (partial <delete-branch vivo-server))
+
   (ep/set-handler vc-ep :add-subject (partial <add-subject vivo-server))
   (ep/set-handler vc-ep :add-subject-identifier
                   (partial <add-subject-identifier vivo-server))
   (ep/set-handler vc-ep :change-secret (partial <change-secret vivo-server))
   (ep/set-handler vc-ep :get-schema-pcf (partial <get-schema-pcf vivo-server))
-  (ep/set-handler vc-ep :store-schema-pcf
-                  (partial <store-schema-pcf vivo-server))
   (ep/set-handler vc-ep :get-state (partial <get-state vivo-server))
   (ep/set-handler vc-ep :log-in (partial <log-in vivo-server))
   (ep/set-handler vc-ep :log-in-w-token (partial <log-in-w-token vivo-server))
   (ep/set-handler vc-ep :log-out (partial <log-out vivo-server))
   (ep/set-handler vc-ep :log-out-w-token (partial <log-out-w-token vivo-server))
+  (ep/set-handler vc-ep :remove-subject-identifier
+                  (partial <remove-subject-identifier vivo-server))
+  (ep/set-handler vc-ep :rpc (partial <rpc vivo-server))
   (ep/set-handler vc-ep :set-state-source
                   (partial <set-state-source vivo-server))
-  (ep/set-handler vc-ep :update-state (partial <update-state vivo-server))
-  (ep/set-handler vc-ep :rpc (partial <rpc vivo-server))
-  (ep/set-handler admin-ep :create-branch (partial <create-branch vivo-server))
-  (ep/set-handler admin-ep :delete-branch (partial <delete-branch vivo-server)))
+  (ep/set-handler vc-ep :store-schema-pcf
+                  (partial <store-schema-pcf vivo-server))
+  (ep/set-handler vc-ep :update-state (partial <update-state vivo-server)))
 
 (defn vivo-server
   [config]

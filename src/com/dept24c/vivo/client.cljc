@@ -512,6 +512,17 @@
       (au/<? (cc/<send-msg capsule-client :add-subject
                            (u/sym-map identifier secret subject-id)))))
 
+  (<add-subject-identifier! [this identifier]
+    (au/go
+      (au/<? (u/<wait-for-conn-init this))
+      (au/<? (cc/<send-msg capsule-client :add-subject-identifier identifier))))
+
+  (<remove-subject-identifier! [this identifier]
+    (au/go
+      (au/<? (u/<wait-for-conn-init this))
+      (au/<? (cc/<send-msg capsule-client :remove-subject-identifier
+                           identifier))))
+
   (<change-secret! [this old-secret new-secret]
     (au/go
       (u/check-secret-len old-secret)

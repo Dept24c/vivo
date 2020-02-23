@@ -98,6 +98,12 @@
   ([vc identifier secret subject-id]
    (u/<add-subject! vc identifier secret subject-id)))
 
+(defn <add-subject-identifier! [vc identifier]
+  (u/<add-subject-identifier! vc identifier))
+
+(defn <remove-subject-identifier! [vc identifier]
+  (u/<remove-subject-identifier! vc identifier))
+
 (defn <change-secret!
   [vc old-secret new-secret]
   (u/<change-secret! vc old-secret new-secret))

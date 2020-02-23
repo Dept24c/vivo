@@ -55,7 +55,8 @@
       (fn [_]
         (let [stopper #(vivo/shutdown-server! server)]
           (u/configure-capsule-logging :info)
-          stopper))))))
+          stopper)))
+     nil)))
 
 (defn restart []
   (stop)
