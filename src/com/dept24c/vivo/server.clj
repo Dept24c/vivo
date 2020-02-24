@@ -751,7 +751,7 @@
                                (count conn-ids) " active connections."))
                 (ca/go
                   ;; Wait for `true` response to be rcvd before closing conns
-                  (ca/<! (ca/timeout 500))
+                  (ca/<! (ca/timeout 5000))
                   (doseq [conn-id conn-ids]
                     (log-info (str "Closing conn " conn-id))
                     (ep/close-conn sm-ep conn-id)))

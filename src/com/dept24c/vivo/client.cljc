@@ -570,7 +570,7 @@
 
 (defn <init-conn
   [capsule-client on-connect* sys-state-source log-error log-info *cur-db-id
-   *conn-initialized? set-subject-id!]
+   *conn-initialized?]
   (ca/go
     (try
       (let [db-id (au/<? (cc/<send-msg capsule-client :set-state-source
@@ -585,19 +585,19 @@
 
 (defn <on-connect
   [on-connect* sys-state-source log-error log-info *cur-db-id *conn-initialized?
-   set-subject-id! capsule-client]
+   capsule-client]
   (ca/go
     (try
       (au/<? (<init-conn capsule-client on-connect* sys-state-source log-error
-                         log-info *cur-db-id *conn-initialized?
-                         set-subject-id!))
+                         log-info *cur-db-id *conn-initialized?))
       (catch #?(:clj Exception :cljs js/Error) e
         (log-error (str "Error in <on-connect: "
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn on-disconnect
-  [on-disconnect* *conn-initialized? *cur-db-id capsule-client]
+  [on-disconnect* *conn-initialized? *cur-db-id set-subject-id! capsule-client]
   (on-disconnect*)
+  (set-subject-id! nil)
   (reset! *conn-initialized? false)
   (reset! *cur-db-id nil))
 
@@ -638,9 +638,10 @@
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect on-connect* sys-state-source
                                    log-error log-info *cur-db-id
-                                   *conn-initialized? set-subject-id!)
+                                   *conn-initialized?)
               :on-disconnect (partial on-disconnect on-disconnect*
-                                      *conn-initialized? *cur-db-id)}]
+                                      *conn-initialized? *cur-db-id
+                                      set-subject-id!)}]
     (cc/client get-server-url get-credentials
                u/client-server-protocol :client opts)))
 
@@ -673,6 +674,8 @@
         updates-ch (ca/chan (ca/sliding-buffer 100))
         updates-pub (ca/pub updates-ch (constantly :all))
         set-subject-id! (fn [subject-id]
+                          (println (str "###### vc set-subject-id!:"
+                                        (or subject-id "nil")))
                           (reset! *subject-id subject-id)
                           (ca/put! updates-ch
                                    {:update-infos [{:norm-path :vivo/subject-id
