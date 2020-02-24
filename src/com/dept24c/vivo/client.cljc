@@ -674,8 +674,6 @@
         updates-ch (ca/chan (ca/sliding-buffer 100))
         updates-pub (ca/pub updates-ch (constantly :all))
         set-subject-id! (fn [subject-id]
-                          (println (str "###### vc set-subject-id!:"
-                                        (or subject-id "nil")))
                           (reset! *subject-id subject-id)
                           (ca/put! updates-ch
                                    {:update-infos [{:norm-path :vivo/subject-id
