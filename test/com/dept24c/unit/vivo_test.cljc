@@ -302,7 +302,7 @@
 (deftest test-bad-insert*-on-map
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
-       #"does not point to a vector"
+       #"does not point to a sequence"
        (commands/insert* {:local {}} [:local 0] :local :insert-before :new))))
 
 (deftest test-bad-insert*-path
