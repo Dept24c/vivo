@@ -116,9 +116,9 @@
                          " or [:a :b :c 12]. Got: `" i "`.")
                     (u/sym-map parent-path i path op arg))))
         {:keys [norm-path val]} (get-in-state state parent-path prefix)
-        _ (when-not (or (vector? val) (nil? val))
+        _ (when-not (or (sequential? val) (nil? val))
             (throw (ex-info (str "Bad path in " op ". Path `" path "` does not "
-                                 "point to a vector. Got: `" val "`.")
+                                 "point to a sequence. Got: `" val "`.")
                             (u/sym-map op path val norm-path))))
         norm-i (if (nat-int? i)
                  i
