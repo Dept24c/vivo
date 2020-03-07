@@ -7,6 +7,7 @@
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.client :as cc]
+   [deercreeklabs.capsule.logging :as log]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]))
 
@@ -309,7 +310,7 @@
                   (recur new-acc (inc i))))))))))
 
   (subscribe!
-    [this sub-map initial-state update-fn* subscriber-name resolution-map]
+    [this sub-map initial-state update-fn subscriber-name resolution-map]
     (u/check-sub-map subscriber-name "subscriber" sub-map)
     (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
           <make-si (partial u/<make-state-info this ordered-pairs
@@ -327,7 +328,7 @@
             (sr/put! state-cache [sub-map (strip-fns resolution-map)]
                      cur-state)
             (when (not= initial-state cur-state)
-              (update-fn* cur-state))
+              (update-fn cur-state))
             (loop [paths-to-watch cur-paths]
               (let [[v ch] (au/alts? [update-sub-ch unsubscribe-ch])]
                 (when-not @*stopped?
@@ -347,7 +348,7 @@
                                             {:keys [state paths]} si]
                                         (when (not= @*last-state state)
                                           (reset! *last-state state)
-                                          (update-fn* state))
+                                          (update-fn state))
                                         paths))]
                       (recur new-paths)))))))
           (catch #?(:cljs js/Error :clj Exception) e
@@ -644,8 +645,6 @@
                                       set-subject-id!)}]
     (cc/client get-server-url get-credentials
                u/client-server-protocol :client opts)))
-
-
 
 (defn vivo-client [opts]
   (let [{:keys [get-server-url

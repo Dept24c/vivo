@@ -14,6 +14,7 @@
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.endpoint :as ep]
+   [deercreeklabs.capsule.logging :as log]
    [deercreeklabs.capsule.server :as cs]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr])
@@ -377,9 +378,9 @@
             storage (get-storage this branch)
             modify-ch (ca/chan)
             cb #(ca/put! modify-ch %)
-            info (u/sym-map cb branch-reference storage subject-id
-                            <update-fn msg)
-            _ (.add ^ConcurrentLinkedQueue modify-q info)
+            update-info (u/sym-map cb branch-reference storage subject-id
+                                   <update-fn msg)
+            _ (.add ^ConcurrentLinkedQueue modify-q update-info)
             change-info (au/<? modify-ch)]
         (doseq [conn-id* (disj (set conn-ids) conn-id)]
           (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
