@@ -118,6 +118,46 @@
          (finally
            (vivo/shutdown! vc)))))))
 
+(deftest ^:this test-subscriptions-evolution
+  (au/test-async
+   5000
+   (ca/go
+     (let [vc-opts2 {:get-server-url (make-get-server-url "vivo-client")
+                     :rpcs ss/rpcs2
+                     :sys-state-schema ss/state-schema2
+                     :sys-state-source {:temp-branch/db-id nil}}
+           vc (vivo/vivo-client vc-opts2)]
+       (try
+         (let [program-name "test-app"
+               program-name-ch (ca/chan 1)
+               users-ch (ca/chan 1)
+               users {user-bo-id user-bo}]
+           (vivo/subscribe! vc '{program-name [:sys :program-name]} nil
+                            (fn [df]
+                              (if-let [program-name (df 'program-name)]
+                                (ca/put! program-name-ch program-name)
+                                (ca/put! program-name-ch :no-name)))
+                            "test2a")
+           (vivo/subscribe! vc '{users [:sys :users]}
+                            nil
+                            (fn [{:syms [users]}]
+                              (ca/put! users-ch (if (seq users)
+                                                  users
+                                                  :no-users)))
+                            "test1a")
+           (is (= :no-name (au/<? program-name-ch))) ; initial result
+           (is (= :no-users (au/<? users-ch))) ; initial result
+           (is (= true (au/<? (vivo/<update-state!
+                               vc [{:path [:sys]
+                                    :op :set
+                                    :arg {:program-name program-name
+                                          :users users}}]))))
+           (is (= users (au/<? users-ch))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
 (deftest test-sequence-join
   (au/test-async
    10000

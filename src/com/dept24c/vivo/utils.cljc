@@ -392,7 +392,7 @@
                              :ret l/boolean-schema
                              :sender :client}
           :get-state {:arg get-state-arg-schema
-                      :ret get-state-ret-schema
+                      :ret (l/maybe get-state-ret-schema)
                       :sender :client}
           :log-in {:arg log-in-arg-schema
                    :ret log-in-ret-schema
@@ -502,22 +502,25 @@
             [] (cartesian-product colls))))
 
 (defn path->schema-path [path]
-  (reduce (fn [acc item]
-            (conj acc (if (sequential? item)
-                        (first item)
-                        item)))
-          [] path))
+  (mapv (fn [item]
+          (if (sequential? item)
+            (first item)
+            item))
+        path))
 
 (defn path->schema [path->schema-cache state-schema path]
-  (let [sch-path (path->schema-path path)
-        seq-path? (not= path sch-path)]
-    (or (sr/get path->schema-cache path)
-        (let [sch (l/schema-at-path state-schema sch-path)
-              sch* (if seq-path?
+  (or (when path->schema-cache
+        (sr/get path->schema-cache path))
+      (let [sch-path (path->schema-path path)
+            seq-path? (not= (vec path) sch-path)
+            sch (l/schema-at-path state-schema sch-path)
+            sch* (when sch
+                   (if seq-path?
                      (l/array-schema (l/maybe sch))
-                     sch)]
-          (sr/put! path->schema-cache path sch*)
-          sch*))))
+                     sch))]
+        (when path->schema-cache
+          (sr/put! path->schema-cache path sch*))
+        sch*)))
 
 (defn get-non-numeric-part [path]
   (take-while #(not (number? %)) path))

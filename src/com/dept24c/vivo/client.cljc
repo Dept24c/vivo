@@ -197,9 +197,10 @@
       (when ret
         (let [schema-path (rest path) ; Ignore :sys
               value-sch (u/path->schema path->schema-cache sys-state-schema
-                                        schema-path)
-              writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
-          (l/deserialize value-sch writer-sch (:bytes ret))))))
+                                        schema-path)]
+          (when value-sch
+            (let [writer-sch (au/<? (u/<fp->schema this (:fp ret)))]
+              (l/deserialize value-sch writer-sch (:bytes ret))))))))
 
   (<log-in! [this identifier secret]
     (au/go
@@ -447,7 +448,7 @@
                                        {} ch))
             _ (when (instance? #?(:cljs js/Error :clj Throwable) sucs-map)
                 (throw sucs-map))
-            sucs (map sucs-map (range (count sys-cmds)))]
+            sucs (keep sucs-map (range (count sys-cmds)))]
         (au/<? (cc/<send-msg capsule-client :update-state
                              sucs update-state-timeout-ms)))))
 
@@ -456,17 +457,15 @@
       (if-not (contains? cmd :arg)
         [i cmd]
         (let [{:keys [arg path]} cmd
-              arg-sch (or (sr/get path->schema-cache path)
-                          (let [schema-path (rest path) ; Ignore :sys
-                                sch (l/schema-at-path sys-state-schema
-                                                      schema-path)]
-                            (sr/put! path->schema-cache path sch)
-                            sch))
-              fp (au/<? (u/<schema->fp this arg-sch))
-              bytes (l/serialize arg-sch (:arg cmd))
-              scmd (assoc cmd :arg (u/sym-map fp bytes))]
-          (swap! *fp->schema assoc fp arg-sch)
-          [i scmd]))))
+              arg-sch (u/path->schema path->schema-cache sys-state-schema
+                                      (rest path))]
+          (if-not arg-sch
+            [i nil]
+            (let [fp (au/<? (u/<schema->fp this arg-sch))
+                  bytes (l/serialize arg-sch (:arg cmd))
+                  scmd (assoc cmd :arg (u/sym-map fp bytes))]
+              (swap! *fp->schema assoc fp arg-sch)
+              [i scmd]))))))
 
   (<get-in-sys-state [this db-id path]
     (when-not capsule-client
@@ -481,8 +480,9 @@
               (let [arg (u/sym-map db-id path)
                     ret (au/<? (cc/<send-msg capsule-client :get-state arg
                                              get-state-timeout-ms))
-                    v (if (#{:vivo/unauthorized :vivo/db-id-does-not-exist}
-                           ret)
+                    v (if (#{nil
+                             :vivo/unauthorized
+                             :vivo/db-id-does-not-exist} ret)
                         ret
                         (when ret
                           (au/<? (u/<deserialize-value this path ret))))]

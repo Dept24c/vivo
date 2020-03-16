@@ -637,9 +637,11 @@
             (let [schema-path (rest path) ; Ignore :sys
                   schema (u/path->schema path->schema-cache state-schema
                                          schema-path)
-                  fp (au/<? (u/<schema->fp perm-storage schema))]
-              {:fp fp
-               :bytes (l/serialize schema v)}))))))
+                  fp (when schema
+                       (au/<? (u/<schema->fp perm-storage schema)))]
+              (when schema
+                {:fp fp
+                 :bytes (l/serialize schema v)})))))))
 
   (<log-in [this arg metadata]
     (au/go
@@ -846,25 +848,26 @@
                i 0
                out []]
           (let [{:keys [path arg]} scmd
-                arg-sch (when arg
-                          (or (sr/get path->schema-cache path)
-                              (let [schema-path (rest path) ; Ignore :sys
-                                    sch (l/schema-at-path state-schema
-                                                          schema-path)]
-                                (sr/put! path->schema-cache path sch)
-                                sch)))
-                writer-arg-sch (when arg
-                                 (au/<? (<fp->schema this (:fp arg)
-                                                     conn-id)))
-                arg* (when arg
-                       (l/deserialize arg-sch writer-arg-sch (:bytes arg)))
-                cmd (cond-> scmd
-                      arg (assoc :arg arg*))
+                arg-sch (u/path->schema path->schema-cache state-schema
+                                        (rest path))  ; Ignore :sys
+
                 new-i (inc i)
-                new-out (conj out cmd)]
-            (if (> (count scmds) new-i)
-              (recur (nth scmds new-i) new-i new-out)
-              new-out))))))
+                last? (= (count scmds) new-i)]
+            (if-not arg-sch ; Skip cmd if we don't have schema (evolution)
+              (if last?
+                out
+                (recur (nth scmds new-i) new-i out))
+              (let [writer-arg-sch (when arg
+                                     (au/<? (<fp->schema this (:fp arg)
+                                                         conn-id)))
+                    arg* (when arg
+                           (l/deserialize arg-sch writer-arg-sch (:bytes arg)))
+                    cmd (cond-> scmd
+                          arg (assoc :arg arg*))
+                    new-out (conj out cmd)]
+                (if last?
+                  new-out
+                  (recur (nth scmds new-i) new-i new-out)))))))))
 
   (<update-state [this arg metadata]
     (au/go
