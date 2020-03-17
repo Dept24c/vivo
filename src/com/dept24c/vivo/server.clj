@@ -874,18 +874,20 @@
       (let [{:keys [conn-id]} metadata
             {:keys [subject-id branch]} (@*conn-id->info conn-id)
             update-cmds (au/<? (<scmds->cmds this arg conn-id))
-            all-authed? (loop [i 0] ; Use loop to stay in same go block
-                          (let [{:keys [path arg]} (nth update-cmds i)
-                                auth-ret (authorization-fn subject-id path
-                                                           :write arg)
-                                authed? (if (au/channel? auth-ret)
-                                          (au/<? auth-ret)
-                                          auth-ret)
-                                new-i (inc i)]
-                            (cond
-                              (not authed?) false
-                              (= (count update-cmds) new-i) true
-                              :else (recur new-i))))]
+            all-authed? (if (empty? update-cmds)
+                          true
+                          (loop [i 0] ; Use loop to stay in same go block
+                            (let [{:keys [path arg]} (nth update-cmds i)
+                                  auth-ret (authorization-fn subject-id path
+                                                             :write arg)
+                                  authed? (if (au/channel? auth-ret)
+                                            (au/<? auth-ret)
+                                            auth-ret)
+                                  new-i (inc i)]
+                              (cond
+                                (not authed?) false
+                                (= (count update-cmds) new-i) true
+                                :else (recur new-i)))))]
         (if-not all-authed?
           :vivo/unauthorized
           (au/<? (<modify-db this (partial <update-state-update-fn
