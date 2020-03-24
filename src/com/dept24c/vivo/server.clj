@@ -39,6 +39,7 @@
   (<get-all-branches [this])
   (<get-db-id [this branch])
   (<get-db-info [this branch storage])
+  (<get-in [this db-id path])
   (<get-log [this branch limit])
   (<get-num-commits [this branch])
   (<get-schema-pcf [this arg metadata])
@@ -558,6 +559,12 @@
     (let [storage (get-storage this branch)
           branch-reference (branch->reference branch)]
       (u/<get-data-id storage branch-reference)))
+
+  (<get-in [this db-id path]
+    (au/go
+      (-> (<get-state-and-expanded-path this db-id path)
+          (au/<?)
+          (first))))
 
   (<get-state-and-expanded-path [this db-id path]
     (au/go
