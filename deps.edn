@@ -2,7 +2,7 @@
  {binaryage/oops {:mvn/version "0.7.0"}
   com.cognitect.aws/api {:mvn/version "0.8.445"}
   com.cognitect.aws/dynamodb {:mvn/version "792.2.620.0"}
-  com.cognitect.aws/endpoints {:mvn/version "1.1.11.732"}
+  com.cognitect.aws/endpoints {:mvn/version "1.1.11.749"}
   crypto-password {:mvn/version "0.2.1"}
   deercreeklabs/capsule {:mvn/version "0.4.22"}
   deercreeklabs/stockroom {:mvn/version "0.3.4"}

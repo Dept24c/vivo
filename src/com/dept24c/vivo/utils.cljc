@@ -1,12 +1,13 @@
 (ns com.dept24c.vivo.utils
   (:require
+   [clojure.core.async :as ca]
    #?(:cljs [cljs.reader :as reader])
    #?(:clj [clojure.edn :as edn])
    #?(:cljs [clojure.pprint :as pprint])
    [clojure.set :as set]
    [clojure.string :as str]
    [deercreeklabs.async-utils :as au]
-   [deercreeklabs.capsule.logging :as logging]
+   [deercreeklabs.capsule.logging :as log]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]
    #?(:clj [puget.printer :refer [cprint cprint-str]])
@@ -49,7 +50,7 @@
   (<add-subject-identifier! [this identifier])
   (<change-secret! [this old-secret new-secret])
   (<deserialize-value [this path ret])
-  (<get-in-sys-state [this db-id path])
+  (<get-sys-state-and-expanded-path [this db-id path])
   (<make-state-info
     [this sub-map-or-ordered-pairs subscriber-name resolution-map]
     [this sub-map-or-ordered-pairs subscriber-name resolution-map
@@ -57,8 +58,6 @@
   (<ssr [this component-fn component-name static-markup?])
   (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this])
-  (get-cached-state [this sub-map resolution-map])
-  (get-local-state [this sub-map resolution-map component-name])
   (handle-sys-state-changed [this arg metadata])
   (handle-updates [this updates cb])
   (<log-in! [this identifier secret])
@@ -110,8 +109,8 @@
   ([]
    (configure-capsule-logging :debug))
   ([level]
-   (logging/add-log-reporter! :println logging/println-reporter)
-   (logging/set-log-level! level)))
+   (log/add-log-reporter! :println log/println-reporter)
+   (log/set-log-level! level)))
 
 (defn pprint [x]
   #?(:clj (.write *out* ^String (str (cprint-str x) "\n"))
@@ -297,10 +296,14 @@
 (l/def-enum-schema unauthorized-schema
   :vivo/unauthorized)
 
+(l/def-record-schema get-state-ret-value-schema
+  [:serialized-value serialized-value-schema]
+  [:expanded-path (l/array-schema augmented-path-schema)])
+
 (def get-state-ret-schema
   (l/union-schema [l/null-schema
                    unauthorized-schema
-                   serialized-value-schema]))
+                   get-state-ret-value-schema]))
 
 (l/def-record-schema update-info-schema
   [:norm-path path-schema]
@@ -447,18 +450,14 @@
       (throw (ex-info (str "Bad key `" sym "` in subscription map. Keys must "
                            "be symbols.")
                       {:bad-key sym})))
-    (when (and (not (sequential? path))
-               (not (#{:vivo/subject-id} path)))
+    (when (not (sequential? path))
       (throw (ex-info
-              (str "Bad path. Paths must be either a sequence or one of the "
-                   " special :vivo keywords (:vivo/subject-id, etc.)")
+              (str "Bad path. Paths must be sequences.")
               (sym-map sym path sub-map))))))
 
 (defn local-or-vivo-only? [sub-map]
   (reduce (fn [acc path]
-            (if (or
-                 (= :vivo/subject-id path)
-                 (= :local (first path)))
+            (if (#{:local :vivo/subject-id} (first path))
               acc
               (reduced false)))
           true (vals sub-map)))
@@ -470,54 +469,108 @@
           x (first colls)]
       (cons x more))))
 
-(defn parse-path [path]
-  (let [info (reduce
-              (fn [{:keys [template in-progress colls coll-index] :as acc} part]
-                (if-not (sequential? part)
-                  (update acc :in-progress conj part)
-                  (cond-> acc
-                    (seq in-progress) (update :template conj in-progress)
-                    (seq in-progress) (assoc :in-progress [])
-                    true (update :colls conj part)
-                    true (update :template conj coll-index)
-                    true (update :coll-index inc))))
-              {:template []
-               :in-progress []
-               :colls []
-               :coll-index 0}
-              path)
-        {:keys [in-progress]} info]
-    (cond-> info
-      (seq in-progress) (update :template conj in-progress)
-      true (select-keys [:template :colls]))))
+(defn <parse-path [<ks-at-path path]
+  (au/go
+    (let [path-len (count path)
+          init {:template []
+                :in-progress []
+                :colls []
+                :coll-index 0}
+          ;; Use loop to stay in go block
+          info (loop [acc init
+                      i 0]
+                 (let [part (nth path i)
+                       {:keys [in-progress coll-index]} acc
+                       part* (cond
+                               (set? part)
+                               (seq part)
 
-(defn expand-path [path]
-  (let [{:keys [template colls]} (parse-path path)]
-    (reduce (fn [acc combo]
-              (conj acc (vec (reduce (fn [acc* part]
-                                       (concat acc* (if (number? part)
-                                                      [(nth combo part)]
-                                                      part)))
-                                     '() template))))
-            [] (cartesian-product colls))))
+                               (= :vivo/* part)
+                               (au/<? (<ks-at-path in-progress))
 
-(defn path->schema-path [path]
-  (mapv (fn [item]
-          (if (sequential? item)
-            (first item)
-            item))
+                               :else
+                               part)
+                       new-acc (if-not (sequential? part*)
+                                 (update acc :in-progress conj part*)
+                                 (cond-> acc
+                                   (seq in-progress) (update :template
+                                                             conj in-progress)
+                                   (seq in-progress) (assoc :in-progress [])
+                                   true (update :colls conj part*)
+                                   true (update :template conj coll-index)
+                                   true (update :coll-index inc)))
+                       new-i (inc i)]
+                   (if (= path-len new-i)
+                     new-acc
+                     (recur new-acc new-i))))
+          {:keys [in-progress]} info]
+      (cond-> info
+        (seq in-progress) (update :template conj in-progress)
+        true (select-keys [:template :colls])))))
+
+(defn has-join? [path]
+  (some #(or (sequential? %)
+             (set? %)
+             (= :vivo/* %))
         path))
+
+(defn <expand-path [<ks-at-path path]
+  (au/go
+    (if-not (has-join? path)
+      [path]
+      (let [{:keys [template colls]} (au/<? (<parse-path <ks-at-path path))]
+        (map (fn [combo]
+               (vec (reduce (fn [acc part]
+                              (concat acc (if (number? part)
+                                            [(nth combo part)]
+                                            part)))
+                            '() template)))
+             (cartesian-product colls))))))
+
+(defn edn-sch->k [edn-sch]
+  (let [ret (cond
+              (sequential? edn-sch)  (reduce (fn [acc edn-sch*]
+                                               (if-let [k (edn-sch->k edn-sch*)]
+                                                 (reduced k)
+                                                 acc))
+                                             nil edn-sch)
+              (= :map (:type edn-sch)) "dummy string"
+              (= :array (:type edn-sch)) 0
+              :else nil)]
+    ret))
+
+(defn path->schema-path [state-schema path]
+  (reduce (fn [acc k]
+            (conj acc (cond
+                        (sequential? k)
+                        (first k)
+
+                        (= :vivo/* k)
+                        (edn-sch->k (l/edn (l/schema-at-path state-schema acc)))
+
+                        :else
+                        k)))
+          [] path))
 
 (defn path->schema [path->schema-cache state-schema path]
   (or (when path->schema-cache
         (sr/get path->schema-cache path))
-      (let [sch-path (path->schema-path path)
-            seq-path? (not= (vec path) sch-path)
-            sch (l/schema-at-path state-schema sch-path)
-            sch* (when sch
-                   (if seq-path?
-                     (l/array-schema (l/maybe sch))
-                     sch))]
+      (let [last-k (last path)
+            sch* (cond
+                   (= :vivo/keys last-k)
+                   (l/array-schema (l/union-schema
+                                    [l/int-schema l/string-schema]))
+
+                   (= :vivo/count last-k)
+                   l/int-schema
+
+                   :else
+                   (let [sch-path (path->schema-path state-schema path)
+                         sch (l/schema-at-path state-schema sch-path)]
+                     (when sch
+                       (if (has-join? path)
+                         (l/array-schema (l/maybe sch))
+                         sch))))]
         (when path->schema-cache
           (sr/put! path->schema-cache path sch*))
         sch*)))
@@ -537,18 +590,15 @@
 (defn update-sub?* [update-infos sub-path]
   (reduce (fn [acc {:keys [norm-path op] :as update-info}]
             (cond
-              (= :vivo/subject-id sub-path)
-              (if (= :vivo/subject-id norm-path)
+              (= [:vivo/subject-id] sub-path)
+              (if (= [:vivo/subject-id] norm-path)
                 (reduced true)
                 false)
 
-              (= :vivo/subject-id norm-path)
-              (if (= :vivo/subject-id sub-path)
+              (= [:vivo/subject-id] norm-path)
+              (if (= [:vivo/subject-id] sub-path)
                 (reduced true)
                 false)
-
-              (#{:vivo/subscriber-id :vivo/component-id}  sub-path)
-              false ;; subscriber never gets updated
 
               (or (some number? norm-path)
                   (some number? sub-path))
@@ -583,10 +633,11 @@
 (defn throw-bad-path-key [path k]
   (throw (ex-info
           (str "Illegal key `" k "` in path `" path "`. Only integers, "
-               "keywords, symbols, and strings are valid path keys.")
+               "strings, keywords, symbols, maps, sequences and sets are "
+               "valid path keys.")
           (sym-map k path))))
 
-(defn resolve-symbols-in-path [acc ordered-pairs subscriber-name path]
+(defn resolve-symbols-in-path [acc subscriber-name path]
   (when (sequential? path)
     (mapv (fn [k]
             (if (symbol? k)
@@ -594,15 +645,28 @@
               k))
           path)))
 
-(defn check-path [path sub-map]
-  (if (= :vivo/subject-id path)
-    path
-    (reduce (fn [acc k]
-              (if-not (or (nil? k) (keyword? k) (int? k)
-                          (string? k) (symbol? k) (sequential? k))
-                (throw-bad-path-key path k)
-                (conj acc k)))
-            [] path)))
+(defn terminal-kw? [k]
+  (boolean (#{:vivo/keys :vivo/count} k)))
+
+(defn check-key-types [path]
+  (doseq [k path]
+    (when (not (or (keyword? k)  (string? k) (int? k) (symbol? k) (nil? k)
+                   (sequential? k) (set? k)))
+      (throw-bad-path-key path k))))
+
+(defn check-terminal-kws [path]
+  (let [num-parts (count path)
+        last-i (dec num-parts)]
+    (doseq [i (range num-parts)]
+      (let [k (nth path i)]
+        (when (and (terminal-kw? k)
+                   (not= last-i i))
+          (throw (ex-info (str "`" k "` can only appear at the end of a path")
+                          (sym-map path k))))))))
+
+(defn check-path [path]
+  (check-key-types path)
+  (check-terminal-kws path))
 
 (defn sub-map->ordered-pairs [sub-map->op-cache sub-map]
   (or (sr/get sub-map->op-cache sub-map)
@@ -614,11 +678,12 @@
                               (str "All keys in sub-map must be symbols. Got `"
                                    sym "`.")
                               (sym-map sym sub-map))))
-                    (if (#{:vivo/subject-id} path)
+                    (if (= [:vivo/subject-id] path)
                       (update acc :sym->path assoc sym path)
-                      (let [[head & tail] (check-path path sub-map)
+                      (let [_ (check-path path)
+                            [head & tail] path
                             deps (filter symbol? path)]
-                        (when-not (#{:local :sys} head)
+                        (when-not (#{:local :sys :vivo/subject-id} head)
                           (throw-bad-path-root path))
                         (cond-> (update acc :sym->path assoc sym path)
                           (seq deps) (update :g #(reduce

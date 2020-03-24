@@ -9,6 +9,7 @@
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.baracus :as ba]
+   [deercreeklabs.capsule.logging :as log]
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]))
 
@@ -54,7 +55,8 @@
 
   (<write-data [this schema state]
     (au/go
-      (let [encoded (l/serialize schema state)
+      (let [edn-schema (l/edn schema)
+            encoded (l/serialize schema state)
             info-id (au/<? (u/<allocate-data-block-id data-block-storage))
             info {:schema-fp (au/<? (u/<schema->fp this schema))}
             block-size (- u/max-data-block-bytes 50)]

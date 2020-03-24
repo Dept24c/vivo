@@ -39,11 +39,11 @@
   (<get-all-branches [this])
   (<get-db-id [this branch])
   (<get-db-info [this branch storage])
-  (<get-in [this db-id path])
   (<get-log [this branch limit])
   (<get-num-commits [this branch])
   (<get-schema-pcf [this arg metadata])
   (<get-state [this arg metadata])
+  (<get-state-and-expanded-path [this db-id path])
   (<log-in [this arg metadata])
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
@@ -269,6 +269,7 @@
   [state-schema update-cmds tx-fns dbi storage subject-id]
   (au/go
     (let [{:keys [data-id]} dbi
+          state-edn-schema (l/edn state-schema)
           ret (au/<? (u/<update storage data-id state-schema
                                 update-cmds :sys tx-fns))
           {:keys [new-data-id update-infos]} ret]
@@ -558,7 +559,7 @@
           branch-reference (branch->reference branch)]
       (u/<get-data-id storage branch-reference)))
 
-  (<get-in [this db-id path]
+  (<get-state-and-expanded-path [this db-id path]
     (au/go
       (when-not (string? db-id)
         (throw (ex-info (str "Bad db-id `" db-id
@@ -573,25 +574,83 @@
                       temp-storage
                       perm-storage)
             data-id (au/<? (u/<get-in storage db-id u/db-info-schema
-                                      [:data-id] nil))]
-        (if-not data-id
-          :vivo/unauthorized ;; bad db-id
-          (if-not (some sequential? path)
-            (au/<? (u/<get-in storage data-id state-schema path* :sys))
-            (when-not (u/empty-sequence-in-path? path)
-              (let [expanded-paths (u/expand-path path*)
-                    num-results (count expanded-paths)]
-                ;; Use loop to stay in the go block
-                (loop [out []
-                       i 0]
-                  (let [expanded-path (nth expanded-paths i)
-                        v (au/<? (u/<get-in storage data-id state-schema
-                                            expanded-path :sys))
-                        new-out (conj out v)
-                        new-i (inc i)]
-                    (if (= num-results new-i)
-                      new-out
-                      (recur new-out new-i)))))))))))
+                                      [:data-id] nil))
+            <ks-at-path (fn [kw p]
+                          (au/go
+                            (let [coll (au/<? (u/<get-in storage data-id
+                                                         state-schema p :sys))]
+                              (cond
+                                (map? coll)
+                                (keys coll)
+
+                                (sequential? coll)
+                                (range (count coll))
+
+                                (nil? coll)
+                                []
+
+                                :else
+                                (throw
+                                 (ex-info
+                                  (str "`" kw "` is in path, but there is not "
+                                       "a collection at " p ".")
+                                  {:full-path path*
+                                   :missing-collection-path p}))))))
+            <count-at-path (fn [p]
+                             (au/go
+                               (let [coll (au/<? (u/<get-in storage data-id
+                                                            state-schema p
+                                                            :sys))]
+                                 (cond
+                                   (or (map? coll) (sequential? coll))
+                                   (count coll)
+
+                                   (nil? coll)
+                                   0
+
+                                   :else
+                                   (throw
+                                    (ex-info
+                                     (str ":vivo/count is in path, but there "
+                                          "is not a collection at " path* ".")
+                                     {:full-path path
+                                      :missing-collection-path path*}))))))
+            last-path-k (last path)]
+        (cond
+          (not data-id)
+          [:vivo/unauthorized [path*]] ;; bad db-id
+
+          (u/empty-sequence-in-path? path)
+          [nil [path]]
+
+          (u/terminal-kw? last-path-k)
+          (let [path* (butlast path)
+                val (case last-path-k
+                      :vivo/keys (au/<? (<ks-at-path :vivo/keys path*))
+                      :vivo/count (au/<? (<count-at-path path*)))]
+            [val [path]])
+
+          (u/has-join? path)
+          (when-not (u/empty-sequence-in-path? path*)
+            (let [expanded-path (au/<? (u/<expand-path
+                                        (partial <ks-at-path :vivo/*) path*))
+                  num-results (count expanded-path)]
+              ;; Use loop to stay in the go block
+              (loop [out []
+                     i 0]
+                (let [filled-in-path (nth expanded-path i)
+                      v (au/<? (u/<get-in storage data-id state-schema
+                                          filled-in-path :sys))
+                      new-out (conj out v)
+                      new-i (inc i)]
+                  (if (= num-results new-i)
+                    [new-out expanded-path]
+                    (recur new-out new-i))))))
+
+
+          :else
+          (let [val (au/<? (u/<get-in storage data-id state-schema path* :sys))]
+            [val [path]])))))
 
   (<get-log [this branch limit]
     (au/go
@@ -625,7 +684,7 @@
       (let [{:keys [path db-id]} arg
             {:keys [conn-id]} metadata
             {:keys [subject-id]} (@*conn-id->info conn-id)
-            v (au/<? (<get-in this db-id path))
+            [v xp] (au/<? (<get-state-and-expanded-path this db-id path))
             authorized? (let [ret (authorization-fn subject-id path :read v)]
                           (if (au/channel? ret)
                             (au/<? ret)
@@ -640,8 +699,9 @@
                   fp (when schema
                        (au/<? (u/<schema->fp perm-storage schema)))]
               (when schema
-                {:fp fp
-                 :bytes (l/serialize schema v)})))))))
+                {:serialized-value {:fp fp
+                                    :bytes (l/serialize schema v)}
+                 :expanded-path xp})))))))
 
   (<log-in [this arg metadata]
     (au/go
@@ -655,10 +715,11 @@
             db-info (au/<? (<get-db-info this branch storage))
             {id->sid-data-id :identifier-to-subject-id-data-id
              sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
-            subject-id (au/<? (u/<get-in storage id->sid-data-id
-                                         u/string-map-schema
-                                         [identifier*] nil))
-            hashed-secret (when subject-id
+            subject-id (when id->sid-data-id
+                         (au/<? (u/<get-in storage id->sid-data-id
+                                           u/string-map-schema
+                                           [identifier*] nil)))
+            hashed-secret (when (and subject-id sid->hs-data-id)
                             (au/<? (u/<get-in storage sid->hs-data-id
                                               u/string-map-schema
                                               [subject-id] nil)))]
@@ -765,7 +826,8 @@
       (let [{:keys [conn-id]} metadata
             perm-branch (:branch/name source)
             branch (if perm-branch
-                     (let [all-branches (set (au/<? (<get-all-branches this)))]
+                     (let [;;all-branches (set (au/<? (<get-all-branches this)))
+                           ]
                        ;; TODO: Fix <get-all-branches to use a scan,
                        ;;       then re-enable this
                        #_(when-not (all-branches perm-branch)

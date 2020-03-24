@@ -50,7 +50,7 @@
                last-msg-ch (ca/chan 1)
                all-msgs-ch (ca/chan 1)
                app-name-ch (ca/chan 1)
-               index-ch (ca/chan 1)
+               ;;index-ch (ca/chan 1)
                expected-all-msgs [{:text "A msg"
                                    :user {:name "Bo Johnson"
                                           :nickname "Bo"}}
@@ -78,16 +78,16 @@
                                 (ca/put! last-msg-ch last-msg)
                                 (ca/put! last-msg-ch :no-last)))
                             "test3")
-           (vivo/subscribe! vc '{uid->msgs [:sys :user-id-to-msgs]} nil
-                            (fn [{:syms [uid->msgs] :as df}]
-                              (if (seq uid->msgs)
-                                (ca/put! index-ch uid->msgs)
-                                (ca/put! index-ch :no-u->m)))
-                            "test4")
+           #_(vivo/subscribe! vc '{uid->msgs [:sys :user-id-to-msgs]} nil
+                              (fn [{:syms [uid->msgs] :as df}]
+                                (if (seq uid->msgs)
+                                  (ca/put! index-ch uid->msgs)
+                                  (ca/put! index-ch :no-u->m)))
+                              "test4")
            (is (= :no-msgs (au/<? all-msgs-ch))) ; initial subscription result
            (is (= :no-name (au/<? app-name-ch))) ; initial subscription result
            (is (= :no-last (au/<? last-msg-ch))) ; initial subscription result
-           (is (= :no-u->m (au/<? index-ch))) ; initial subscription result
+           ;;(is (= :no-u->m (au/<? index-ch))) ; initial subscription result
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys]
                                     :op :set
@@ -103,22 +103,22 @@
            (is (= expected-all-msgs (au/<? all-msgs-ch)))
            (is (= app-name (au/<? app-name-ch)))
            (is (= msg2 (au/<? last-msg-ch)))
-           (is (= {"1" [{:text "This is great" :user-id "1"}
-                        {:text "A msg" :user-id "1"}]}
-                  (au/<? index-ch)))
+           #_(is (= {"1" [{:text "This is great" :user-id "1"}
+                          {:text "A msg" :user-id "1"}]}
+                    (au/<? index-ch)))
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys :msgs -1]
                                     :op :remove}]))))
            (is (= msg (au/<? last-msg-ch)))
            (is (= 1 (count (au/<? all-msgs-ch))))
-           (is (= {"1" [{:text "A msg" :user-id "1"}]}
-                  (au/<? index-ch))))
+           #_(is (= {"1" [{:text "A msg" :user-id "1"}]}
+                    (au/<? index-ch))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
            (vivo/shutdown! vc)))))))
 
-(deftest ^:this test-subscriptions-evolution
+(deftest test-subscriptions-evolution
   (au/test-async
    5000
    (ca/go
@@ -274,6 +274,47 @@
          (finally
            (vivo/shutdown! vc)))))))
 
+(deftest test-kw-operators
+  (au/test-async
+   10000
+   (ca/go
+     (let [vc (vivo/vivo-client vc-opts)]
+       (try
+         (let [ch (ca/chan 1)
+               users {"123" {:name "Alice" :nickname "A"}
+                      "456" {:name "Bob" :nickname "Bobby"}
+                      "789" {:name "Candace" :nickname "Candy"}}
+               msgs [{:text "hi" :user-id "123"}
+                     {:text "there" :user-id "123"}]
+               sub-map '{num-users [:sys :users :vivo/count]
+                         user-ids [:sys :users :vivo/keys]
+                         user-names-1 [:sys :users user-ids :name]
+                         user-names-2 [:sys :users :vivo/* :name]
+                         num-msgs [:sys :msgs :vivo/count]
+                         msgs [:sys :msgs]
+                         msg-indices [:sys :msgs :vivo/keys]}
+               update-fn #(ca/put! ch %)
+               expected {'num-users 3
+                         'user-ids #{"123" "456" "789"}
+                         'user-names-1 #{"Alice" "Bob" "Candace"}
+                         'user-names-2 #{"Alice" "Bob" "Candace"}
+                         'num-msgs 2
+                         'msg-indices [0 1]
+                         'msgs msgs}]
+           (au/<? (vivo/<update-state! vc [{:path [:sys]
+                                            :op :set
+                                            :arg (u/sym-map msgs users)}]))
+           (vivo/subscribe! vc sub-map nil update-fn "test" {})
+           (is (= expected
+                  (-> (au/<? ch)
+                      (update 'user-ids set)
+                      (update 'user-names-1 set)
+                      (update 'user-names-2 set)))))
+         (catch #?(:clj Exception :cljs js/Error) e
+           (is (= :unexpected e)))
+         (finally
+           (vivo/shutdown! vc)))))))
+
 (deftest test-secret-too-long
   (au/test-async
    10000
@@ -394,7 +435,10 @@
      (let [vc (vivo/vivo-client vc-opts)
            vc2 (vivo/vivo-client vc-opts)]
        (try
-         (let [sid (au/<? (vivo/<add-subject! vc tu/test-identifier
+         (let [login-ret1 (au/<? (vivo/<log-in! vc tu/test-identifier
+                                                tu/test-secret))
+               _ (is (= false (:was-successful login-ret1)))
+               sid (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
                _ (is (string? sid))
@@ -415,9 +459,9 @@
                       #?(:clj ExceptionInfo :cljs js/Error)
                       #"RPC `:authed/inc` is unauthorized"
                       (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
-               login-ret (au/<? (vivo/<log-in! vc tu/test-identifier
-                                               tu/test-secret))
-               {:keys [subject-id token was-successful]} login-ret
+               login-ret2 (au/<? (vivo/<log-in! vc tu/test-identifier
+                                                tu/test-secret))
+               {:keys [subject-id token was-successful]} login-ret2
                _ (is (= true was-successful))
                _ (is (= tu/test-subject-id subject-id))
                _ (is (string? token))

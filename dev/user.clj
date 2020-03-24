@@ -44,7 +44,9 @@
                  :repository-name repository-name
                  :rpcs ss/rpcs
                  :state-schema ss/state-schema
-                 :tx-fns tx-fns}
+                 ;; TODO: Fix or remove tx-fns
+                 ;;:tx-fns tx-fns
+                 }
          server (vivo/vivo-server config)]
      (vivo/set-rpc-handler! server :inc (fn [arg metadata]
                                           (inc arg)))

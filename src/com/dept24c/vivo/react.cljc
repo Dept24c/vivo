@@ -75,22 +75,6 @@
   ([vc component-fn component-name static-markup?]
    (u/<ssr vc component-fn component-name static-markup?)))
 
-(defn local-or-vivo-only? [sub-map]
-  (reduce (fn [acc path]
-            (cond
-              (#{:vivo/component-id :vivo/subscriber-id} path)
-              (reduced false)
-
-              (= :vivo/subject-id path)
-              acc
-
-              (= :local (first path))
-              acc
-
-              :else
-              (reduced false)))
-          true (vals sub-map)))
-
 ;;;; Macros
 
 (defmacro def-component
@@ -113,16 +97,8 @@
    (use-vivo-state vc sub-map component-name {}))
   ([vc sub-map component-name resolution-map]
    #?(:cljs
-      (let [initial-state (cond
-                            (local-or-vivo-only? sub-map)
-                            (u/get-local-state vc sub-map resolution-map
-                                               component-name)
-
-                            (u/ssr? vc)
-                            (u/ssr-get-state! vc sub-map resolution-map)
-
-                            :else
-                            (u/get-cached-state vc sub-map resolution-map))
+      (let [initial-state (when (u/ssr? vc)
+                            (u/ssr-get-state! vc sub-map resolution-map))
             [state update-fn] (use-state initial-state)
             mounted? (use-ref true)
             effect (fn []

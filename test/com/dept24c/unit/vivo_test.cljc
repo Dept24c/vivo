@@ -12,6 +12,8 @@
      (:import
       (clojure.lang ExceptionInfo))))
 
+(u/configure-capsule-logging :debug)
+
 (deftest test-parse-def-component-args-no-docstring
   (let [arglist '[vc a b]
         sub-map '{x [:local :c]}
@@ -99,7 +101,7 @@
         bad-sub-map '{user-id [:local 8.9]}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"Only integers, keywords, symbols, and strings are valid path keys"
+         #"Only integers"
          (vivo/subscribe! vc bad-sub-map nil (constantly true) "test")))))
 
 (deftest test-subscribe!
@@ -299,6 +301,14 @@
          #"Paths must begin with "
          (vivo/subscribe! vc sub-map nil (constantly nil) "test")))))
 
+(deftest test-bad-path-root-in-sub-map-not-a-sequence
+  (let [vc (vivo/vivo-client)
+        sub-map '{subject-id :vivo/subject-id}]
+    (is (thrown-with-msg?
+         #?(:clj ExceptionInfo :cljs js/Error)
+         #"Paths must be sequences"
+         (vivo/subscribe! vc sub-map nil (constantly nil) "test")))))
+
 (deftest test-bad-insert*-on-map
   (is (thrown-with-msg?
        #?(:clj ExceptionInfo :cljs js/Error)
@@ -478,6 +488,74 @@
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
+(deftest test-set-join
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             my-book-ids #{"123" "789"}
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{my-books [:local :books my-book-ids]}
+             resolution-map {'my-book-ids my-book-ids}
+             update-fn #(ca/put! ch ('my-books %))
+             expected (vals (select-keys books my-book-ids))]
+         (au/<? (vivo/<update-state! vc [{:path [:local :books]
+                                          :op :set
+                                          :arg books}]))
+         (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
+         (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-kw-operators
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             msgs [{:text "hi" :user-id "123"}
+                   {:text "there" :user-id "123"}]
+             titles-set (set (map :title (vals books)))
+             sub-map '{books-map [:local :books]
+                       books-vals [:local :books :vivo/*]
+                       titles-1 [:local :books :vivo/* :title]
+                       book-ids [:local :books :vivo/keys]
+                       titles-2 [:local :books book-ids :title]
+                       num-books [:local :books :vivo/count]
+                       num-msgs [:local :msgs :vivo/count]
+                       msgs [:local :msgs]
+                       msg-indices [:local :msgs :vivo/keys]}
+             update-fn #(ca/put! ch %)
+             expected {'book-ids #{"123" "456" "789"}
+                       'books-map books
+                       'books-vals (set (vals books))
+                       'num-books 3
+                       'titles-1 titles-set
+                       'titles-2 titles-set
+                       'num-msgs 2
+                       'msg-indices [0 1]
+                       'msgs msgs}]
+         (au/<? (vivo/<update-state! vc [{:path [:local]
+                                          :op :set
+                                          :arg (u/sym-map books msgs)}]))
+         (vivo/subscribe! vc sub-map nil update-fn "test" {})
+         (is (= expected
+                (-> (au/<? ch)
+                    (update 'book-ids set)
+                    (update 'books-vals set)
+                    (update 'titles-1 set)
+                    (update 'titles-2 set)))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
 (deftest test-empty-sequence-join
   (au/test-async
    1000
@@ -524,36 +602,64 @@
     [:sibling nil] [:a :b] [:a :c]
     [:sibling nil] [:a :c :d] [:a :b :d]))
 
+(defn <mock-ks-at-path [path]
+  (au/go
+    nil))
+
 (deftest test-expand-path-1
-  (let [path [:x [:a :b]]
-        expected [[:x :a]
-                  [:x :b]]]
-    (is (= expected (u/expand-path path)))))
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [path [:x [:a :b]]
+             expected [[:x :a]
+                       [:x :b]]]
+         (is (= expected (au/<? (u/<expand-path <mock-ks-at-path path)))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
 
 (deftest test-expand-path-2
-  (let [path [:b [1 2] :c [3 5] :d]
-        expected [[:b 1 :c 3 :d]
-                  [:b 2 :c 3 :d]
-                  [:b 1 :c 5 :d]
-                  [:b 2 :c 5 :d]]]
-    (is (= expected (u/expand-path path)))))
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [path [:b [1 2] :c [3 5] :d]
+             expected [[:b 1 :c 3 :d]
+                       [:b 2 :c 3 :d]
+                       [:b 1 :c 5 :d]
+                       [:b 2 :c 5 :d]]]
+         (is (= expected (au/<? (u/<expand-path <mock-ks-at-path path)))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
 
 (deftest test-expand-path-3
-  (let [path [[1 2][3 5] :d]
-        expected [[1 3 :d]
-                  [2 3 :d]
-                  [1 5 :d]
-                  [2 5 :d]]]
-    (is (= expected (u/expand-path path)))))
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [path [[1 2][3 5] :d]
+             expected [[1 3 :d]
+                       [2 3 :d]
+                       [1 5 :d]
+                       [2 5 :d]]]
+         (is (= expected (au/<? (u/<expand-path <mock-ks-at-path path)))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
 
 (deftest test-expand-path-4
-  (let [path [:x ["1" "2"] :y [:a :b]]
-        expected
-        [[:x "1" :y :a]
-         [:x "2" :y :a]
-         [:x "1" :y :b]
-         [:x "2" :y :b]]]
-    (is (= expected (u/expand-path path)))))
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [path [:x ["1" "2"] :y [:a :b]]
+             expected
+             [[:x "1" :y :a]
+              [:x "2" :y :a]
+              [:x "1" :y :b]
+              [:x "2" :y :b]]]
+         (is (= expected (au/<? (u/<expand-path <mock-ks-at-path path)))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
 
 (deftest test-update-sub?-numeric
   (let [update-infos [{:norm-path [:sys 0]
