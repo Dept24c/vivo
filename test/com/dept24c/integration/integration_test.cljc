@@ -281,15 +281,16 @@
      (let [vc (vivo/vivo-client vc-opts)]
        (try
          (let [ch (ca/chan 1)
-               users {"123" {:name "Alice" :nickname "A"}
-                      "456" {:name "Bob" :nickname "Bobby"}
-                      "789" {:name "Candace" :nickname "Candy"}}
+               users {"123" {:name "Alice" :nickname "A" :fav-nums [1 2]}
+                      "456" {:name "Bob" :nickname "Bobby" :fav-nums [10 20]}
+                      "789" {:name "Candace" :nickname "Candy" :fav-nums [3 4]}}
                msgs [{:text "hi" :user-id "123"}
                      {:text "there" :user-id "123"}]
                sub-map '{num-users [:sys :users :vivo/count]
                          user-ids [:sys :users :vivo/keys]
                          user-names-1 [:sys :users user-ids :name]
                          user-names-2 [:sys :users :vivo/* :name]
+                         fav-nums [:sys :users :vivo/* :fav-nums :vivo/concat]
                          num-msgs [:sys :msgs :vivo/count]
                          msgs [:sys :msgs]
                          msg-indices [:sys :msgs :vivo/keys]}
@@ -298,6 +299,7 @@
                          'user-ids #{"123" "456" "789"}
                          'user-names-1 #{"Alice" "Bob" "Candace"}
                          'user-names-2 #{"Alice" "Bob" "Candace"}
+                         'fav-nums #{1 2 10 20 3 4}
                          'num-msgs 2
                          'msg-indices [0 1]
                          'msgs msgs}]
@@ -309,7 +311,8 @@
                   (-> (au/<? ch)
                       (update 'user-ids set)
                       (update 'user-names-1 set)
-                      (update 'user-names-2 set)))))
+                      (update 'user-names-2 set)
+                      (update 'fav-nums set)))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally

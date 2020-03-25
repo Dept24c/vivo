@@ -353,6 +353,62 @@
           (log-error "Unexpected error in txn-loop: %s"
                      (u/ex-msg-and-stacktrace e)))))))
 
+(defn <ks-at-path [kw <get-at-path p full-path]
+  (au/go
+    (let [coll (au/<? (<get-at-path p))]
+      (cond
+        (map? coll)
+        (keys coll)
+
+        (sequential? coll)
+        (range (count coll))
+
+        (nil? coll)
+        []
+
+        :else
+        (throw
+         (ex-info
+          (str "`" kw "` is in path, but there is not "
+               "a collection at " p ".")
+          {:full-path full-path
+           :missing-collection-path p
+           :value coll}))))))
+
+(defn <count-at-path [<get-at-path p full-path]
+  (au/go
+    (let [coll (au/<? (<get-at-path p))]
+      (cond
+        (or (map? coll) (sequential? coll))
+        (count coll)
+
+        (nil? coll)
+        0
+
+        :else
+        (throw
+         (ex-info
+          (str "`:vivo/count` terminates path, but "
+               "there is not a collection at " p ".")
+          {:full-path full-path
+           :missing-collection-path p
+           :value coll}))))))
+
+(defn <do-concat [<get-at-path p full-path]
+  (au/go
+    (let [seqs (au/<? (<get-at-path p))]
+      (when (or (not (sequential? seqs))
+                (not (sequential? (first seqs))))
+        (throw
+         (ex-info
+          (str "`:vivo/concat` terminates path, but there "
+               "is not a sequence of sequences at "
+               p ".")
+          {:full-path full-path
+           :missing-collection-path p
+           :value seqs})))
+      (apply concat seqs))))
+
 (defrecord VivoServer [authorization-fn
                        log-error
                        log-info
@@ -576,71 +632,45 @@
         (throw (ex-info (str "Bad path `" path
                              "`. Path must be nil or a sequence.")
                         {:path path})))
-      (let [path* (or path [:sys])
+      (let [path (or path [:sys])
             storage (if (block-ids/temp-block-id? db-id)
                       temp-storage
                       perm-storage)
             data-id (au/<? (u/<get-in storage db-id u/db-info-schema
                                       [:data-id] nil))
-            <ks-at-path (fn [kw p]
-                          (au/go
-                            (let [coll (au/<? (u/<get-in storage data-id
-                                                         state-schema p :sys))]
-                              (cond
-                                (map? coll)
-                                (keys coll)
 
-                                (sequential? coll)
-                                (range (count coll))
-
-                                (nil? coll)
-                                []
-
-                                :else
-                                (throw
-                                 (ex-info
-                                  (str "`" kw "` is in path, but there is not "
-                                       "a collection at " p ".")
-                                  {:full-path path*
-                                   :missing-collection-path p}))))))
-            <count-at-path (fn [p]
-                             (au/go
-                               (let [coll (au/<? (u/<get-in storage data-id
-                                                            state-schema p
-                                                            :sys))]
-                                 (cond
-                                   (or (map? coll) (sequential? coll))
-                                   (count coll)
-
-                                   (nil? coll)
-                                   0
-
-                                   :else
-                                   (throw
-                                    (ex-info
-                                     (str ":vivo/count is in path, but there "
-                                          "is not a collection at " path* ".")
-                                     {:full-path path
-                                      :missing-collection-path path*}))))))
-            last-path-k (last path)]
+            <get-at-path #(u/<get-in storage data-id state-schema % :sys)
+            last-path-k (last path)
+            join? (u/has-join? path)
+            term-kw? (u/terminal-kw? last-path-k)]
         (cond
           (not data-id)
-          [:vivo/unauthorized [path*]] ;; bad db-id
+          [:vivo/unauthorized [path]] ;; bad db-id
 
           (u/empty-sequence-in-path? path)
           [nil [path]]
 
-          (u/terminal-kw? last-path-k)
-          (let [path* (butlast path)
-                val (case last-path-k
-                      :vivo/keys (au/<? (<ks-at-path :vivo/keys path*))
-                      :vivo/count (au/<? (<count-at-path path*)))]
+          (and (not term-kw?) (not join?))
+          (let [val (au/<? (<get-at-path path))]
             [val [path]])
 
-          (u/has-join? path)
-          (when-not (u/empty-sequence-in-path? path*)
+          (and term-kw? (not join?))
+          (let [path* (butlast path)
+                val (case last-path-k
+                      :vivo/keys (au/<? (<ks-at-path :vivo/keys <get-at-path
+                                                     path* path))
+                      :vivo/count (au/<? (<count-at-path <get-at-path
+                                                         path* path))
+                      :vivo/concat (au/<? (<do-concat <get-at-path
+                                                      path* path)))]
+            [val [path]])
+
+          (and (not term-kw?) join?)
+          (when-not (u/empty-sequence-in-path? path)
             (let [expanded-path (au/<? (u/<expand-path
-                                        (partial <ks-at-path :vivo/*) path*))
+                                        #(<ks-at-path :vivo/* <get-at-path
+                                                      % path)
+                                        path))
                   num-results (count expanded-path)]
               ;; Use loop to stay in the go block
               (loop [out []
@@ -654,10 +684,27 @@
                     [new-out expanded-path]
                     (recur new-out new-i))))))
 
-
-          :else
-          (let [val (au/<? (u/<get-in storage data-id state-schema path* :sys))]
-            [val [path]])))))
+          (and term-kw? join?)
+          (let [expanded-path (au/<? (u/<expand-path
+                                      #(<ks-at-path :vivo/* <get-at-path
+                                                    % path)
+                                      (butlast path)))
+                num-results (count expanded-path)
+                results (loop [out []
+                               i 0]
+                          (let [filled-in-path (nth expanded-path i)
+                                v (au/<? (u/<get-in storage data-id state-schema
+                                                    filled-in-path :sys))
+                                new-out (conj out v)
+                                new-i (inc i)]
+                            (if (= num-results new-i)
+                              new-out
+                              (recur new-out new-i))))
+                value (case last-path-k
+                        :vivo/keys (range (count results))
+                        :vivo/count (count results)
+                        :vivo/concat (apply concat results))]
+            [value expanded-path])))))
 
   (<get-log [this branch limit]
     (au/go

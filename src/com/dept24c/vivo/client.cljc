@@ -53,62 +53,82 @@
                                  0
                                  new-sub-id))))))
 
+(defn count-at-path [state path prefix]
+  (let [coll (:val (commands/get-in-state state path prefix))]
+    (cond
+      (or (map? coll) (sequential? coll))
+      (count coll)
+
+      (nil? coll)
+      0
+
+      :else
+      (throw
+       (ex-info
+        (str "`:vivo/count` terminates path, but there is not a collection at "
+             path ".")
+        {:path path
+         :value coll})))))
+
+(defn do-concat [state path prefix]
+  (let [seqs (:val (commands/get-in-state state path prefix))]
+    (when (or (not (sequential? seqs))
+              (not (sequential? (first seqs))))
+      (throw
+       (ex-info
+        (str "`:vivo/concat` terminates path, but there "
+             "is not a sequence of sequences at " path ".")
+        {:path path
+         :value seqs})))
+    (apply concat seqs)))
+
+(defn <ks-at-path [kw state path prefix full-path]
+  (au/go
+    (let [coll (:val (commands/get-in-state state path prefix))]
+      (cond
+        (map? coll)
+        (keys coll)
+
+        (sequential? coll)
+        (range (count coll))
+
+        (nil? coll)
+        []
+
+        :else
+        (throw
+         (ex-info
+          (str "`" kw "` is in the path, but "
+               "there is not a collection at " path ".")
+          {:full-path full-path
+           :missing-collection-path path
+           :value coll}))))))
+
 (defn <get-state-and-expanded-path [state path prefix]
   (au/go
-    (let [<ks-at-path (fn [kw path*]
-                        (au/go
-                          (let [coll (:val (commands/get-in-state
-                                            state path* prefix))]
-                            (cond
-                              (map? coll)
-                              (keys coll)
-
-                              (sequential? coll)
-                              (range (count coll))
-
-                              (nil? coll)
-                              []
-
-                              :else
-                              (throw
-                               (ex-info
-                                (str "`" kw "` is at the end of the path, but "
-                                     "there is not a collection at " path* ".")
-                                {:full-path path
-                                 :missing-collection-path path*}))))))
-          <count-at-path (fn [path*]
-                           (au/go
-                             (let [coll (:val (commands/get-in-state
-                                               state path* prefix))]
-                               (cond
-                                 (or (map? coll) (sequential? coll))
-                                 (count coll)
-
-                                 (nil? coll)
-                                 0
-
-                                 :else
-                                 (throw
-                                  (ex-info
-                                   (str ":vivo/count is in path, but there "
-                                        "is not a collection at " path* ".")
-                                   {:full-path path
-                                    :missing-collection-path path*}))))))
-          last-path-k (last path)]
+    (let [last-path-k (last path)
+          <ks-at-path* #(<ks-at-path :vivo/* state % prefix path)
+          join? (u/has-join? path)
+          term-kw? (u/terminal-kw? last-path-k)]
       (cond
         (u/empty-sequence-in-path? path)
         [nil [path]]
 
-        (u/terminal-kw? last-path-k)
+        (and (not term-kw?) (not join?))
+        (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
+          [val [norm-path]])
+
+        (and term-kw? (not join?))
         (let [path* (butlast path)
               val (case last-path-k
-                    :vivo/keys (au/<? (<ks-at-path :vivo/keys path*))
-                    :vivo/count (au/<? (<count-at-path path*)))]
+                    :vivo/keys (au/<? (<ks-at-path :vivo/keys state path* prefix
+                                                   path))
+                    :vivo/count (count-at-path state path* prefix)
+                    :vivo/concat (do-concat state path* prefix))]
           [val [path]])
 
-        (u/has-join? path)
-        (let [xpath (au/<? (u/<expand-path (partial <ks-at-path :vivo/*)
-                                           path))
+        (and (not term-kw?) join?)
+        (let [xpath (au/<? (u/<expand-path <ks-at-path* path))
               num-results (count xpath)]
           ;; Use loop to stay in go block
           (loop [out []
@@ -122,9 +142,24 @@
                 (recur new-out new-i)
                 [new-out xpath]))))
 
-        :else
-        (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
-          [val [norm-path]])))))
+        (and term-kw? join?)
+        (let [xpath (au/<? (u/<expand-path <ks-at-path* (butlast path)))
+              num-results (count xpath)
+              results (loop [out [] ;; Use loop to stay in go block
+                             i 0]
+                        (let [path* (nth xpath i)
+                              ret (au/<? (<get-state-and-expanded-path
+                                          state path* prefix))
+                              new-out (conj out (first ret))
+                              new-i (inc i)]
+                          (if (not= num-results new-i)
+                            (recur new-out new-i)
+                            new-out)))
+              v (case last-path-k
+                  :vivo/keys (range (count results))
+                  :vivo/count (count results)
+                  :vivo/concat (apply concat results))]
+          [v xpath])))))
 
 (defn eval-cmds [initial-state cmds prefix]
   (reduce (fn [{:keys [state] :as acc} cmd]
@@ -313,7 +348,8 @@
           init
           (let [ordered-pairs (if (map? sub-map-or-ordered-pairs)
                                 (u/sub-map->ordered-pairs
-                                 sub-map->op-cache sub-map-or-ordered-pairs)
+                                 sub-map->op-cache
+                                 sub-map-or-ordered-pairs)
                                 sub-map-or-ordered-pairs)
                 num-pairs (count ordered-pairs)
                 sub-keys (map first ordered-pairs)]
@@ -326,17 +362,17 @@
                     [path-head & path-tail] resolved-path
                     [v xp] (cond
                              (= [:vivo/subject-id] path)
-                             [@*subject-id [:vivo/subject-id]]
+                             [@*subject-id [[:vivo/subject-id]]]
 
                              (some nil? resolved-path)
-                             [nil resolved-path]
+                             [nil [resolved-path]]
 
                              (= :local path-head)
                              (au/<? (<get-state-and-expanded-path
                                      local-state resolved-path :local))
 
                              (= :sys path-head)
-                             (if (and db-id (not @*stopped?))
+                             (when (and db-id (not @*stopped?))
                                (au/<? (u/<get-sys-state-and-expanded-path
                                        this db-id resolved-path))))
                     new-acc (-> acc

@@ -518,9 +518,9 @@
      (try
        (let [vc (vivo/vivo-client)
              ch (ca/chan 1)
-             books {"123" {:title "Treasure Island"}
-                    "456" {:title "Kidnapped"}
-                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             books {"123" {:title "Treasure Island" :nums [2 4 6]}
+                    "456" {:title "Kidnapped" :nums [1 3]}
+                    "789" {:title "Dr Jekyll and Mr Hyde" :nums [5 7]}}
              msgs [{:text "hi" :user-id "123"}
                    {:text "there" :user-id "123"}]
              titles-set (set (map :title (vals books)))
@@ -530,14 +530,18 @@
                        book-ids [:local :books :vivo/keys]
                        titles-2 [:local :books book-ids :title]
                        num-books [:local :books :vivo/count]
+                       num-books-2 [:local :books :vivo/* :vivo/count]
                        num-msgs [:local :msgs :vivo/count]
+                       book-nums [:local :books :vivo/* :nums :vivo/concat]
                        msgs [:local :msgs]
                        msg-indices [:local :msgs :vivo/keys]}
              update-fn #(ca/put! ch %)
              expected {'book-ids #{"123" "456" "789"}
                        'books-map books
                        'books-vals (set (vals books))
-                       'num-books 3
+                       'num-books (count books)
+                       'num-books-2 (count books)
+                       'book-nums #{2 4 6 1 3 5 7}
                        'titles-1 titles-set
                        'titles-2 titles-set
                        'num-msgs 2
@@ -551,6 +555,7 @@
                 (-> (au/<? ch)
                     (update 'book-ids set)
                     (update 'books-vals set)
+                    (update 'book-nums set)
                     (update 'titles-1 set)
                     (update 'titles-2 set)))))
        (catch #?(:clj Exception :cljs js/Error) e

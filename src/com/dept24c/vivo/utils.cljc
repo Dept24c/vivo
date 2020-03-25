@@ -552,28 +552,33 @@
                         k)))
           [] path))
 
+(defn path->schema* [state-schema path]
+  (let [sch-path (path->schema-path state-schema path)]
+    (l/schema-at-path state-schema sch-path)))
+
 (defn path->schema [path->schema-cache state-schema path]
   (or (when path->schema-cache
         (sr/get path->schema-cache path))
       (let [last-k (last path)
-            sch* (cond
-                   (= :vivo/keys last-k)
-                   (l/array-schema (l/union-schema
-                                    [l/int-schema l/string-schema]))
+            sch (cond
+                  (= :vivo/keys last-k)
+                  (l/array-schema (l/union-schema
+                                   [l/int-schema l/string-schema]))
 
-                   (= :vivo/count last-k)
-                   l/int-schema
+                  (= :vivo/count last-k)
+                  l/int-schema
 
-                   :else
-                   (let [sch-path (path->schema-path state-schema path)
-                         sch (l/schema-at-path state-schema sch-path)]
-                     (when sch
-                       (if (has-join? path)
-                         (l/array-schema (l/maybe sch))
-                         sch))))]
+                  (= :vivo/concat last-k)
+                  (path->schema* state-schema (butlast path))
+
+                  :else
+                  (when-let [sch* (path->schema* state-schema path)]
+                    (if (has-join? path)
+                      (l/array-schema (l/maybe sch*))
+                      sch*)))]
         (when path->schema-cache
-          (sr/put! path->schema-cache path sch*))
-        sch*)))
+          (sr/put! path->schema-cache path sch))
+        sch)))
 
 (defn get-non-numeric-part [path]
   (take-while #(not (number? %)) path))
@@ -618,6 +623,11 @@
 
 (defn update-sub? [update-infos sub-paths]
   (reduce (fn [acc sub-path]
+            (when-not (sequential? sub-path)
+              (log/info (str "UUUU update-sub?:\n"
+                             (pprint-str
+                              (sym-map sub-path sub-paths))))
+              (throw (ex-info "asdfx" {})))
             (if (update-sub?* update-infos sub-path)
               (reduced true)
               false))
@@ -646,7 +656,7 @@
           path)))
 
 (defn terminal-kw? [k]
-  (boolean (#{:vivo/keys :vivo/count} k)))
+  (boolean (#{:vivo/keys :vivo/count :vivo/concat} k)))
 
 (defn check-key-types [path]
   (doseq [k path]

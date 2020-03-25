@@ -4,7 +4,8 @@
 
 (l/def-record-schema user-schema
   [:name l/string-schema]
-  [:nickname l/string-schema])
+  [:nickname l/string-schema]
+  [:fav-nums (l/array-schema l/int-schema)])
 
 (l/def-record-schema msg-schema
   [:user-id l/string-schema]
