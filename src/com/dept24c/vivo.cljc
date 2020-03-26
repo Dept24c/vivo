@@ -104,6 +104,9 @@
 (defn <remove-subject-identifier! [vc identifier]
   (u/<remove-subject-identifier! vc identifier))
 
+(defn <get-subject-id-for-identifier [vc identifier]
+  (u/<get-subject-id-for-identifier vc identifier))
+
 (defn <change-secret!
   [vc old-secret new-secret]
   (u/<change-secret! vc old-secret new-secret))

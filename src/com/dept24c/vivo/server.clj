@@ -45,6 +45,7 @@
   (<get-schema-pcf [this arg metadata])
   (<get-state [this arg metadata])
   (<get-state-and-expanded-path [this db-id path])
+  (<get-subject-id-for-identifier [this identifier branch])
   (<log-in [this arg metadata])
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
@@ -757,6 +758,14 @@
                                     :bytes (l/serialize schema v)}
                  :expanded-path xp})))))))
 
+  (<get-subject-id-for-identifier [this identifier branch]
+    (au/go
+      (let [storage (get-storage this branch)
+            db-info (au/<? (<get-db-info this branch storage))
+            id->sid-data-id (:identifier-to-subject-id-data-id db-info)]
+        (au/<? (u/<get-in storage id->sid-data-id
+                          u/string-map-schema [identifier] nil)))))
+
   (<log-in [this arg metadata]
     (au/go
       (let [{:keys [identifier secret]} arg
@@ -1092,6 +1101,10 @@
         (log-error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
                         (u/ex-msg-and-stacktrace e)))))))
 
+(defn <get-subject-id-for-identifier* [vivo-server identifier metadata]
+  (let [{:keys [branch]} (@(:*conn-id->info vivo-server) (:conn-id metadata))]
+    (<get-subject-id-for-identifier vivo-server identifier branch)))
+
 (defn set-handlers! [vivo-server vc-ep admin-ep]
   (ep/set-handler admin-ep :create-branch (partial <create-branch vivo-server))
   (ep/set-handler admin-ep :delete-branch (partial <delete-branch vivo-server))
@@ -1101,6 +1114,8 @@
                   (partial <add-subject-identifier vivo-server))
   (ep/set-handler vc-ep :change-secret (partial <change-secret vivo-server))
   (ep/set-handler vc-ep :get-schema-pcf (partial <get-schema-pcf vivo-server))
+  (ep/set-handler vc-ep :get-subject-id-for-identifier
+                  (partial <get-subject-id-for-identifier* vivo-server))
   (ep/set-handler vc-ep :get-state (partial <get-state vivo-server))
   (ep/set-handler vc-ep :log-in (partial <log-in vivo-server))
   (ep/set-handler vc-ep :log-in-w-token (partial <log-in-w-token vivo-server))

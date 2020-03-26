@@ -579,6 +579,9 @@
         (log-error (str "Exception in <handle-sys-state-changed: "
                         (u/ex-msg-and-stacktrace e))))))
 
+  (<get-subject-id-for-identifier [this identifier]
+    (cc/<send-msg capsule-client :get-subject-id-for-identifier identifier))
+
   (<add-subject! [this identifier secret]
     (u/<add-subject! this identifier secret) nil)
 

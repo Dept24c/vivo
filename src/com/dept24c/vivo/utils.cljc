@@ -50,6 +50,7 @@
   (<add-subject-identifier! [this identifier])
   (<change-secret! [this old-secret new-secret])
   (<deserialize-value [this path ret])
+  (<get-subject-id-for-identifier [this identifier])
   (<get-sys-state-and-expanded-path [this db-id path])
   (<make-state-info
     [this sub-map-or-ordered-pairs subscriber-name resolution-map]
@@ -397,6 +398,9 @@
           :get-state {:arg get-state-arg-schema
                       :ret (l/maybe get-state-ret-schema)
                       :sender :client}
+          :get-subject-id-for-identifier {:arg l/string-schema
+                                          :ret (l/maybe subject-id-schema)
+                                          :sender :client}
           :log-in {:arg log-in-arg-schema
                    :ret log-in-ret-schema
                    :sender :client}
