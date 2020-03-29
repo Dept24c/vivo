@@ -57,11 +57,15 @@
     parts))
 
 (defmacro get-locals-map []
-  (let [ks (keys (:locals &env))]
-    `(zipmap (quote ~(vec ks)) ~(vec ks))))
+  (let [ks (-> (:locals &env)
+               (keys)
+               (set)
+               (disj 'vc)
+               (vec))]
+    `(zipmap (quote ~ks) ~ks)))
 
 (defn make-sub-body [parts component-name]
-  (let [{:keys [sub-map arglist body]} parts
+  (let [{:keys [sub-map body]} parts
         sub-syms (keys sub-map)
         cname (name component-name)
         inner-component-name (symbol (str cname "-inner"))]
