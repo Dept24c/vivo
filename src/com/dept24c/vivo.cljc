@@ -47,7 +47,8 @@
   ([vc update-commands]
    (update-state! vc update-commands nil))
   ([vc update-commands cb]
-   (u/update-state! vc update-commands cb)))
+   (u/update-state! vc update-commands cb)
+   nil))
 
 (defn <update-state!
   ([vc update-commands]
@@ -139,7 +140,8 @@
          (when-let [logger (:log-error vc)]
            (logger (str "Exception in rpc:\n" (u/ex-msg-and-stacktrace e))))
          (when cb
-           (cb e)))))))
+           (cb e)))))
+   nil))
 
 (defn <rpc
   "Calls a remote procedure on the server. Returns a channel which will yield
