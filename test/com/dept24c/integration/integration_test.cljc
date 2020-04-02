@@ -450,14 +450,15 @@
                _ (is (= true ret))
                state-ch (ca/chan)
                sub-map '{app-name [:sys :app-name]
-                         secret [:sys :secret]}
+                         launch-codes [:sys :secret :launch-codes]}
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                expected-state {'app-name app-name
-                               'secret :vivo/unauthorized}
+                               'launch-codes :vivo/unauthorized}
                _ (is (= expected-state (au/<? state-ch)))
-               _ (is (= :vivo/unauthorized (au/<? (vivo/<set-state!
-                                                   vc [:sys :secret] "Foo"))))
+               _ (is (= :vivo/unauthorized
+                        (au/<? (vivo/<set-state!
+                                vc [:sys :secret :launch-codes] ["Foo"]))))
                _ (is (thrown-with-msg?
                       #?(:clj ExceptionInfo :cljs js/Error)
                       #"RPC `:authed/inc` is unauthorized"

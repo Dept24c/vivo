@@ -10,11 +10,16 @@
 (def repository-name "vivo-test")
 (def stop-server nil)
 
+(defn eq-or-parent? [parent-path test-path]
+  (let [[relationship _] (u/relationship-info parent-path test-path)]
+    (#{:equal :parent} relationship)))
+
 (defn <authorized? [subject-id path read-write-or-call v]
   (au/go
     ;; Note that path includes the :sys prefix.
     (cond
-      (= [:sys :secret] path) false
+      ;;(= [:sys :secret] path) false
+      (eq-or-parent? [:sys :secret] path) false
       (= [:vivo/rpcs :authed/inc] path) (boolean subject-id)
       :else true)))
 
