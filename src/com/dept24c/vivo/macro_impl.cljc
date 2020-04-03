@@ -1,15 +1,11 @@
 (ns com.dept24c.vivo.macro-impl
   (:require
    [clojure.core.async :as ca]
+   [clojure.walk :as walk]
    [clojure.set :as set]
    [com.dept24c.vivo.utils :as u]
-   [deercreeklabs.async-utils :as au])
-  #?(:cljs
-     (:require-macros
-      [com.dept24c.vivo.macro-impl :refer [get-locals-map]])
-     :clj
-     (:import
-      (clojure.lang ExceptionInfo))))
+   [deercreeklabs.async-utils :as au]
+   [deercreeklabs.capsule.logging :as log]))
 
 (defn check-arglist [component-name subscription? arglist]
   (when-not (vector? arglist)
@@ -21,7 +17,8 @@
   (let [first-arg (first arglist)]
     (when (and subscription?
                (or (nil? first-arg)
-                   (not= "vc" (name first-arg))))
+                   (not= "vc" (when (symbol? first-arg)
+                                (name first-arg)))))
       (throw
        (ex-info (str "Bad constructor arglist for component `" component-name
                      "`. First argument must be `vc`"
@@ -56,26 +53,30 @@
                 (u/sym-map repeated-syms sub-map arglist component-name))))
     parts))
 
-(defmacro get-locals-map []
-  (let [ks (-> (:locals &env)
-               (keys)
-               (set)
-               (disj 'vc)
-               (vec))]
-    `(zipmap (quote ~ks) ~ks)))
+(defn destructure*
+  ;; Work around fact that clojure.core/destructure returns code that
+  ;; is not cljs-compatible
+  [bindings]
+  #?(:clj
+     (walk/postwalk-replace
+      {'clojure.lang.PersistentHashMap/create 'hash-map}
+      (destructure bindings))))
 
-(defn make-sub-body [parts component-name]
-  (let [{:keys [sub-map body]} parts
-        sub-syms (keys sub-map)
-        cname (name component-name)
-        inner-component-name (symbol (str cname "-inner"))]
-    `(let [vivo-state# (com.dept24c.vivo.react/use-vivo-state
-                        ~'vc '~sub-map ~cname ~'*vivo-locals*)
-           {:syms [~@sub-syms]} vivo-state#]
-       (when vivo-state#
-         (com.dept24c.vivo.react/create-element
-          (fn ~inner-component-name [props#]
-            ~@body))))))
+(defn make-outer-body [sub-map props-sym cname-str inner-component-name]
+  `(let [body-fn# (com.dept24c.vivo.react/get* ~props-sym "body-fn")
+         vc# (com.dept24c.vivo.react/get* ~props-sym "vc")
+         sub-map# (com.dept24c.vivo.react/get* ~props-sym "sub-map")
+         resolution-map# (com.dept24c.vivo.react/get* ~props-sym
+                                                      "resolution-map")
+         cname-str# (com.dept24c.vivo.react/get* ~props-sym "cname-str")
+         vivo-state# (com.dept24c.vivo.react/use-vivo-state
+                      vc# sub-map# cname-str# resolution-map#)
+         inner-props# (com.dept24c.vivo.react/js-obj*
+                       "body-fn" body-fn#
+                       "vivo-state" vivo-state#)]
+     (when-not (= :vivo/unknown vivo-state#)
+       (com.dept24c.vivo.react/create-element ~inner-component-name
+                                              inner-props#))))
 
 (defn build-component
   ([component-name args]
@@ -87,12 +88,47 @@
                       `(defmethod ~component-name ~dispatch-val)
                       (cond-> (vec `(defn ~component-name))
                         docstring (conj docstring)))
-         component-body (if sub-map
-                          [(make-sub-body parts component-name)]
-                          body)]
-     `(~@first-line
-       [~@arglist]
-       (let [~'*vivo-locals* (get-locals-map)]
-         (com.dept24c.vivo.react/create-element
-          (fn ~component-name [props#]
-            ~@component-body)))))))
+         cname (name component-name)
+         inner-component-name (gensym (str cname "-inner"))
+         outer-component-name (gensym (str cname "-outer"))
+         props-sym (gensym "props")
+         arglist-raw-sym (gensym "arglist-raw")
+         destructured (destructure* [arglist arglist-raw-sym])
+         inner-component-form `(defn ~inner-component-name [~props-sym]
+                                 (let [body-fn# (com.dept24c.vivo.react/get*
+                                                 ~props-sym "body-fn")
+                                       vivo-state# (com.dept24c.vivo.react/get*
+                                                    ~props-sym "vivo-state")]
+                                   (body-fn# vivo-state#)))
+         outer-component-form `(defn ~outer-component-name [~props-sym]
+                                 ~(make-outer-body sub-map props-sym cname
+                                                   inner-component-name))
+         res-map-ks (vec (set (take-nth 2 destructured)))
+         sub-map-ks (keys sub-map)
+         vc-sym (if sub-map
+                  `~'vc
+                  `nil)
+         c-form `(~@first-line
+                  [& ~arglist-raw-sym]
+                  (let [~@destructured
+                        resolution-map# (zipmap (quote ~res-map-ks)
+                                                ~res-map-ks)
+                        body-fn# (fn [vivo-state#]
+                                   (let [{:syms [~@sub-map-ks]} vivo-state#]
+                                     ~@body))
+                        props# (com.dept24c.vivo.react/js-obj*
+                                "body-fn" body-fn#
+                                "vc" ~vc-sym
+                                "sub-map" '~sub-map
+                                "resolution-map" resolution-map#
+                                "cname-str" ~cname)]
+                    (com.dept24c.vivo.react/create-element
+                     ~(if sub-map
+                        outer-component-name
+                        inner-component-name)
+                     props#)))
+         forms (if sub-map
+                 [inner-component-form outer-component-form c-form]
+                 [inner-component-form c-form])]
+     `(do
+        ~@forms))))

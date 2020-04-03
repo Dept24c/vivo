@@ -628,9 +628,6 @@
 (defn update-sub? [update-infos sub-paths]
   (reduce (fn [acc sub-path]
             (when-not (sequential? sub-path)
-              (log/info (str "UUUU update-sub?:\n"
-                             (pprint-str
-                              (sym-map sub-path sub-paths))))
               (throw (ex-info "asdfx" {})))
             (if (update-sub?* update-infos sub-path)
               (reduced true)

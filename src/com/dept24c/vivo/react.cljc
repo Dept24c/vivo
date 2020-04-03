@@ -6,6 +6,8 @@
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
+   [deercreeklabs.capsule.logging :as log]
+   #?(:cljs [goog.object])
    #?(:cljs [oops.core :refer [oapply ocall oget oset!]]))
   #?(:cljs
      (:require-macros com.dept24c.vivo.react)))
@@ -28,21 +30,19 @@
 
 (defn use-effect
   ([effect]
-   (use-effect effect nil))
+   #?(:cljs
+      (ocall React :useEffect effect)))
   ([effect dependencies]
    #?(:cljs
-      (if dependencies
-        (ocall React :useEffect effect dependencies)
-        (ocall React :useEffect effect)))))
+      (ocall React :useEffect effect dependencies))))
 
 (defn use-layout-effect
   ([effect]
-   (use-layout-effect effect nil))
+   #?(:cljs
+      (ocall React :useLayoutEffect effect)))
   ([effect dependencies]
    #?(:cljs
-      (if dependencies
-        (ocall React :useLayoutEffect effect dependencies)
-        (ocall React :useLayoutEffect effect)))))
+      (ocall React :useLayoutEffect effect dependencies))))
 
 (defn use-reducer
   [reducer initial-state]
@@ -94,20 +94,43 @@
 (defn use-vivo-state
   "React hook for Vivo"
   ([vc sub-map component-name]
-   (use-vivo-state vc sub-map component-name {}))
+   (use-vivo-state vc sub-map component-name {} :symbols))
   ([vc sub-map component-name resolution-map]
+   (use-vivo-state vc sub-map component-name resolution-map :symbols))
+  ([vc sub-map component-name resolution-map state-keys-type]
    #?(:cljs
-      (let [initial-state (when (u/ssr? vc)
-                            (u/ssr-get-state! vc sub-map resolution-map))
+      ;; During SSR, we need to render the correct state immediately, since
+      ;; there will never be any updates later.
+      (let [initial-state (if (u/ssr? vc)
+                            (u/ssr-get-state! vc sub-map resolution-map)
+                            :vivo/unknown)
             [state update-fn] (use-state initial-state)
-            mounted? (use-ref true)
+            *mounted? (atom true)
             effect (fn []
                      (let [unsub (u/subscribe! vc sub-map state
-                                               #(when (oget mounted? :current)
+                                               #(when @*mounted?
                                                   (update-fn %))
                                                component-name resolution-map)]
-                       #(do
-                          (oset! mounted? :current false)
-                          (unsub))))]
+                       (fn on-unmount []
+                         (reset! *mounted? false)
+                         (unsub))))]
         (use-effect effect #js [])
-        state))))
+        (case state-keys-type
+          :symbols state
+          :keywords (reduce-kv (fn [acc k v]
+                                 (assoc acc (keyword k) v))
+                               {} state)
+          :strings (reduce-kv (fn [acc k v]
+                                (assoc acc (str k) v))
+                              {} state))))))
+
+;;;;;;;;;;;;;;;;;;;; Macro runtime helper fns ;;;;;;;;;;;;;;;;;;;;
+;; Emitted code calls these fns
+
+(defn get* [js-obj k]
+  #?(:cljs
+     (goog.object/get js-obj k)))
+
+(defn js-obj* [& kvs]
+  #?(:cljs
+     (apply js-obj kvs)))
