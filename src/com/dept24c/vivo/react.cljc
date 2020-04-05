@@ -94,10 +94,8 @@
 (defn use-vivo-state
   "React hook for Vivo"
   ([vc sub-map component-name]
-   (use-vivo-state vc sub-map component-name {} :symbols))
+   (use-vivo-state vc sub-map component-name {}))
   ([vc sub-map component-name resolution-map]
-   (use-vivo-state vc sub-map component-name resolution-map :symbols))
-  ([vc sub-map component-name resolution-map state-keys-type]
    #?(:cljs
       ;; During SSR, we need to render the correct state immediately, since
       ;; there will never be any updates later.
@@ -115,14 +113,7 @@
                          (reset! *mounted? false)
                          (unsub))))]
         (use-effect effect #js [])
-        (case state-keys-type
-          :symbols state
-          :keywords (reduce-kv (fn [acc k v]
-                                 (assoc acc (keyword k) v))
-                               {} state)
-          :strings (reduce-kv (fn [acc k v]
-                                (assoc acc (str k) v))
-                              {} state))))))
+        state))))
 
 ;;;;;;;;;;;;;;;;;;;; Macro runtime helper fns ;;;;;;;;;;;;;;;;;;;;
 ;; Emitted code calls these fns

@@ -74,7 +74,7 @@
          inner-props# (com.dept24c.vivo.react/js-obj*
                        "body-fn" body-fn#
                        "vivo-state" vivo-state#)]
-     (when-not (= :vivo/unknown vivo-state#)
+     (when (and vivo-state# (not= :vivo/unknown vivo-state#))
        (com.dept24c.vivo.react/create-element ~inner-component-name
                                               inner-props#))))
 
@@ -89,6 +89,7 @@
                       (cond-> (vec `(defn ~component-name))
                         docstring (conj docstring)))
          cname (name component-name)
+         body-fn-name (symbol (str cname "-body-fn"))
          inner-component-name (gensym (str cname "-inner"))
          outer-component-name (gensym (str cname "-outer"))
          props-sym (gensym "props")
@@ -103,7 +104,10 @@
          outer-component-form `(defn ~outer-component-name [~props-sym]
                                  ~(make-outer-body sub-map props-sym cname
                                                    inner-component-name))
-         res-map-ks (vec (set (take-nth 2 destructured)))
+         res-map-ks (-> (take-nth 2 destructured)
+                        (set)
+                        (disj 'vc)
+                        (vec))
          sub-map-ks (keys sub-map)
          vc-sym (if sub-map
                   `~'vc
@@ -113,7 +117,7 @@
                   (let [~@destructured
                         resolution-map# (zipmap (quote ~res-map-ks)
                                                 ~res-map-ks)
-                        body-fn# (fn [vivo-state#]
+                        body-fn# (fn ~body-fn-name [vivo-state#]
                                    (let [{:syms [~@sub-map-ks]} vivo-state#]
                                      ~@body))
                         props# (com.dept24c.vivo.react/js-obj*

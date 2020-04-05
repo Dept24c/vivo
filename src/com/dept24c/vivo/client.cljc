@@ -178,7 +178,7 @@
 (defn strip-non-vals [v]
   (cond
     (fn? v) nil
-    (atom? v) @v
+    (atom? v) nil
     (map? v) (reduce-kv (fn [acc k v*]
                           (assoc acc k (strip-non-vals v*)))
                         {} v)
@@ -192,13 +192,11 @@
 
 (defn ssr-get-state!* [*ssr-info sub-map resolution-map]
   (let [stripped-rm (strip-non-vals resolution-map)
-        v (get (:resolved @*ssr-info)
-               [sub-map stripped-rm]
-               :not-found)]
+        v (get (:resolved @*ssr-info) [sub-map stripped-rm] :not-found)]
     (if (not= :not-found v)
       v
       (do
-        (swap! *ssr-info update :needed conj [sub-map resolution-map])
+        (swap! *ssr-info update :needed conj [sub-map stripped-rm])
         nil))))
 
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
@@ -272,10 +270,8 @@
                      (let [ret (au/<? (u/<make-state-info this sub-map
                                                           component-name
                                                           resolution-map))]
-
                        (swap! *ssr-info update
-                              :resolved assoc
-                              [sub-map (strip-non-vals resolution-map)]
+                              :resolved assoc [sub-map resolution-map]
                               (:state ret))))
                    (swap! *ssr-info assoc :needed #{})
                    (recur)))))
