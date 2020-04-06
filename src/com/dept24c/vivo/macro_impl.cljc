@@ -72,8 +72,8 @@
          vivo-state# (com.dept24c.vivo.react/use-vivo-state
                       vc# sub-map# cname-str# resolution-map#)
          inner-props# (com.dept24c.vivo.react/js-obj*
-                       "body-fn" body-fn#
-                       "vivo-state" vivo-state#)]
+                       ["body-fn" body-fn#
+                        "vivo-state" vivo-state#])]
      (when (and vivo-state# (not= :vivo/unknown vivo-state#))
        (com.dept24c.vivo.react/create-element ~inner-component-name
                                               inner-props#))))
@@ -120,12 +120,18 @@
                         body-fn# (fn ~body-fn-name [vivo-state#]
                                    (let [{:syms [~@sub-map-ks]} vivo-state#]
                                      ~@body))
-                        props# (com.dept24c.vivo.react/js-obj*
-                                "body-fn" body-fn#
-                                "vc" ~vc-sym
-                                "sub-map" '~sub-map
-                                "resolution-map" resolution-map#
-                                "cname-str" ~cname)]
+                        prop-kvs# (reduce
+                                   (fn [acc# k#]
+                                     (-> acc#
+                                         (conj (str k#))
+                                         (conj (get resolution-map# k#))))
+                                   ["body-fn" body-fn#
+                                    "vc" ~vc-sym
+                                    "sub-map" '~sub-map
+                                    "resolution-map" resolution-map#
+                                    "cname-str" ~cname]
+                                   ~res-map-ks)
+                        props# (com.dept24c.vivo.react/js-obj* prop-kvs#)]
                     (com.dept24c.vivo.react/create-element
                      ~(if sub-map
                         outer-component-name

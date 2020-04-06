@@ -112,7 +112,7 @@
                        (fn on-unmount []
                          (reset! *mounted? false)
                          (unsub))))]
-        (use-effect effect #js [])
+        (use-effect effect #js [sub-map resolution-map])
         state))))
 
 ;;;;;;;;;;;;;;;;;;;; Macro runtime helper fns ;;;;;;;;;;;;;;;;;;;;
@@ -122,6 +122,6 @@
   #?(:cljs
      (goog.object/get js-obj k)))
 
-(defn js-obj* [& kvs]
+(defn js-obj* [kvs]
   #?(:cljs
      (apply js-obj kvs)))

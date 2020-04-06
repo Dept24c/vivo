@@ -199,6 +199,57 @@
         (swap! *ssr-info update :needed conj [sub-map stripped-rm])
         nil))))
 
+(defn <subscription-loop
+  [update-fn cur-paths update-sub-ch unsub-ch updates-pub <make-si *local-state
+   *stopped? *cur-db-id *last-state]
+  (au/go
+    (loop [paths cur-paths]
+      (let [[update* ch] (au/alts? [update-sub-ch unsub-ch])]
+        (when-not @*stopped?
+          (if (= unsub-ch ch)
+            (ca/unsub updates-pub :all update-sub-ch)
+            (let [{:keys [update-infos notify-all? db-id local-state]
+                   :or {db-id @*cur-db-id
+                        local-state @*local-state}} update*
+                  update? (u/update-sub? update-infos paths)
+                  paths* (if-not (or notify-all? update?)
+                           paths
+                           (let [si (au/<? (<make-si local-state db-id))
+                                 new-state (:state si)
+                                 new-paths (:paths si)]
+                             (when (not= @*last-state new-state)
+                               (reset! *last-state new-state)
+                               (update-fn new-state))
+                             new-paths))]
+              (recur paths*))))))))
+
+(defn subscribe!*
+  [vc sub-map initial-state update-fn subscriber-name resolution-map
+   sub-map->op-cache updates-pub log-error *local-state *stopped? *cur-db-id]
+  (u/check-sub-map subscriber-name "subscriber" sub-map)
+  (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
+        <make-si (partial u/<make-state-info vc ordered-pairs
+                          subscriber-name resolution-map)
+        update-sub-ch (ca/chan 10)
+        unsub-ch (ca/promise-chan)
+        unsubscribe! #(ca/put! unsub-ch true)]
+    (ca/sub updates-pub :all update-sub-ch)
+    (ca/go
+      (try
+        (au/<? (u/<wait-for-conn-init vc))
+        (let [{cur-state :state
+               cur-paths :paths} (au/<? (<make-si))
+              *last-state (atom cur-state)]
+          (when (not= initial-state cur-state)
+            (update-fn cur-state))
+          (au/<? (<subscription-loop update-fn cur-paths update-sub-ch unsub-ch
+                                     updates-pub <make-si *local-state *stopped?
+                                     *cur-db-id *last-state)))
+        (catch #?(:cljs js/Error :clj Exception) e
+          (log-error (str "Error in subscribe!\n"
+                          (u/ex-msg-and-stacktrace e))))))
+    unsubscribe!))
+
 (defrecord VivoClient [capsule-client sys-state-schema sys-state-source
                        log-info log-error rpcs
                        sys-state-cache sub-map->op-cache
@@ -392,51 +443,11 @@
                   (update new-acc :state select-keys sub-keys)
                   (recur new-acc new-i)))))))))
 
-  (subscribe!
-    [this sub-map initial-state update-fn subscriber-name resolution-map]
-    (u/check-sub-map subscriber-name "subscriber" sub-map)
-
-    (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
-          <make-si (partial u/<make-state-info this ordered-pairs
-                            subscriber-name resolution-map)
-          update-sub-ch (ca/chan 10)
-          unsubscribe-ch (ca/promise-chan)
-          unsubscribe! #(ca/put! unsubscribe-ch true)]
-      (ca/sub updates-pub :all update-sub-ch)
-      (ca/go
-        (try
-          (au/<? (u/<wait-for-conn-init this))
-          (let [{cur-state :state
-                 cur-paths :paths} (au/<? (<make-si))
-                *last-state (atom cur-state)]
-            (when (not= initial-state cur-state)
-              (update-fn cur-state))
-            (loop [paths-to-watch cur-paths]
-              (let [[v ch] (au/alts? [update-sub-ch unsubscribe-ch])]
-                (when-not @*stopped?
-                  (if (= unsubscribe-ch ch)
-                    (ca/unsub updates-pub :all update-sub-ch)
-                    (let [{:keys [update-infos
-                                  notify-all? db-id local-state]
-                           :or {db-id @*cur-db-id
-                                local-state @*local-state}} v
-                          new-paths (if-not (or notify-all?
-                                                (u/update-sub?
-                                                 update-infos
-                                                 paths-to-watch))
-                                      paths-to-watch
-                                      (let [si (au/<? (<make-si
-                                                       local-state db-id))
-                                            {:keys [state paths]} si]
-                                        (when (not= @*last-state state)
-                                          (reset! *last-state state)
-                                          (update-fn state))
-                                        paths))]
-                      (recur new-paths)))))))
-          (catch #?(:cljs js/Error :clj Exception) e
-            (log-error (str "Error in subscribe!\n"
-                            (u/ex-msg-and-stacktrace e))))))
-      unsubscribe!))
+  (subscribe! [this sub-map initial-state update-fn subscriber-name
+               resolution-map]
+    (subscribe!* this sub-map initial-state update-fn subscriber-name
+                 resolution-map sub-map->op-cache updates-pub log-error
+                 *local-state *stopped? *cur-db-id))
 
   (<wait-for-conn-init [this]
     (au/go
