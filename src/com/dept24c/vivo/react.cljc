@@ -124,4 +124,4 @@
 
 (defn js-obj* [kvs]
   #?(:cljs
-     (apply js-obj kvs)))
+     (apply goog.object/create kvs)))
