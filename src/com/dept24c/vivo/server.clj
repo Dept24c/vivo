@@ -410,6 +410,62 @@
            :value seqs})))
       (apply concat seqs))))
 
+(defn <do-login
+  [vs arg metadata login-identifier-case-sensitive? login-lifetime-mins
+   *conn-id->info *subject-id->conn-ids]
+  (au/go
+    (let [{:keys [identifier secret]} arg
+          {:keys [conn-id]} metadata
+          {:keys [branch]} (@*conn-id->info conn-id)
+          identifier* (if login-identifier-case-sensitive?
+                        identifier
+                        (str/lower-case identifier))
+          storage (get-storage vs branch)
+          db-info (au/<? (<get-db-info vs branch storage))
+          {id->sid-data-id :identifier-to-subject-id-data-id
+           sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
+          subject-id (when id->sid-data-id
+                       (au/<? (u/<get-in storage id->sid-data-id
+                                         u/string-map-schema
+                                         [identifier*] nil)))
+          hashed-secret (when (and subject-id sid->hs-data-id)
+                          (au/<? (u/<get-in storage sid->hs-data-id
+                                            u/string-map-schema
+                                            [subject-id] nil)))]
+      (u/check-secret-len secret)
+      (if-not (and hashed-secret
+                   (bcrypt/check secret hashed-secret))
+        {:subject-id nil
+         :token nil
+         :was-successful false}
+        (let [token (generate-token)
+              expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
+                                      login-lifetime-mins)
+              token-info (u/sym-map expiration-time-mins subject-id)
+              was-successful true]
+          (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
+          (swap! *subject-id->conn-ids update subject-id
+                 (fn [conn-ids]
+                   (conj (or conn-ids #{}) conn-id)))
+          (au/<? (<modify-db vs (partial <log-in-update-fn token token-info)
+                             "Log in" subject-id branch conn-id))
+          (u/sym-map subject-id token was-successful))))))
+
+(defn <do-add-subject
+  [vs identifier secret subject-id branch conn-id work-factor
+   login-identifier-case-sensitive?]
+  (au/go
+    (u/check-secret-len secret)
+    (let [hashed-secret (bcrypt/encrypt secret work-factor)
+          identifier* (if login-identifier-case-sensitive?
+                        identifier
+                        (str/lower-case identifier))]
+      (au/<? (<modify-db vs (partial <add-subject-update-fn subject-id
+                                     identifier* hashed-secret)
+                         (str "Add subject " subject-id)
+                         subject-id branch conn-id))
+      subject-id)))
+
 (defrecord VivoServer [authorization-fn
                        log-error
                        log-info
@@ -451,26 +507,18 @@
             db-id (au/<? (u/<get-data-id storage branch-reference))]
         (au/<? (u/<get-in storage db-id u/db-info-schema nil nil)))))
 
-  (<add-subject* [this identifier secret subject-id branch conn-id]
-    (au/go
-      (u/check-secret-len secret)
-      (let [hashed-secret (bcrypt/encrypt secret work-factor)
-            identifier* (if login-identifier-case-sensitive?
-                          identifier
-                          (str/lower-case identifier))]
-        (au/<? (<modify-db this (partial <add-subject-update-fn subject-id
-                                         identifier hashed-secret)
-                           (str "Add subject " subject-id)
-                           subject-id branch conn-id))
-        subject-id)))
-
   (<add-subject [this arg metadata]
     (let [{:keys [identifier secret subject-id]
            :or {subject-id (.toString ^UUID (UUID/randomUUID))}} arg
           {:keys [conn-id]} metadata
           {:keys [branch]} (@*conn-id->info conn-id)]
       (u/check-secret-len secret)
-      (<add-subject* this identifier secret subject-id branch conn-id)))
+      (<do-add-subject this identifier secret subject-id branch conn-id
+                       work-factor login-identifier-case-sensitive?)))
+
+  (<add-subject* [this identifier secret subject-id branch conn-id]
+    (<do-add-subject this identifier secret subject-id branch conn-id
+                     work-factor login-identifier-case-sensitive?))
 
   (<add-subject-identifier [this identifier metadata]
     (au/go
@@ -767,44 +815,8 @@
                           u/string-map-schema [identifier] nil)))))
 
   (<log-in [this arg metadata]
-    (au/go
-      (let [{:keys [identifier secret]} arg
-            {:keys [conn-id]} metadata
-            {:keys [branch]} (@*conn-id->info conn-id)
-            identifier* (if login-identifier-case-sensitive?
-                          identifier
-                          (str/lower-case identifier))
-            storage (get-storage this branch)
-            db-info (au/<? (<get-db-info this branch storage))
-            {id->sid-data-id :identifier-to-subject-id-data-id
-             sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
-            subject-id (when id->sid-data-id
-                         (au/<? (u/<get-in storage id->sid-data-id
-                                           u/string-map-schema
-                                           [identifier*] nil)))
-            hashed-secret (when (and subject-id sid->hs-data-id)
-                            (au/<? (u/<get-in storage sid->hs-data-id
-                                              u/string-map-schema
-                                              [subject-id] nil)))]
-        (u/check-secret-len secret)
-        (if-not (and hashed-secret
-                     (bcrypt/check secret hashed-secret))
-          {:subject-id nil
-           :token nil
-           :was-successful false}
-          (let [token (generate-token)
-                expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
-                                        login-lifetime-mins)
-                token-info (u/sym-map expiration-time-mins subject-id)
-                was-successful true]
-            (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
-            (swap! *subject-id->conn-ids update subject-id
-                   (fn [conn-ids]
-                     (conj (or conn-ids #{}) conn-id)))
-            (au/<? (<modify-db this (partial <log-in-update-fn
-                                             token token-info)
-                               "Log in" subject-id branch conn-id))
-            (u/sym-map subject-id token was-successful))))))
+    (<do-login this arg metadata login-identifier-case-sensitive?
+               login-lifetime-mins *conn-id->info *subject-id->conn-ids))
 
   (<log-in-w-token [this token metadata]
     (au/go
