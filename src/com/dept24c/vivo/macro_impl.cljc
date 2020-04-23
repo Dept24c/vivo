@@ -3,6 +3,7 @@
    [clojure.core.async :as ca]
    [clojure.walk :as walk]
    [clojure.set :as set]
+   [clojure.string :as str]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
    [deercreeklabs.capsule.logging :as log]))
@@ -104,10 +105,10 @@
          outer-component-form `(defn ~outer-component-name [~props-sym]
                                  ~(make-outer-body sub-map props-sym cname
                                                    inner-component-name))
-         res-map-ks (-> (take-nth 2 destructured)
-                        (set)
-                        (disj 'vc)
-                        (vec))
+         res-map-ks (->> (take-nth 2 destructured)
+                         (set)
+                         (filterv #(not (or (str/starts-with? (str %) "vec__")
+                                            (= 'vc %)))))
          sub-map-ks (keys sub-map)
          vc-sym (if sub-map
                   `~'vc

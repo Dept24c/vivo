@@ -175,10 +175,15 @@
   #?(:clj (instance? clojure.lang.IAtom x)
      :cljs (satisfies? IAtom x)))
 
+(defn js-object? [v]
+  #?(:cljs (object? v)
+     :clj (throw (ex-info "js-object? is not supported in clj." {}))))
+
 (defn strip-non-vals [v]
   (cond
     (fn? v) nil
     (atom? v) nil
+    (js-object? v) nil
     (map? v) (reduce-kv (fn [acc k v*]
                           (assoc acc k (strip-non-vals v*)))
                         {} v)
@@ -196,7 +201,7 @@
     (if (not= :not-found v)
       v
       (do
-        (swap! *ssr-info update :needed conj [sub-map stripped-rm])
+        (swap! *ssr-info update :needed conj [sub-map resolution-map])
         nil))))
 
 (defn <subscription-loop
@@ -365,9 +370,10 @@
                    (doseq [[sub-map resolution-map] needed]
                      (let [ret (au/<? (u/<make-state-info this sub-map
                                                           component-name
-                                                          resolution-map))]
+                                                          resolution-map))
+                           stripped-rm (strip-non-vals resolution-map)]
                        (swap! *ssr-info update
-                              :resolved assoc [sub-map resolution-map]
+                              :resolved assoc [sub-map stripped-rm]
                               (:state ret))))
                    (swap! *ssr-info assoc :needed #{})
                    (recur)))))
