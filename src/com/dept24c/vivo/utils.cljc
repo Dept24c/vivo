@@ -50,30 +50,33 @@
   (<add-subject-identifier! [this identifier])
   (<change-secret! [this old-secret new-secret])
   (<deserialize-value [this path ret])
-  (<get-subject-id-for-identifier [this identifier])
-  (<get-sys-state-and-expanded-path [this db-id path])
-  (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map]
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map
-     local-state db-id])
-  (<ssr [this component-fn component-name static-markup?])
-  (<update-sys-state [this update-commands])
-  (<wait-for-conn-init [this])
   (handle-sys-state-changed [this arg metadata])
   (handle-updates [this updates cb])
+  (<get-subject-id-for-identifier [this identifier])
+  (<get-sys-state-and-expanded-path [this db-id path])
   (<log-in! [this identifier secret])
   (logged-in? [this])
   (<log-in-w-token! [this token])
   (<log-out! [this])
   (<log-out-w-token! [this token])
+  (<make-state-info
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map]
+    [this sub-map-or-ordered-pairs subscriber-name resolution-map
+     local-state db-id])
+  (next-instance-num! [this])
   (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
-  (ssr-get-state! [this sub-map resolution-map])
   (ssr? [this])
-  (subscribe! [this sub-map cur-state update-fn subscriber-name resolution-map])
+  (<ssr [this component-fn component-name static-markup?])
+  (ssr-get-state! [this sub-map resolution-map])
+  (subscribe!
+    [this sub-map cur-state update-fn subscriber-name resolution-map]
+    [this sub-map cur-state update-fn subscriber-name resolution-map parents])
   (<update-cmd->serializable-update-cmd [this i cmds])
-  (update-state! [this update-cmds cb]))
+  (update-state! [this update-cmds cb])
+  (<update-sys-state [this update-commands])
+  (<wait-for-conn-init [this]))
 
 (defprotocol IDataStorage
   (<delete-reference! [this reference])
@@ -591,7 +594,8 @@
   ;; TODO: Improve this using op / normalized paths
   (let [u-front (get-non-numeric-part updated-path)
         s-front (get-non-numeric-part sub-path)]
-    (if (or (not (seq u-front)) (not (seq s-front)))
+    (if (or (not (seq u-front))
+            (not (seq s-front)))
       true
       (let [[relationship _] (relationship-info u-front s-front)]
         (not= :sibling relationship)))))
@@ -625,11 +629,21 @@
                   (reduced true)))))
           false update-infos))
 
+(defn transform-operators-in-sub-path [sub-path]
+  (reduce (fn [acc k]
+            (if (#{:vivo/* :vivo/concat :vivo/keys :vivo/count} k)
+              (reduced acc)
+              (conj acc k)))
+          [] sub-path))
+
 (defn update-sub? [update-infos sub-paths]
   (reduce (fn [acc sub-path]
             (when-not (sequential? sub-path)
-              (throw (ex-info "asdfx" {})))
-            (if (update-sub?* update-infos sub-path)
+              (throw (ex-info (str "`sub-path` must be seqential. Got: `"
+                                   sub-path "`.")
+                              (sym-map sub-path))))
+            (if (update-sub?* update-infos
+                              (transform-operators-in-sub-path sub-path))
               (reduced true)
               false))
           false sub-paths))

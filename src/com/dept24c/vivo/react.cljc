@@ -82,40 +82,52 @@
    The first argument to the constructor must be a parameter named
   `vc` (the vivo client)."
   [component-name & args]
-  (macro-impl/build-component component-name args))
+  (let [ns-name (str (or
+                      (:name (:ns &env)) ;; cljs
+                      *ns*))]            ;; clj
+    (macro-impl/build-component ns-name component-name args)))
 
 (defmacro def-component-method
   "Defines a Vivo React component multimethod"
   [component-name dispatch-val & args]
-  (macro-impl/build-component component-name args dispatch-val))
+  (let [ns-name (str (or
+                      (:name (:ns &env)) ;; cljs
+                      *ns*))]            ;; clj
+    (macro-impl/build-component ns-name component-name args dispatch-val)))
+
 
 ;;;; Custom Hooks
 
 (defn use-vivo-state
   "React hook for Vivo"
   ([vc sub-map component-name]
-   (use-vivo-state vc sub-map component-name {}))
+   (use-vivo-state vc sub-map component-name {} []))
   ([vc sub-map component-name resolution-map]
+   (use-vivo-state vc sub-map component-name resolution-map []))
+  ([vc sub-map component-name resolution-map parents]
    #?(:cljs
       ;; During SSR, we need to render the correct state immediately, since
       ;; there will never be any updates later.
       (let [initial-state (if (u/ssr? vc)
                             (u/ssr-get-state! vc sub-map resolution-map)
                             :vivo/unknown)
+
             [state update-fn] (use-state initial-state)
             *mounted? (atom true)
             effect (fn []
                      (let [unsub (u/subscribe! vc sub-map state
                                                #(when @*mounted?
                                                   (update-fn %))
-                                               component-name resolution-map)]
+                                               component-name
+                                               resolution-map
+                                               parents)]
                        (fn on-unmount []
                          (reset! *mounted? false)
                          (unsub))))]
-        (use-effect effect #js [sub-map resolution-map])
+        (use-effect effect (clj->js [sub-map resolution-map]))
         state))))
 
-;;;;;;;;;;;;;;;;;;;; Macro runtime helper fns ;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;; Macro runtime helpers ;;;;;;;;;;;;;;;;;;;;
 ;; Emitted code calls these fns
 
 (defn get* [js-obj k]
@@ -125,3 +137,5 @@
 (defn js-obj* [kvs]
   #?(:cljs
      (apply goog.object/create kvs)))
+
+(def ^:dynamic *parents* [])

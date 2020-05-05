@@ -7,7 +7,8 @@
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.utils :as u]
-   [deercreeklabs.async-utils :as au])
+   [deercreeklabs.async-utils :as au]
+   [deercreeklabs.capsule.logging :as log])
   #?(:clj
      (:import
       (clojure.lang ExceptionInfo))))
@@ -727,5 +728,33 @@
          (au/<? (vivo/<set-state! vc [:local :books] books))
          (vivo/subscribe! vc sub-map nil update-fn "test")
          (is (= expected (au/<? ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+#_
+(deftest ^:this test-wildcard-sub
+  (au/test-async
+   3000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             books {"123" {:title "Treasure Island" :nums [2 4 6]}
+                    "456" {:title "Kidnapped" :nums [1 3]}
+                    "789" {:title "Dr Jekyll and Mr Hyde" :nums [5 7]}}
+             titles-set (set (map :title (vals books)))
+             sub-map '{titles [:local :books :vivo/* :title]}
+             update-fn #(ca/put! ch %)]
+         (vivo/subscribe! vc sub-map nil update-fn "test" {})
+         (is (= {'titles []} (au/<? ch)))
+         (log/info (str "set-state got: "
+                        (au/<? (vivo/<set-state! vc [:local :books] books))))
+         (is (= {'titles []} (au/<? ch)))
+         #_ (au/<? (vivo/<update-state! vc [{:path [:local :books "new"]
+                                             :op :set
+                                             :arg {:title "1984"
+                                                   :nums [20 30]}}]))
+         #_(is (= expected
+                  (-> (au/<? ch)
+                      (update 'titles set)))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))

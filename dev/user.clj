@@ -45,6 +45,7 @@
                   :output-path [:sys :user-id-to-msgs]}]
          config {:authenticate-admin-client (constantly true)
                  :authorization-fn <authorized?
+                 :disable-ddb? true
                  :port port
                  :repository-name repository-name
                  :rpcs ss/rpcs

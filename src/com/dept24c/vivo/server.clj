@@ -295,7 +295,8 @@
                                      :op :set
                                      :arg new-branches}]
                                    nil))
-      (au/<? (u/<delete-reference! storage branch-reference)))))
+      (au/<? (u/<delete-reference! storage branch-reference))
+      true)))
 
 (defn <modify-db* [branch-reference storage subject-id <update-fn msg]
   (au/go
@@ -747,39 +748,44 @@
                                                       % path)
                                         path))
                   num-results (count expanded-path)]
-              ;; Use loop to stay in the go block
-              (loop [out []
-                     i 0]
-                (let [filled-in-path (nth expanded-path i)
-                      v (au/<? (u/<get-in storage data-id state-schema
-                                          filled-in-path :sys))
-                      new-out (conj out v)
-                      new-i (inc i)]
-                  (if (= num-results new-i)
-                    [new-out expanded-path]
-                    (recur new-out new-i))))))
+              (if (zero? num-results)
+                [[] []]
+                ;; Use loop to stay in the go block
+                (loop [out []
+                       i 0]
+                  (let [filled-in-path (nth expanded-path i)
+                        v (au/<? (u/<get-in storage data-id state-schema
+                                            filled-in-path :sys))
+                        new-out (conj out v)
+                        new-i (inc i)]
+                    (if (= num-results new-i)
+                      [new-out expanded-path]
+                      (recur new-out new-i)))))))
 
           (and term-kw? join?)
           (let [expanded-path (au/<? (u/<expand-path
                                       #(<ks-at-path :vivo/* <get-at-path
                                                     % path)
                                       (butlast path)))
-                num-results (count expanded-path)
-                results (loop [out []
-                               i 0]
-                          (let [filled-in-path (nth expanded-path i)
-                                v (au/<? (u/<get-in storage data-id state-schema
-                                                    filled-in-path :sys))
-                                new-out (conj out v)
-                                new-i (inc i)]
-                            (if (= num-results new-i)
-                              new-out
-                              (recur new-out new-i))))
-                value (case last-path-k
-                        :vivo/keys (range (count results))
-                        :vivo/count (count results)
-                        :vivo/concat (apply concat results))]
-            [value expanded-path])))))
+                num-results (count expanded-path)]
+            (if (zero? num-results)
+              [[] []]
+              (let [results (loop [out []
+                                   i 0]
+                              (let [filled-in-path (nth expanded-path i)
+                                    v (au/<? (u/<get-in storage data-id
+                                                        state-schema
+                                                        filled-in-path :sys))
+                                    new-out (conj out v)
+                                    new-i (inc i)]
+                                (if (= num-results new-i)
+                                  new-out
+                                  (recur new-out new-i))))
+                    value (case last-path-k
+                            :vivo/keys (range (count results))
+                            :vivo/count (count results)
+                            :vivo/concat (apply concat results))]
+                [value expanded-path])))))))
 
   (<get-log [this branch limit]
     (au/go

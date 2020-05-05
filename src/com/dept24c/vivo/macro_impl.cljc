@@ -63,52 +63,70 @@
       {'clojure.lang.PersistentHashMap/create 'hash-map}
       (destructure bindings))))
 
-(defn make-outer-body [sub-map props-sym cname-str inner-component-name]
+(defn make-outer-body [sub-map props-sym fq-name inner-component-name]
   `(let [body-fn# (com.dept24c.vivo.react/get* ~props-sym "body-fn")
          vc# (com.dept24c.vivo.react/get* ~props-sym "vc")
          sub-map# (com.dept24c.vivo.react/get* ~props-sym "sub-map")
          resolution-map# (com.dept24c.vivo.react/get* ~props-sym
                                                       "resolution-map")
-         cname-str# (com.dept24c.vivo.react/get* ~props-sym "cname-str")
+         [instance-name# _#] (com.dept24c.vivo.react/use-state
+                              (str
+                               ~fq-name "-"
+                               (com.dept24c.vivo.utils/next-instance-num! vc#)))
+         parents# (com.dept24c.vivo.react/get* ~props-sym "parents")
          vivo-state# (com.dept24c.vivo.react/use-vivo-state
-                      vc# sub-map# cname-str# resolution-map#)
+                      vc# sub-map# instance-name# resolution-map# parents#)
          inner-props# (com.dept24c.vivo.react/js-obj*
                        ["body-fn" body-fn#
-                        "vivo-state" vivo-state#])]
+                        "vivo-state" vivo-state#
+                        "parents" (conj parents# instance-name#)])]
      (when (and vivo-state# (not= :vivo/unknown vivo-state#))
-       (com.dept24c.vivo.react/create-element ~inner-component-name
-                                              inner-props#))))
+       (com.dept24c.vivo.react/create-element
+        ~inner-component-name inner-props#))))
+
+(defn make-inner-body [props-sym fq-name]
+  `(let [body-fn# (com.dept24c.vivo.react/get* ~props-sym "body-fn")
+         vivo-state# (com.dept24c.vivo.react/get* ~props-sym "vivo-state")
+         parents# (com.dept24c.vivo.react/get* ~props-sym "parents")]
+     (binding [com.dept24c.vivo.react/*parents* parents#]
+       (body-fn# vivo-state#))))
+
+(defn get-resolution-map-keys [sub-map]
+  (let [sub-map-ks (set (keys sub-map))]
+    (-> (reduce-kv (fn [acc k path]
+                     (reduce (fn [acc* element]
+                               (if-not (symbol? element)
+                                 acc*
+                                 (if (sub-map-ks element)
+                                   acc*
+                                   (conj acc* element))))
+                             acc path))
+                   #{} sub-map)
+        (vec))))
 
 (defn build-component
-  ([component-name args]
-   (build-component component-name args nil))
-  ([component-name args dispatch-val]
-   (let [parts (parse-def-component-args component-name args)
+  ([ns-name component-name args]
+   (build-component ns-name component-name args nil))
+  ([ns-name component-name args dispatch-val]
+   (let [fq-name (str ns-name "/" component-name)
+         parts (parse-def-component-args fq-name args)
          {:keys [docstring arglist sub-map body]} parts
          first-line (if dispatch-val
                       `(defmethod ~component-name ~dispatch-val)
                       (cond-> (vec `(defn ~component-name))
                         docstring (conj docstring)))
-         cname (name component-name)
-         body-fn-name (symbol (str cname "-body-fn"))
-         inner-component-name (gensym (str cname "-inner"))
-         outer-component-name (gensym (str cname "-outer"))
+         body-fn-name (symbol (str component-name "-body-fn"))
+         inner-component-name (gensym (str component-name "-inner"))
+         outer-component-name (gensym (str component-name "-outer"))
          props-sym (gensym "props")
          arglist-raw-sym (gensym "arglist-raw")
          destructured (destructure* [arglist arglist-raw-sym])
          inner-component-form `(defn ~inner-component-name [~props-sym]
-                                 (let [body-fn# (com.dept24c.vivo.react/get*
-                                                 ~props-sym "body-fn")
-                                       vivo-state# (com.dept24c.vivo.react/get*
-                                                    ~props-sym "vivo-state")]
-                                   (body-fn# vivo-state#)))
+                                 ~(make-inner-body props-sym fq-name))
          outer-component-form `(defn ~outer-component-name [~props-sym]
-                                 ~(make-outer-body sub-map props-sym cname
+                                 ~(make-outer-body sub-map props-sym fq-name
                                                    inner-component-name))
-         res-map-ks (->> (take-nth 2 destructured)
-                         (set)
-                         (filterv #(not (or (str/starts-with? (str %) "vec__")
-                                            (= 'vc %)))))
+         res-map-ks (get-resolution-map-keys sub-map)
          sub-map-ks (keys sub-map)
          vc-sym (if sub-map
                   `~'vc
@@ -121,12 +139,13 @@
                         body-fn# (fn ~body-fn-name [vivo-state#]
                                    (let [{:syms [~@sub-map-ks]} vivo-state#]
                                      ~@body))
+
                         props# (com.dept24c.vivo.react/js-obj*
                                 ["body-fn" body-fn#
                                  "vc" ~vc-sym
                                  "sub-map" '~sub-map
                                  "resolution-map" resolution-map#
-                                 "cname-str" ~cname])]
+                                 "parents" com.dept24c.vivo.react/*parents*])]
                     (com.dept24c.vivo.react/create-element
                      ~(if sub-map
                         outer-component-name
