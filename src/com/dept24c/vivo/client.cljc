@@ -323,7 +323,8 @@
                           (u/ex-msg-and-stacktrace e)))))))
 
   (get-synchronous-state [this ordered-pairs]
-    (subscriptions/get-synchronous-state ordered-pairs))
+    (subscriptions/get-synchronous-state ordered-pairs (:db @*sys-db-info)
+                                         @*local-state *subject-id))
 
   (<get-subject-id-for-identifier [this identifier]
     (cc/<send-msg capsule-client :get-subject-id-for-identifier identifier))
