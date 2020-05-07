@@ -55,6 +55,7 @@
   (<rpc [this arg metadata])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
+  (<update-db [this update-cmds msg subject-id branch])
   (<update-state [this arg metadata])
   (<scmds->cmds [this scmds conn-id])
   (get-storage [this branch])
@@ -1068,6 +1069,11 @@
                 (if last?
                   new-out
                   (recur (nth scmds new-i) new-i new-out)))))))))
+
+  (<update-db [this update-cmds msg subject-id branch]
+    (<modify-db this (partial <update-state-update-fn
+                              state-schema update-cmds tx-fns)
+                "Update db" subject-id branch nil))
 
   (<update-state [this arg metadata]
     (<do-update-state this arg metadata authorization-fn redaction-fn
