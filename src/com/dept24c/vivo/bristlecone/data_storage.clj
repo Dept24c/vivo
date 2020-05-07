@@ -131,12 +131,12 @@
             txf-ret (when tx-fns
                       (tx-fns/eval-tx-fns sub-map->op-cache tx-fns
                                           (:state uc-ret)))
-            final-state (if tx-fns
-                          (:state txf-ret)
-                          (:state uc-ret))
+            state (if tx-fns
+                    (:state txf-ret)
+                    (:state uc-ret))
             update-infos (concat (:update-infos uc-ret) (:update-infos txf-ret))
-            new-data-id (au/<? (<write-data this schema final-state))]
-        (u/sym-map new-data-id update-infos))))
+            new-data-id (au/<? (<write-data this schema state))]
+        (u/sym-map new-data-id update-infos state))))
 
   (<update-reference! [this reference schema update-commands prefix]
     (u/<update-reference! this reference schema update-commands prefix nil))

@@ -50,29 +50,20 @@
   (<add-subject-identifier! [this identifier])
   (<change-secret! [this old-secret new-secret])
   (<deserialize-value [this path ret])
-  (handle-sys-state-changed [this arg metadata])
-  (handle-updates [this updates cb])
+  (<handle-sys-state-changed [this arg metadata])
   (<get-subject-id-for-identifier [this identifier])
-  (<get-sys-state-and-expanded-path [this db-id path])
+  (get-synchronous-state [this ordered-pairs])
   (<log-in! [this identifier secret])
   (logged-in? [this])
   (<log-in-w-token! [this token])
   (<log-out! [this])
   (<log-out-w-token! [this token])
-  (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map]
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map
-     local-state db-id])
   (next-instance-num! [this])
   (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
-  (ssr? [this])
-  (<ssr [this component-fn component-name static-markup?])
-  (ssr-get-state! [this sub-map resolution-map])
-  (subscribe!
-    [this sub-map cur-state update-fn subscriber-name resolution-map]
-    [this sub-map cur-state update-fn subscriber-name resolution-map parents])
+  (subscribe! [this ordered-pairs initial-state update-fn subscriber-name
+               parents])
   (<update-cmd->serializable-update-cmd [this i cmds])
   (update-state! [this update-cmds cb])
   (<update-sys-state [this update-commands])
@@ -315,8 +306,12 @@
 
 (l/def-record-schema sys-state-change-schema
   [:new-db-id db-id-schema]
-  [:prev-db-id db-id-schema]
+  [:new-serialized-db serialized-value-schema]
   [:update-infos (l/array-schema update-info-schema)])
+
+(l/def-record-schema sys-state-info-schema
+  [:db-id db-id-schema]
+  [:serialized-db serialized-value-schema])
 
 (def update-state-ret-schema
   (l/union-schema [l/null-schema unauthorized-schema sys-state-change-schema]))
@@ -423,7 +418,7 @@
                 :ret rpc-ret-schema
                 :sender :client}
           :set-state-source {:arg state-source-schema
-                             :ret db-id-schema
+                             :ret sys-state-info-schema
                              :sender :client}
           :sys-state-changed {:arg sys-state-change-schema
                               :sender :server}
@@ -445,7 +440,7 @@
 ;;;;;;;;;;;;;;;;;;;; Helper fns ;;;;;;;;;;;;;;;;;;;;
 
 (defn check-sub-map
-  [subscriber-name subscriber-type sub-map]
+  [sub-map]
   (when-not (map? sub-map)
     (throw (ex-info "The sub-map parameter must be a map."
                     (sym-map sub-map))))
@@ -476,44 +471,67 @@
           x (first colls)]
       (cons x more))))
 
+(def initial-path-info {:template []
+                        :in-progress []
+                        :colls []
+                        :coll-index 0})
+
+(defn post-process-path-info [info]
+  (let [{:keys [in-progress]} info]
+    (cond-> info
+      (seq in-progress) (update :template conj in-progress)
+      true (select-keys [:template :colls]))))
+
+(defn update-parse-path-acc [acc element]
+  (let [{:keys [in-progress coll-index]} acc]
+    (if-not (sequential? element)
+      (update acc :in-progress conj element)
+      (cond-> acc
+        (seq in-progress) (update :template conj in-progress)
+        (seq in-progress) (assoc :in-progress [])
+        true (update :colls conj element)
+        true (update :template conj coll-index)
+        true (update :coll-index inc)))))
+
+(defn parse-path [ks-at-path path]
+  (let [info (reduce
+              (fn [acc element]
+                (let [element* (cond
+                                 (set? element)
+                                 (seq element)
+
+                                 (= :vivo/* element)
+                                 (ks-at-path (:in-progress acc))
+
+                                 :else
+                                 element)]
+                  (update-parse-path-acc acc element*)))
+              initial-path-info
+              path)]
+    (post-process-path-info info)))
+
 (defn <parse-path [<ks-at-path path]
   (au/go
     (let [path-len (count path)
-          init {:template []
-                :in-progress []
-                :colls []
-                :coll-index 0}
           ;; Use loop to stay in go block
-          info (loop [acc init
+          info (loop [acc initial-path-info
                       i 0]
-                 (let [part (nth path i)
-                       {:keys [in-progress coll-index]} acc
-                       part* (cond
-                               (set? part)
-                               (seq part)
+                 (let [element (nth path i)
+                       element* (cond
+                                  (set? element)
+                                  (seq element)
 
-                               (= :vivo/* part)
-                               (au/<? (<ks-at-path in-progress))
+                                  (= :vivo/* element)
+                                  (au/<? (<ks-at-path (:in-progress acc)))
 
-                               :else
-                               part)
-                       new-acc (if-not (sequential? part*)
-                                 (update acc :in-progress conj part*)
-                                 (cond-> acc
-                                   (seq in-progress) (update :template
-                                                             conj in-progress)
-                                   (seq in-progress) (assoc :in-progress [])
-                                   true (update :colls conj part*)
-                                   true (update :template conj coll-index)
-                                   true (update :coll-index inc)))
+                                  :else
+                                  element)
+                       new-acc (update-parse-path-acc acc element*)
                        new-i (inc i)]
                    (if (= path-len new-i)
                      new-acc
-                     (recur new-acc new-i))))
-          {:keys [in-progress]} info]
-      (cond-> info
-        (seq in-progress) (update :template conj in-progress)
-        true (select-keys [:template :colls])))))
+                     (recur new-acc new-i))))]
+      (post-process-path-info info))))
 
 (defn has-join? [path]
   (some #(or (sequential? %)
@@ -521,18 +539,27 @@
              (= :vivo/* %))
         path))
 
+(defn expand-template [template colls]
+  (map (fn [combo]
+         (vec (reduce (fn [acc element]
+                        (concat acc (if (number? element)
+                                      [(nth combo element)]
+                                      element)))
+                      '() template)))
+       (cartesian-product colls)))
+
 (defn <expand-path [<ks-at-path path]
   (au/go
     (if-not (has-join? path)
       [path]
       (let [{:keys [template colls]} (au/<? (<parse-path <ks-at-path path))]
-        (map (fn [combo]
-               (vec (reduce (fn [acc part]
-                              (concat acc (if (number? part)
-                                            [(nth combo part)]
-                                            part)))
-                            '() template)))
-             (cartesian-product colls))))))
+        (expand-template template colls)))))
+
+(defn expand-path [ks-at-path path]
+  (if-not (has-join? path)
+    [path]
+    (let [{:keys [template colls]} (parse-path ks-at-path path)]
+      (expand-template template colls))))
 
 (defn edn-sch->k [edn-sch]
   (let [ret (cond
@@ -587,67 +614,6 @@
           (sr/put! path->schema-cache path sch))
         sch)))
 
-(defn get-non-numeric-part [path]
-  (take-while #(not (number? %)) path))
-
-(defn update-numeric? [updated-path sub-path op]
-  ;; TODO: Improve this using op / normalized paths
-  (let [u-front (get-non-numeric-part updated-path)
-        s-front (get-non-numeric-part sub-path)]
-    (if (or (not (seq u-front))
-            (not (seq s-front)))
-      true
-      (let [[relationship _] (relationship-info u-front s-front)]
-        (not= :sibling relationship)))))
-
-(defn update-sub?* [update-infos sub-path]
-  (reduce (fn [acc {:keys [norm-path op] :as update-info}]
-            (cond
-              (= [:vivo/subject-id] sub-path)
-              (if (= [:vivo/subject-id] norm-path)
-                (reduced true)
-                false)
-
-              (= [:vivo/subject-id] norm-path)
-              (if (= [:vivo/subject-id] sub-path)
-                (reduced true)
-                false)
-
-              (or (some number? norm-path)
-                  (some number? sub-path))
-              (if (update-numeric? norm-path sub-path op)
-                (reduced true)
-                false)
-
-              :else
-              (let [[relationship _] (relationship-info
-                                      (or norm-path [])
-                                      (or sub-path []))]
-                (if (= :sibling relationship)
-                  false
-                  ;; TODO: Compare values here if :parent
-                  (reduced true)))))
-          false update-infos))
-
-(defn transform-operators-in-sub-path [sub-path]
-  (reduce (fn [acc k]
-            (if (#{:vivo/* :vivo/concat :vivo/keys :vivo/count} k)
-              (reduced acc)
-              (conj acc k)))
-          [] sub-path))
-
-(defn update-sub? [update-infos sub-paths]
-  (reduce (fn [acc sub-path]
-            (when-not (sequential? sub-path)
-              (throw (ex-info (str "`sub-path` must be seqential. Got: `"
-                                   sub-path "`.")
-                              (sym-map sub-path))))
-            (if (update-sub?* update-infos
-                              (transform-operators-in-sub-path sub-path))
-              (reduced true)
-              false))
-          false sub-paths))
-
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
         disp-head (or head "nil")]
@@ -662,14 +628,6 @@
                "valid path keys.")
           (sym-map k path))))
 
-(defn resolve-symbols-in-path [acc subscriber-name path]
-  (when (sequential? path)
-    (mapv (fn [k]
-            (if (symbol? k)
-              (get-in acc [:state k])
-              k))
-          path)))
-
 (defn terminal-kw? [k]
   (boolean (#{:vivo/keys :vivo/count :vivo/concat} k)))
 
@@ -680,9 +638,9 @@
       (throw-bad-path-key path k))))
 
 (defn check-terminal-kws [path]
-  (let [num-parts (count path)
-        last-i (dec num-parts)]
-    (doseq [i (range num-parts)]
+  (let [num-elements (count path)
+        last-i (dec num-elements)]
+    (doseq [i (range num-elements)]
       (let [k (nth path i)]
         (when (and (terminal-kw? k)
                    (not= last-i i))
@@ -693,44 +651,50 @@
   (check-key-types path)
   (check-terminal-kws path))
 
-(defn sub-map->ordered-pairs [sub-map->op-cache sub-map]
-  (or (sr/get sub-map->op-cache sub-map)
-      (let [sub-syms (set (keys sub-map))
-            info (reduce-kv
-                  (fn [acc sym path]
-                    (when-not (symbol? sym)
-                      (throw (ex-info
-                              (str "All keys in sub-map must be symbols. Got `"
-                                   sym "`.")
-                              (sym-map sym sub-map))))
-                    (if (= [:vivo/subject-id] path)
-                      (update acc :sym->path assoc sym path)
-                      (let [_ (check-path path)
-                            [head & tail] path
-                            deps (filter symbol? path)]
-                        (when-not (#{:local :sys :vivo/subject-id} head)
-                          (throw-bad-path-root path))
-                        (cond-> (update acc :sym->path assoc sym path)
-                          (seq deps) (update :g #(reduce
-                                                  (fn [g dep]
-                                                    (dep/depend g sym dep))
-                                                  % deps))))))
-                  {:g (dep/graph)
-                   :sym->path {}}
-                  sub-map)
-            {:keys [g sym->path]} info
-            ordered-dep-syms (dep/topo-sort g)
-            no-dep-syms (set/difference (set (keys sym->path))
-                                        (set ordered-dep-syms))
-            pairs (reduce (fn [acc sym]
-                            (if-let [path (sym->path sym)]
-                              (conj acc [sym path])
-                              acc))
-                          []
-                          (concat (seq no-dep-syms)
-                                  ordered-dep-syms))]
-        (sr/put! sub-map->op-cache sub-map pairs)
-        pairs)))
+(defn sub-map->ordered-pairs [sub-map resolution-map]
+  (check-sub-map sub-map)
+  (let [resolve-resolution-map-syms (fn [path]
+                                      (reduce
+                                       (fn [acc element]
+                                         (if-not (symbol? element)
+                                           (conj acc element)
+                                           (if-let [v (resolution-map element)]
+                                             (conj acc v)
+                                             (conj acc element))))
+                                       [] path))
+        info (reduce-kv
+              (fn [acc sym path]
+                (when-not (symbol? sym)
+                  (throw (ex-info
+                          (str "All keys in sub-map must be symbols. Got `"
+                               sym "`.")
+                          (sym-map sym sub-map))))
+                (if (= [:vivo/subject-id] path)
+                  (update acc :sym->path assoc sym path)
+                  (let [_ (check-path path)
+                        path* (resolve-resolution-map-syms path)
+                        deps (filter symbol? path*)]
+                    (when-not (#{:local :sys :vivo/subject-id} (first path))
+                      (throw-bad-path-root path))
+                    (cond-> (update acc :sym->path assoc sym path*)
+                      (seq deps) (update :g #(reduce
+                                              (fn [g dep]
+                                                (dep/depend g sym dep))
+                                              % deps))))))
+              {:g (dep/graph)
+               :sym->path {}}
+              sub-map)
+        {:keys [g sym->path]} info
+        ordered-dep-syms (dep/topo-sort g)
+        no-dep-syms (set/difference (set (keys sym->path))
+                                    (set ordered-dep-syms))]
+    (reduce (fn [acc sym]
+              (if-let [path (sym->path sym)]
+                (conj acc [sym path])
+                acc))
+            []
+            (concat (seq no-dep-syms)
+                    ordered-dep-syms))))
 
 (defn empty-sequence-in-path? [path]
   (reduce (fn [acc element]

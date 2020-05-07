@@ -56,7 +56,6 @@
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
   (<update-state [this arg metadata])
-  (<update-db [this update-cmds msg subject-id branch])
   (<scmds->cmds [this scmds conn-id])
   (get-storage [this branch])
   (set-rpc-handler! [this rpc-name-kw handler])
@@ -271,12 +270,13 @@
   [state-schema update-cmds tx-fns dbi storage subject-id]
   (au/go
     (let [{:keys [data-id]} dbi
-          state-edn-schema (l/edn state-schema)
           ret (au/<? (u/<update storage data-id state-schema
                                 update-cmds :sys tx-fns))
-          {:keys [new-data-id update-infos]} ret]
+          {:keys [new-data-id update-infos state]} ret]
       {:dbi (assoc dbi :data-id new-data-id)
-       :update-infos update-infos})))
+       :update-infos update-infos
+       :state-update? true
+       :state state})))
 
 (defn <delete-branch* [branch storage]
   (au/go
@@ -298,9 +298,13 @@
       (au/<? (u/<delete-reference! storage branch-reference))
       true)))
 
-(defn <modify-db* [branch-reference storage subject-id <update-fn msg]
+(defn <modify-db*
+  [branch conn-id storage subject-id <update-fn msg redaction-fn
+   state-schema vc-ep *branch->info]
   (au/go
-    (let [num-tries 10]
+    (let [num-tries 10
+          {:keys [conn-ids]} (@*branch->info branch)
+          branch-reference (branch->reference branch)]
       ;; Use loop to stay in go block
       (loop [num-tries-left (dec num-tries)]
         (let [prev-db-id (au/<? (u/<get-data-id storage branch-reference))
@@ -309,7 +313,8 @@
                                            u/db-info-schema nil nil)))
               {:keys [num-prev-dbs data-id]} prev-dbi
               uf-ret (au/<? (<update-fn prev-dbi storage subject-id))
-              new-dbi (assoc (:dbi uf-ret)
+              {:keys [dbi update-infos state-update?]} uf-ret
+              new-dbi (assoc dbi
                              :msg msg
                              :timestamp-ms (u/current-time-ms)
                              :num-prev-dbs (if num-prev-dbs
@@ -321,14 +326,26 @@
                                              :op :set
                                              :arg new-dbi}]
                                            nil))
-              new-db-id (:new-data-id update-ret)]
+              new-db-id (:new-data-id update-ret)
+              whole-db (:state uf-ret)]
           (if (au/<? (u/<compare-and-set! storage branch-reference
                                           l/string-schema
                                           prev-db-id
                                           new-db-id))
-            {:new-db-id new-db-id
-             :prev-db-id prev-db-id
-             :update-infos (:update-infos uf-ret)}
+            (do
+              (when state-update?
+                ;; Notify all conns except the originator, who gets the
+                ;; information sent to them directly.
+                ;; This allows local+sys updates to be atomic.
+                (doseq [conn-id* (disj (set conn-ids) conn-id)]
+                  (let [new-db (redaction-fn subject-id whole-db)
+                        fp (l/fingerprint64 state-schema)
+                        bytes (l/serialize state-schema new-db)
+                        new-serialized-db (u/sym-map fp bytes)
+                        info (u/sym-map new-db-id new-serialized-db
+                                        update-infos)]
+                    (ep/send-msg vc-ep conn-id* :sys-state-changed info))))
+              (u/sym-map new-db-id prev-db-id whole-db update-infos))
             (if (zero? num-tries-left)
               (throw
                (ex-info (str "Failed to commit to branch `" branch-reference
@@ -338,16 +355,19 @@
                 (au/<? (ca/timeout (rand-int 100)))
                 (recur (dec num-tries-left))))))))))
 
-(defn start-modify-db-loop [^ConcurrentLinkedQueue q log-error]
+(defn start-modify-db-loop
+  [^ConcurrentLinkedQueue q log-error redaction-fn state-schema vc-ep
+   *branch->info]
   (ca/go
     (while true
       (try
         (if-let [info (.poll q)]
-          (let [{:keys [cb branch-reference
-                        storage subject-id <update-fn msg]} info]
+          (let [{:keys [cb branch conn-id storage
+                        subject-id <update-fn msg]} info]
             (try
-              (cb (au/<? (<modify-db* branch-reference storage subject-id
-                                      <update-fn msg)))
+              (cb (au/<? (<modify-db* branch conn-id storage subject-id
+                                      <update-fn msg redaction-fn
+                                      state-schema vc-ep *branch->info)))
               (catch Exception e
                 (cb e))))
           (ca/<! (ca/timeout 5)))
@@ -468,10 +488,12 @@
       subject-id)))
 
 (defn <do-update-state
-  [vs arg metadata authorization-fn state-schema tx-fns *conn-id->info]
+  [vs arg metadata authorization-fn redaction-fn state-schema tx-fns
+   *conn-id->info]
   (au/go
     (let [{:keys [conn-id]} metadata
           {:keys [subject-id branch]} (@*conn-id->info conn-id)
+          storage (get-storage vs branch)
           update-cmds (au/<? (<scmds->cmds vs arg conn-id))
           all-authed? (if (empty? update-cmds)
                         true
@@ -489,9 +511,16 @@
                               :else (recur new-i)))))]
       (if-not all-authed?
         :vivo/unauthorized
-        (au/<? (<modify-db vs (partial <update-state-update-fn
-                                       state-schema update-cmds tx-fns)
-                           "Update state" subject-id branch conn-id))))))
+        (let [ret (au/<? (<modify-db vs
+                                     (partial <update-state-update-fn
+                                              state-schema update-cmds tx-fns)
+                                     "Update state" subject-id branch conn-id))
+              {:keys [new-db-id whole-db update-infos]} ret
+              new-db (redaction-fn subject-id whole-db)
+              fp (l/fingerprint64 state-schema)
+              bytes (l/serialize state-schema new-db)
+              new-serialized-db (u/sym-map fp bytes)]
+          (u/sym-map new-db-id new-serialized-db update-infos))))))
 
 (defrecord VivoServer [authorization-fn
                        log-error
@@ -502,7 +531,8 @@
                        path->schema-cache
                        perm-storage
                        rpcs
-                       sm-ep
+                       vc-ep
+                       redaction-fn
                        repository-name
                        state-schema
                        stop-server
@@ -515,17 +545,13 @@
   IVivoServer
   (<modify-db [this <update-fn msg subject-id branch conn-id]
     (au/go
-      (let [{:keys [conn-ids]} (@*branch->info branch)
-            branch-reference (branch->reference branch)
-            storage (get-storage this branch)
+      (let [storage (get-storage this branch)
             modify-ch (ca/chan)
             cb #(ca/put! modify-ch %)
-            update-info (u/sym-map cb branch-reference storage subject-id
+            update-info (u/sym-map cb branch conn-id storage subject-id
                                    <update-fn msg)
             _ (.add ^ConcurrentLinkedQueue modify-q update-info)
             change-info (au/<? modify-ch)]
-        (doseq [conn-id* (disj (set conn-ids) conn-id)]
-          (ep/send-msg sm-ep conn-id* :sys-state-changed change-info))
         change-info)))
 
   (<get-db-info [this branch storage]
@@ -657,7 +683,7 @@
                                                     state-schema update-cmds
                                                     tx-fns)
                                 msg "Create initial db for branch"
-                                create-db-info (u/sym-map cb branch-reference
+                                create-db-info (u/sym-map cb branch
                                                           storage subject-id
                                                           <update-fn msg)]
                             (.add ^ConcurrentLinkedQueue modify-q
@@ -671,7 +697,7 @@
   (<fp->schema [this fp conn-id]
     (au/go
       (or (au/<? (u/<fp->schema perm-storage fp))
-          (let [pcf (au/<? (ep/<send-msg sm-ep conn-id
+          (let [pcf (au/<? (ep/<send-msg vc-ep conn-id
                                          :get-schema-pcf fp))]
             (l/json->schema pcf)))))
 
@@ -890,7 +916,7 @@
           ;; Wait for `true` response to be rcvd before closing conns
           (ca/<! (ca/timeout 5000))
           (doseq [conn-id conn-ids]
-            (ep/close-conn sm-ep conn-id)))
+            (ep/close-conn vc-ep conn-id)))
         true)))
 
   (<log-out-w-token [this token metadata]
@@ -925,7 +951,7 @@
                   (ca/<! (ca/timeout 5000))
                   (doseq [conn-id conn-ids]
                     (log-info (str "Closing conn " conn-id))
-                    (ep/close-conn sm-ep conn-id)))
+                    (ep/close-conn vc-ep conn-id)))
                 true)))))))
 
   (<set-state-source [this source metadata]
@@ -950,7 +976,12 @@
                                      :db-id (:temp-branch/db-id source)
                                      :is-temp true}
                                metadata))
-                       branch*))]
+                       branch*))
+            db-id (au/<? (<get-db-id this branch))
+            db (au/<? (<get-in this db-id [:sys]))
+            fp (au/<? (u/<schema->fp perm-storage state-schema))
+            serialized-db {:fp fp
+                           :bytes (l/serialize state-schema db)}]
         (swap! *conn-id->info update conn-id assoc
                :branch branch :temp-branch? (not perm-branch))
         (swap! *branch->info update branch
@@ -958,7 +989,7 @@
                  (if conn-ids
                    (update info :conn-ids conj conn-id)
                    (assoc info :conn-ids #{conn-id}))))
-        (au/<? (<get-db-id this branch)))))
+        (u/sym-map db-id serialized-db))))
 
   (<rpc [this msg-arg metadata]
     (au/go
@@ -1039,13 +1070,8 @@
                   (recur (nth scmds new-i) new-i new-out)))))))))
 
   (<update-state [this arg metadata]
-    (<do-update-state this arg metadata authorization-fn state-schema
-                      tx-fns *conn-id->info))
-
-  (<update-db [this update-cmds msg subject-id branch]
-    (<modify-db this (partial <update-state-update-fn
-                              state-schema update-cmds tx-fns)
-                "Update db" subject-id branch nil))
+    (<do-update-state this arg metadata authorization-fn redaction-fn
+                      state-schema tx-fns *conn-id->info))
 
   (<get-schema-pcf [this fp metadata]
     (au/go
@@ -1088,7 +1114,9 @@
    :http-timeout-ms 60000
    :log-info println
    :log-error println ;; TODO: use stderr
-   :login-lifetime-mins (* 60 24 15)}) ;; 15 days
+   :login-lifetime-mins (* 60 24 15)  ;; 15 days
+   :redaction-fn (fn [subject-id db]
+                   db)})
 
 (defn check-config [config]
   (let [required-ks [:authorization-fn :port :repository-name :state-schema]]
@@ -1173,6 +1201,7 @@
                 login-lifetime-mins
                 port
                 private-key-str
+                redaction-fn
                 repository-name
                 rpcs
                 state-schema
@@ -1187,7 +1216,6 @@
                       (data-block-storage/data-block-storage
                        (mem-block-storage/mem-block-storage true)))
         modify-q (ConcurrentLinkedQueue.)
-        _ (start-modify-db-loop modify-q log-error)
         path->schema-cache (sr/stockroom 1000)
         *conn-id->info (atom {})
         *subject-id->conn-ids (atom {})
@@ -1214,6 +1242,7 @@
                                   perm-storage
                                   (or rpcs {})
                                   vc-ep
+                                  redaction-fn
                                   repository-name
                                   state-schema
                                   stop-server
@@ -1223,6 +1252,8 @@
                                   *subject-id->conn-ids
                                   *branch->info
                                   *rpc->handler)]
+    (start-modify-db-loop modify-q log-error redaction-fn state-schema vc-ep
+                          *branch->info)
     (set-handlers! vivo-server vc-ep admin-ep)
     (log-info (str "Vivo server started on port " port "."))
     vivo-server))

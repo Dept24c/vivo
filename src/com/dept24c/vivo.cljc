@@ -38,10 +38,11 @@
    Prefer `def-component` or `use-vivo-state`.
    Returns an unsubscribe fn that may be called to cancel the subscription."
   ([vc sub-map initial-state update-fn subscriber-name]
-   (u/subscribe! vc sub-map initial-state update-fn subscriber-name {}))
+   (subscribe! vc sub-map initial-state update-fn subscriber-name {}))
   ([vc sub-map initial-state update-fn subscriber-name resolution-map]
-   (u/subscribe! vc sub-map initial-state update-fn subscriber-name
-                 resolution-map)))
+   (let [ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)]
+     (u/subscribe! vc ordered-pairs initial-state update-fn
+                   subscriber-name []))))
 
 (defn update-state!
   ([vc update-commands]

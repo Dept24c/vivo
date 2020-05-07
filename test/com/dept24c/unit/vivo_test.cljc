@@ -4,6 +4,7 @@
    [clojure.string :as str]
    [clojure.test :refer [are deftest is]]
    [com.dept24c.vivo :as vivo]
+   [com.dept24c.vivo.client.subscriptions :as subscriptions]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.utils :as u]
@@ -433,10 +434,12 @@
              ch (ca/chan 1)
              sub-map '{title [:local :msgs -1 :title]}
              update-fn #(ca/put! ch (% 'title))
-             new-title "Bar"]
-         (au/<? (vivo/<update-state! vc [{:path [:local]
-                                          :op :set
-                                          :arg {:msgs [{:title orig-title}]}}]))
+             new-title "Bar"
+             ret (au/<? (vivo/<update-state!
+                         vc [{:path [:local]
+                              :op :set
+                              :arg {:msgs [{:title orig-title}]}}]))]
+         (is (= true ret))
          (vivo/subscribe! vc sub-map nil update-fn "test")
          (is (= orig-title (au/<? ch)))
          (au/<? (vivo/<update-state! vc [{:path [:local :msgs -1]
@@ -672,7 +675,7 @@
                        :op :insert
                        :value "hi"}]
         sub-paths [[:local :page]]]
-    (is (= false (u/update-sub? update-infos sub-paths)))))
+    (is (= false (subscriptions/update-sub? update-infos sub-paths)))))
 
 (deftest test-explicit-seq-in-path
   (au/test-async
@@ -730,8 +733,8 @@
          (is (= expected (au/<? ch))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
-#_
-(deftest ^:this test-wildcard-sub
+
+(deftest test-wildcard-sub
   (au/test-async
    3000
    (ca/go
@@ -743,18 +746,23 @@
                     "789" {:title "Dr Jekyll and Mr Hyde" :nums [5 7]}}
              titles-set (set (map :title (vals books)))
              sub-map '{titles [:local :books :vivo/* :title]}
-             update-fn #(ca/put! ch %)]
-         (vivo/subscribe! vc sub-map nil update-fn "test" {})
-         (is (= {'titles []} (au/<? ch)))
-         (log/info (str "set-state got: "
-                        (au/<? (vivo/<set-state! vc [:local :books] books))))
-         (is (= {'titles []} (au/<? ch)))
-         #_ (au/<? (vivo/<update-state! vc [{:path [:local :books "new"]
-                                             :op :set
-                                             :arg {:title "1984"
-                                                   :nums [20 30]}}]))
-         #_(is (= expected
-                  (-> (au/<? ch)
-                      (update 'titles set)))))
+             update-fn #(ca/put! ch (update % 'titles set))
+             _ (vivo/subscribe! vc sub-map nil update-fn "test" {})
+             _ (is (= {'titles #{}} (au/<? ch)))
+             ret1 (au/<? (vivo/<set-state! vc [:local :books] books))
+             _ (is (= true ret1))
+             _ (is (= {'titles titles-set} (au/<? ch)))
+             ret2 (au/<? (vivo/<update-state! vc [{:path [:local :books "999"]
+                                                   :op :set
+                                                   :arg {:title "1984"
+                                                         :nums [20 30]}}]))
+             _ (is (= true ret2))
+             _ (is (= {'titles (conj titles-set "1984")} (au/<? ch)))
+             ret3 (au/<? (vivo/<update-state! vc [{:path [:local :books "456"]
+                                                   :op :remove}]))
+             _ (is (= true ret3))
+             expected-titles (-> (conj titles-set "1984")
+                                 (disj "Kidnapped"))
+             _ (is (= {'titles expected-titles} (au/<? ch)))])
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))

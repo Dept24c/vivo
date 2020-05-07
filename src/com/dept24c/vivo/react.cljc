@@ -69,12 +69,6 @@
   #?(:cljs
      (ocall React :cloneElement element #js {"key" k})))
 
-(defn <ssr
-  ([vc component-fn component-name]
-   (u/<ssr vc component-fn component-name false))
-  ([vc component-fn component-name static-markup?]
-   (u/<ssr vc component-fn component-name static-markup?)))
-
 ;;;; Macros
 
 (defmacro def-component
@@ -106,24 +100,12 @@
    (use-vivo-state vc sub-map component-name resolution-map []))
   ([vc sub-map component-name resolution-map parents]
    #?(:cljs
-      ;; During SSR, we need to render the correct state immediately, since
-      ;; there will never be any updates later.
-      (let [initial-state (if (u/ssr? vc)
-                            (u/ssr-get-state! vc sub-map resolution-map)
-                            :vivo/unknown)
-
+      (let [ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)
+            initial-state (u/get-synchronous-state vc ordered-pairs)
             [state update-fn] (use-state initial-state)
-            *mounted? (atom true)
             effect (fn []
-                     (let [unsub (u/subscribe! vc sub-map state
-                                               #(when @*mounted?
-                                                  (update-fn %))
-                                               component-name
-                                               resolution-map
-                                               parents)]
-                       (fn on-unmount []
-                         (reset! *mounted? false)
-                         (unsub))))]
+                     (u/subscribe! vc ordered-pairs initial-state update-fn
+                                   component-name parents))]
         (use-effect effect (clj->js [sub-map resolution-map]))
         state))))
 

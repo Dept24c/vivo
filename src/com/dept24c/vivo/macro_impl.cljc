@@ -42,7 +42,7 @@
         {:keys [docstring sub-map arglist body]} parts
         _ (check-arglist component-name (boolean sub-map) arglist)
         _ (when sub-map
-            (u/check-sub-map component-name "component" sub-map))
+            (u/check-sub-map sub-map))
         repeated-syms (vec (set/intersection (set (keys sub-map))
                                              (set arglist)))]
     (when (seq repeated-syms)

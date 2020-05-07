@@ -2,6 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
+   [com.dept24c.vivo.client.subscriptions :as subscriptions]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.react :as react]
    [com.dept24c.vivo.utils :as u]
@@ -13,11 +14,9 @@
 
 (def default-vc-opts
   {:log-error println
-   :log-info println
-   :sys-state-cache-num-keys 100})
+   :log-info println})
 
 (def get-state-timeout-ms 30000)
-(def initial-ssr-info {:resolved {} :needed #{}})
 (def max-commit-attempts 100)
 (def update-state-timeout-ms 30000)
 
@@ -53,118 +52,6 @@
                                  0
                                  new-sub-id))))))
 
-(defn count-at-path [state path prefix]
-  (let [coll (:val (commands/get-in-state state path prefix))]
-    (cond
-      (or (map? coll) (sequential? coll))
-      (count coll)
-
-      (nil? coll)
-      0
-
-      :else
-      (throw
-       (ex-info
-        (str "`:vivo/count` terminates path, but there is not a collection at "
-             path ".")
-        {:path path
-         :value coll})))))
-
-(defn do-concat [state path prefix]
-  (let [seqs (:val (commands/get-in-state state path prefix))]
-    (when (or (not (sequential? seqs))
-              (not (sequential? (first seqs))))
-      (throw
-       (ex-info
-        (str "`:vivo/concat` terminates path, but there "
-             "is not a sequence of sequences at " path ".")
-        {:path path
-         :value seqs})))
-    (apply concat seqs)))
-
-(defn <ks-at-path [kw state path prefix full-path]
-  (au/go
-    (let [coll (:val (commands/get-in-state state path prefix))]
-      (cond
-        (map? coll)
-        (keys coll)
-
-        (sequential? coll)
-        (range (count coll))
-
-        (nil? coll)
-        []
-
-        :else
-        (throw
-         (ex-info
-          (str "`" kw "` is in the path, but "
-               "there is not a collection at " path ".")
-          {:full-path full-path
-           :missing-collection-path path
-           :value coll}))))))
-
-(defn <get-state-and-expanded-path [state path prefix]
-  (au/go
-    (let [last-path-k (last path)
-          <ks-at-path* #(<ks-at-path :vivo/* state % prefix path)
-          join? (u/has-join? path)
-          term-kw? (u/terminal-kw? last-path-k)]
-      (cond
-        (u/empty-sequence-in-path? path)
-        [nil [path]]
-
-        (and (not term-kw?) (not join?))
-        (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
-          [val [norm-path]])
-
-        (and term-kw? (not join?))
-        (let [path* (butlast path)
-              val (case last-path-k
-                    :vivo/keys (au/<? (<ks-at-path :vivo/keys state path* prefix
-                                                   path))
-                    :vivo/count (count-at-path state path* prefix)
-                    :vivo/concat (do-concat state path* prefix))]
-          [val [path]])
-
-        (and (not term-kw?) join?)
-        (let [xpath (au/<? (u/<expand-path <ks-at-path* path))
-              num-results (count xpath)]
-          (if (zero? num-results)
-            [[] []]
-            ;; Use loop to stay in go block
-            (loop [out []
-                   i 0]
-              (let [path* (nth xpath i)
-                    ret (au/<? (<get-state-and-expanded-path
-                                state path* prefix))
-                    new-out (conj out (first ret))
-                    new-i (inc i)]
-                (if (not= num-results new-i)
-                  (recur new-out new-i)
-                  [new-out xpath])))))
-
-        (and term-kw? join?)
-        (let [xpath (au/<? (u/<expand-path <ks-at-path* (butlast path)))
-              num-results (count xpath)]
-          (if (zero? num-results)
-            [[] []]
-            (let [results (loop [out [] ;; Use loop to stay in go block
-                                 i 0]
-                            (let [path* (nth xpath i)
-                                  ret (au/<? (<get-state-and-expanded-path
-                                              state path* prefix))
-                                  new-out (conj out (first ret))
-                                  new-i (inc i)]
-                              (if (not= num-results new-i)
-                                (recur new-out new-i)
-                                new-out)))
-                  v (case last-path-k
-                      :vivo/keys (range (count results))
-                      :vivo/count (count results)
-                      :vivo/concat (apply concat results))]
-              [v xpath])))))))
-
 (defn eval-cmds [initial-state cmds prefix]
   (reduce (fn [{:keys [state] :as acc} cmd]
             (let [ret (commands/eval-cmd state cmd prefix)]
@@ -183,72 +70,9 @@
   #?(:cljs (object? v)
      :clj (throw (ex-info "js-object? is not supported in clj." {}))))
 
-(defn ssr-get-state!* [*ssr-info sub-map resolution-map]
-  (let [v (get (:resolved @*ssr-info) [sub-map resolution-map] :not-found)]
-    (if (not= :not-found v)
-      v
-      (do
-        (swap! *ssr-info update :needed conj [sub-map resolution-map])
-        nil))))
-
-(defn <subscription-loop
-  [update-fn cur-paths update-sub-ch unsub-ch updates-pub <make-si
-   subscriber-name *local-state *stopped? *cur-db-id *last-state]
-  (au/go
-    (loop [paths cur-paths]
-      (let [[update* ch] (au/alts? [update-sub-ch unsub-ch])]
-        (when-not @*stopped?
-          (if (= unsub-ch ch)
-            (ca/unsub updates-pub :all update-sub-ch)
-            (let [{:keys [update-infos db-id local-state]
-                   :or {db-id @*cur-db-id
-                        local-state @*local-state}} update*
-                  update? (u/update-sub? update-infos paths)
-                  paths* (if-not update?
-                           paths
-                           (let [si (au/<? (<make-si local-state db-id))
-                                 new-state (:state si)
-                                 new-paths (:paths si)]
-                             (when (not= @*last-state new-state)
-                               (reset! *last-state new-state)
-                               (update-fn new-state))
-                             new-paths))]
-              (recur paths*))))))))
-
-(defn subscribe!*
-  [vc sub-map initial-state update-fn subscriber-name resolution-map parents
-   sub-map->op-cache updates-pub log-error *local-state *stopped? *cur-db-id
-   *subscriber-name->parents]
-  (u/check-sub-map subscriber-name "subscriber" sub-map)
-  (let [ordered-pairs (u/sub-map->ordered-pairs sub-map->op-cache sub-map)
-        <make-si (partial u/<make-state-info vc ordered-pairs
-                          subscriber-name resolution-map)
-        update-sub-ch (ca/chan 10)
-        unsub-ch (ca/promise-chan)
-        unsubscribe! (fn []
-                       (swap! *subscriber-name->parents dissoc subscriber-name)
-                       (ca/put! unsub-ch true))]
-    (swap! *subscriber-name->parents assoc subscriber-name (set parents))
-    (ca/sub updates-pub :all update-sub-ch)
-    (ca/go
-      (try
-        (au/<? (u/<wait-for-conn-init vc))
-        (let [{cur-state :state
-               cur-paths :paths} (au/<? (<make-si))
-              *last-state (atom cur-state)]
-          (when (not= initial-state cur-state)
-            (update-fn cur-state))
-          (au/<? (<subscription-loop update-fn cur-paths update-sub-ch
-                                     unsub-ch updates-pub <make-si
-                                     subscriber-name *local-state *stopped?
-                                     *cur-db-id *last-state)))
-        (catch #?(:cljs js/Error :clj Exception) e
-          (log-error (str "Error in subscribe!\n"
-                          (u/ex-msg-and-stacktrace e))))))
-    unsubscribe!))
-
-(defn handle-updates*
-  [vc update-info cb* updates-ch log-error *cur-db-id *local-state]
+(defn do-state-updates!*
+  [vc update-info cb* subs-update-ch log-error <fp->schema sys-state-schema
+   *sys-db-info *local-state *subscriber-name->info *subject-id]
   (ca/go
     (try
       (au/<? (u/<wait-for-conn-init vc))
@@ -258,13 +82,19 @@
                       (when-let [ret (au/<? (u/<update-sys-state vc sys-cmds))]
                         (if (= :vivo/unauthorized ret)
                           ret
-                          (let [{:keys [new-db-id update-infos]} ret
-                                local-db-id @*cur-db-id]
+                          (let [{:keys [new-db-id
+                                        new-serialized-db update-infos]} ret
+                                {:keys [fp bytes]} new-serialized-db
+                                writer-schema (au/<? (<fp->schema fp))
+                                db (l/deserialize sys-state-schema
+                                                  writer-schema bytes)
+                                local-db-id (:db-id @*sys-db-info)]
                             (when (or (nil? local-db-id)
                                       (block-ids/earlier? local-db-id
                                                           new-db-id))
-                              (reset! *cur-db-id new-db-id))
-                            (u/sym-map update-infos)))))]
+                              (reset! *sys-db-info {:db-id new-db-id
+                                                    :db db}))
+                            (u/sym-map update-infos db)))))]
         (if (and (seq sys-cmds)
                  (or (not sys-ret)
                      (= :vivo/unauthorized sys-ret)))
@@ -275,9 +105,12 @@
                   local-state (:state local-ret)]
               (if (compare-and-set! *local-state cur-local-state local-state)
                 (let [update-infos (concat (:update-infos sys-ret)
-                                           (:update-infos local-ret))]
-                  (ca/put! updates-ch (u/sym-map update-infos local-state))
-                  (cb true))
+                                           (:update-infos local-ret))
+                      db (:db sys-ret)]
+                  (ca/put! subs-update-ch
+                           (u/sym-map db local-state update-infos cb
+                                      *subscriber-name->info
+                                      *subject-id)))
                 (if (< num-attempts max-commit-attempts)
                   (recur (inc num-attempts))
                   (cb (ex-info (str "Failed to commit updates after "
@@ -289,14 +122,23 @@
           (cb* e)
           (log-error (u/ex-msg-and-stacktrace e)))))) )
 
-(defrecord VivoClient [capsule-client sys-state-schema sys-state-source
-                       log-info log-error rpcs
-                       sys-state-cache sub-map->op-cache
-                       path->schema-cache updates-ch updates-pub
-                       set-subject-id! *local-state *cur-db-id
-                       *conn-initialized? *stopped? *ssr-info
-                       *fp->schema *subject-id *subscriber-name->parents
-                       *next-instance-num]
+(defrecord VivoClient [capsule-client
+                       log-error
+                       log-info
+                       path->schema-cache
+                       rpcs
+                       set-subject-id!
+                       subs-update-ch
+                       sys-state-schema
+                       sys-state-source
+                       *conn-initialized?
+                       *fp->schema
+                       *local-state
+                       *next-instance-num
+                       *stopped?
+                       *subject-id
+                       *subscriber-name->info
+                       *sys-db-info]
   u/ISchemaStore
   (<fp->schema [this fp]
     (when-not (int? fp)
@@ -329,49 +171,6 @@
   (next-instance-num! [this]
     (swap! *next-instance-num inc))
 
-  (ssr? [this]
-    (boolean @*ssr-info))
-
-  (ssr-get-state! [this sub-map resolution-map]
-    (ssr-get-state!* *ssr-info sub-map resolution-map))
-
-  (<ssr [this component-fn component-name static-markup?]
-    #?(:cljs
-       (au/go
-         (when-not (ifn? component-fn)
-           (throw (ex-info (str "component-fn must be a function. Got: `"
-                                (or component-fn "nil") "`.")
-                           (u/sym-map component-fn))))
-         (when-not (compare-and-set! *ssr-info nil initial-ssr-info)
-           (throw
-            (ex-info (str "Another SSR is in progress. Try again...") {})))
-         (try
-           (loop []
-             (let [el (component-fn this)
-                   _ (when-not (react/valid-element? el)
-                       (throw (ex-info
-                               (str "component-fn must return a valid React "
-                                    "element. Returned: `" (or el "nil") "`.")
-                               {:returned el})))
-                   s (if static-markup?
-                       (react/render-to-static-markup el)
-                       (react/render-to-string el))
-                   {:keys [needed]} @*ssr-info]
-               (if (empty? needed)
-                 s
-                 (do
-                   (doseq [[sub-map resolution-map] needed]
-                     (let [ret (au/<? (u/<make-state-info this sub-map
-                                                          component-name
-                                                          resolution-map))]
-                       (swap! *ssr-info update
-                              :resolved assoc [sub-map resolution-map]
-                              (:state ret))))
-                   (swap! *ssr-info assoc :needed #{})
-                   (recur)))))
-           (finally
-             (reset! *ssr-info nil))))))
-
   (<deserialize-value [this path ret]
     (au/go
       (when ret
@@ -390,7 +189,6 @@
                        "option was not provided when the vivo-client was "
                        "created.") {})))
       (u/check-secret-len secret)
-      (sr/flush! sys-state-cache)
       (au/<? (u/<wait-for-conn-init this))
       (let [arg (u/sym-map identifier secret)
             ret (au/<? (cc/<send-msg capsule-client :log-in arg))
@@ -416,7 +214,6 @@
   (<log-out! [this]
     (au/go
       (set-subject-id! nil)
-      (sr/flush! sys-state-cache)
       (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
         (log-info (str "Logout " (if ret "succeeded." "failed.")))
         ret)))
@@ -434,69 +231,11 @@
     (cc/shutdown capsule-client)
     (log-info "Vivo client stopped."))
 
-  (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map]
-    (u/<make-state-info this sub-map-or-ordered-pairs subscriber-name
-                        resolution-map @*local-state @*cur-db-id))
-
-  (<make-state-info
-    [this sub-map-or-ordered-pairs subscriber-name resolution-map
-     local-state db-id]
-    (au/go
-      ;; TODO: Optimize by doing <get-sys-state-and-expanded-path calls in
-      ;;        parallel where possible (non-dependent)
-      (let [init {:state resolution-map
-                  :paths []}]
-        (if-not (seq sub-map-or-ordered-pairs)
-          init
-          (let [ordered-pairs (if (map? sub-map-or-ordered-pairs)
-                                (u/sub-map->ordered-pairs
-                                 sub-map->op-cache
-                                 sub-map-or-ordered-pairs)
-                                sub-map-or-ordered-pairs)
-                num-pairs (count ordered-pairs)
-                sub-keys (map first ordered-pairs)]
-            ;; Use loop instead of reduce here to stay within the go block
-            (loop [acc init
-                   i 0]
-              (let [[sym path] (nth ordered-pairs i)
-                    resolved-path (u/resolve-symbols-in-path
-                                   acc subscriber-name path)
-                    [path-head & path-tail] resolved-path
-                    [v xp] (cond
-                             (= [:vivo/subject-id] path)
-                             [@*subject-id [[:vivo/subject-id]]]
-
-                             (some nil? resolved-path)
-                             [nil [resolved-path]]
-
-                             (= :local path-head)
-                             (au/<? (<get-state-and-expanded-path
-                                     local-state resolved-path :local))
-
-                             (= :sys path-head)
-                             (when (and db-id (not @*stopped?))
-                               (au/<? (u/<get-sys-state-and-expanded-path
-                                       this db-id resolved-path))))
-                    new-acc (-> acc
-                                (assoc-in [:state sym] v)
-                                (update :paths concat xp))
-                    new-i (inc i)]
-                (if (= num-pairs new-i)
-                  (update new-acc :state select-keys sub-keys)
-                  (recur new-acc new-i)))))))))
-
-  (subscribe! [this sub-map initial-state update-fn subscriber-name
-               resolution-map]
-    (subscribe!* this sub-map initial-state update-fn subscriber-name
-                 resolution-map nil sub-map->op-cache updates-pub log-error
-                 *local-state *stopped? *cur-db-id *subscriber-name->parents))
-
-  (subscribe! [this sub-map initial-state update-fn subscriber-name
-               resolution-map parents]
-    (subscribe!* this sub-map initial-state update-fn subscriber-name
-                 resolution-map parents sub-map->op-cache updates-pub log-error
-                 *local-state *stopped? *cur-db-id *subscriber-name->parents))
+  (subscribe!
+    [this ordered-pairs initial-state update-fn subscriber-name parents]
+    (subscriptions/subscribe!
+     ordered-pairs initial-state update-fn subscriber-name parents log-error
+     *stopped? *subscriber-name->info *sys-db-info *local-state *subject-id))
 
   (<wait-for-conn-init [this]
     (au/go
@@ -511,17 +250,16 @@
                   (ca/<! (ca/timeout 100))
                   (recur (dec tries-remaining)))))))
 
-  (handle-updates [this update-info cb*]
-    (handle-updates* this update-info cb* updates-ch log-error
-                     *cur-db-id *local-state))
-
   (update-state! [this update-cmds cb]
     (when-not (sequential? update-cmds)
       (when cb
         (cb (ex-info "The update-cmds parameter must be a sequence."
                      (u/sym-map update-cmds)))))
     (let [update-info (make-update-info update-cmds)]
-      (u/handle-updates this update-info cb))
+      (do-state-updates!* this update-info cb subs-update-ch log-error
+                          #(u/<fp->schema this %) sys-state-schema
+                          *sys-db-info *local-state
+                          *subscriber-name->info *subject-id))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -564,44 +302,28 @@
               (swap! *fp->schema assoc fp arg-sch)
               [i scmd]))))))
 
-  (<get-sys-state-and-expanded-path [this db-id path]
-    (when-not capsule-client
-      (throw
-       (ex-info (str "Can't get :sys state because the :get-server-url "
-                     "option was not provided when the vivo-client was "
-                     "created.") {})))
-    (au/go
-      (when db-id
-        (or (sr/get sys-state-cache [db-id path])
-            (when-not @*stopped?
-              (let [arg (u/sym-map db-id path)
-                    ret (au/<? (cc/<send-msg capsule-client :get-state arg
-                                             get-state-timeout-ms))
-                    [v xp] (if (#{nil
-                                  :vivo/unauthorized
-                                  :vivo/db-id-does-not-exist} ret)
-                             [ret [path]]
-                             (if-not ret
-                               [nil [path]]
-                               (let [v (au/<? (u/<deserialize-value
-                                               this path
-                                               (:serialized-value ret)))]
-                                 [v (:expanded-path ret)])))]
-                (when-not (= :vivo/db-id-does-not-exist)
-                  (sr/put! sys-state-cache [db-id path] [v xp]))
-                [v xp]))))))
+  (<handle-sys-state-changed [this arg metadata]
+    (ca/go
+      (try
+        (let [{:keys [new-db-id new-serialized-db update-infos]} arg
+              {:keys [fp bytes]} new-serialized-db
+              writer-schema (au/<? (u/<fp->schema this fp))
+              local-db-id (:db-id @*sys-db-info)
+              db (l/deserialize sys-state-schema writer-schema bytes)
+              local-state @*local-state]
+          (when (or (nil? local-db-id)
+                    (block-ids/earlier? local-db-id new-db-id))
+            (reset! *sys-db-info {:db-id new-db-id
+                                  :db db})
+            (ca/put! subs-update-ch (u/sym-map db local-state update-infos
+                                               *subscriber-name->info
+                                               *subject-id))))
+        (catch #?(:cljs js/Error :clj Throwable) e
+          (log-error (str "Exception in <handle-sys-state-changed: "
+                          (u/ex-msg-and-stacktrace e)))))))
 
-  (handle-sys-state-changed [this arg metadata]
-    (try
-      (let [{:keys [new-db-id update-infos]} arg
-            local-db-id @*cur-db-id]
-        (when (or (nil? local-db-id)
-                  (block-ids/earlier? local-db-id new-db-id))
-          (reset! *cur-db-id new-db-id)
-          (ca/put! updates-ch (u/sym-map update-infos))))
-      (catch #?(:cljs js/Error :clj Throwable) e
-        (log-error (str "Exception in <handle-sys-state-changed: "
-                        (u/ex-msg-and-stacktrace e))))))
+  (get-synchronous-state [this ordered-pairs]
+    (subscriptions/get-synchronous-state ordered-pairs))
 
   (<get-subject-id-for-identifier [this identifier]
     (cc/<send-msg capsule-client :get-subject-id-for-identifier identifier))
@@ -673,26 +395,24 @@
             (l/deserialize ret-schema w-schema bytes)))))))
 
 (defn <on-connect
-  [on-connect* sys-state-source log-error log-info *cur-db-id *conn-initialized?
-   capsule-client]
+  [on-connect* sys-state-source log-error log-info
+   *conn-initialized? capsule-client]
   (ca/go
     (try
-      (let [db-id (au/<? (cc/<send-msg capsule-client :set-state-source
-                                       sys-state-source))]
-        (reset! *cur-db-id db-id)
+      (let [db-info (au/<? (cc/<send-msg capsule-client :set-state-source
+                                         sys-state-source))]
         (reset! *conn-initialized? true)
         (log-info "Vivo client connection initialized.")
-        (on-connect*))
+        (on-connect* db-info))
       (catch #?(:clj Exception :cljs js/Error) e
         (log-error (str "Error in <on-connect: "
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn on-disconnect
-  [on-disconnect* *conn-initialized? *cur-db-id set-subject-id! capsule-client]
+  [on-disconnect* *conn-initialized? set-subject-id! capsule-client]
   (on-disconnect*)
   (set-subject-id! nil)
-  (reset! *conn-initialized? false)
-  (reset! *cur-db-id nil))
+  (reset! *conn-initialized? false))
 
 (defn check-sys-state-source [sys-state-source]
   ;; sys-state-source must be either:
@@ -722,7 +442,7 @@
 
 (defn make-capsule-client
   [get-server-url on-connect* on-disconnect* sys-state-schema sys-state-source
-   log-error log-info *cur-db-id *conn-initialized? set-subject-id!]
+   log-error log-info *sys-db-info *conn-initialized? set-subject-id!]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in vivo-client "
                          "constructor.")
@@ -730,11 +450,9 @@
   (let [get-credentials (constantly {:subject-id "vivo-client"
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect on-connect* sys-state-source
-                                   log-error log-info *cur-db-id
-                                   *conn-initialized?)
+                                   log-error log-info *conn-initialized?)
               :on-disconnect (partial on-disconnect on-disconnect*
-                                      *conn-initialized? *cur-db-id
-                                      set-subject-id!)}]
+                                      *conn-initialized? set-subject-id!)}]
     (cc/client get-server-url get-credentials
                u/client-server-protocol :client opts)))
 
@@ -746,56 +464,77 @@
                 on-connect
                 on-disconnect
                 rpcs
-                sys-state-cache-num-keys
                 sys-state-source
                 sys-state-schema]} (merge default-vc-opts opts)
         *local-state (atom initial-local-state)
-        *cur-db-id (atom nil)
+        *sys-db-info (atom {:db-id nil
+                            :db nil})
         *conn-initialized? (atom (not get-server-url))
         *stopped? (atom false)
-        *ssr-info (atom nil)
         *fp->schema (atom {})
         *subject-id (atom nil)
         *vc (atom nil)
-        *subscriber-name->parents (atom {})
+        *subscriber-name->info (atom {})
         *next-instance-num (atom 0)
-        on-connect* #(when on-connect
-                       (on-connect @*vc))
+        on-connect* (fn [db-info]
+                      (when-not (= (:db-id db-info) (:db-id @*sys-db-info))
+                        (u/<handle-sys-state-changed
+                         @*vc
+                         {:new-db-id (:db-id db-info)
+                          :new-serialized-db (:serialized-db db-info)
+                          :update-infos [{:norm-path [:sys]
+                                          :op :set}]}
+                         {}))
+                      (when on-connect
+                        (on-connect @*vc)))
         on-disconnect* #(when on-disconnect
                           (on-disconnect @*vc @*local-state))
-        updates-ch (ca/chan (ca/sliding-buffer 100))
-        updates-pub (ca/pub updates-ch (constantly :all))
+        ;; TODO: Think about this buffer size and dropping behavior under load
+        ;; Perhaps disconnect and reconnect later if overloaded?
+        subs-update-ch (ca/chan (ca/sliding-buffer 1000))
         set-subject-id! (fn [subject-id]
                           (reset! *subject-id subject-id)
-                          (ca/put! updates-ch
-                                   {:update-infos
-                                    [{:norm-path [:vivo/subject-id]
-                                      :op :set}]})
+                          (let [update-infos [{:norm-path [:vivo/subject-id]
+                                               :op :set}]
+                                db (:db @*sys-db-info)
+                                local-state @*local-state]
+                            (ca/put! subs-update-ch
+                                     (u/sym-map db local-state update-infos
+                                                *subscriber-name->info
+                                                *subject-id)))
                           nil)
-        path->schema-cache (sr/stockroom 100)
-        sys-state-cache (sr/stockroom sys-state-cache-num-keys)
-        sub-map->op-cache (sr/stockroom 500)
         _ (when rpcs
             (u/check-rpcs rpcs))
+        path->schema-cache (sr/stockroom 1000)
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
                          (make-capsule-client
                           get-server-url on-connect* on-disconnect*
                           sys-state-schema sys-state-source
-                          log-error log-info *cur-db-id *conn-initialized?
+                          log-error log-info *sys-db-info *conn-initialized?
                           set-subject-id!))
-        vc (->VivoClient capsule-client sys-state-schema sys-state-source
-                         log-info log-error rpcs
-                         sys-state-cache sub-map->op-cache
-                         path->schema-cache updates-ch updates-pub
-                         set-subject-id! *local-state *cur-db-id
-                         *conn-initialized? *stopped? *ssr-info
-                         *fp->schema *subject-id *subscriber-name->parents
-                         *next-instance-num)]
+        vc (->VivoClient capsule-client
+                         log-error
+                         log-info
+                         path->schema-cache
+                         rpcs
+                         set-subject-id!
+                         subs-update-ch
+                         sys-state-schema
+                         sys-state-source
+                         *conn-initialized?
+                         *fp->schema
+                         *local-state
+                         *next-instance-num
+                         *stopped?
+                         *subject-id
+                         *subscriber-name->info
+                         *sys-db-info)]
     (reset! *vc vc)
+    (subscriptions/start-subscription-update-loop! subs-update-ch log-error)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
-                      (partial u/handle-sys-state-changed vc))
+                      (partial u/<handle-sys-state-changed vc))
       (cc/set-handler capsule-client :get-schema-pcf
                       (fn [fp metadata]
                         (if-let [schema (@*fp->schema fp)]

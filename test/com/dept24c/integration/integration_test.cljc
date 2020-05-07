@@ -9,7 +9,7 @@
    [com.dept24c.vivo.test-user :as tu]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
-   [deercreeklabs.capsule.logging :as logging]
+   [deercreeklabs.capsule.logging :as log]
    [deercreeklabs.lancaster :as l])
   #?(:clj
      (:import
@@ -454,7 +454,7 @@
                unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
                                        "test")
                expected-state {'app-name app-name
-                               'launch-codes :vivo/unauthorized}
+                               'launch-codes nil}
                _ (is (= expected-state (au/<? state-ch)))
                _ (is (= :vivo/unauthorized
                         (au/<? (vivo/<set-state!
@@ -525,7 +525,8 @@
            (is (= 2 ret)))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e))
-           (println "Exception in test-rpc:\n" (u/ex-msg-and-stacktrace e)))
+           (log/error (str "Exception in test-rpc:\n"
+                           (u/ex-msg-and-stacktrace e))))
          (finally
            (vivo/shutdown! vc)))))))
 
@@ -542,7 +543,7 @@
            vc (vivo/vivo-client (assoc vc-opts :sys-state-source
                                        {:branch/name branch}))]
        (try
-         (let [huge-name (apply str (take 500000 (repeat "x")))
+         (let [huge-name (apply str (take 5 #_500000 (repeat "x")))
                set-ret (au/<? (vivo/<set-state! vc [:sys :app-name] huge-name))
                _ (is (= true set-ret))
                state-ch (ca/chan)
@@ -554,8 +555,8 @@
            (unsub!))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e))
-           (println "Exception in test-large-data-storage:\n"
-                    (u/ex-msg-and-stacktrace e)))
+           (log/error (str "Exception in test-large-data-storage:\n"
+                           (u/ex-msg-and-stacktrace e))))
          (finally
            (is (= true (au/<? (ac/<delete-branch ac branch))))
            (vivo/shutdown! vc)
