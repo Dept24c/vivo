@@ -2,13 +2,13 @@
  {binaryage/oops {:mvn/version "0.7.0"}
   com.cognitect.aws/api {:mvn/version "0.8.456"}
   com.cognitect.aws/dynamodb {:mvn/version "792.2.620.0"}
-  com.cognitect.aws/endpoints {:mvn/version "1.1.11.753"}
+  com.cognitect.aws/endpoints {:mvn/version "1.1.11.774"}
   crypto-password {:mvn/version "0.2.1"}
   deercreeklabs/capsule {:mvn/version "0.4.25"}
   deercreeklabs/stockroom {:mvn/version "0.3.4"}
-  mvxcvi/puget {:mvn/version "1.2.0"}
+  mvxcvi/puget {:mvn/version "1.2.1"}
   org.clojure/clojure {:mvn/version "1.10.1"}
-  org.clojure/clojurescript {:mvn/version "1.10.597"}
+  org.clojure/clojurescript {:mvn/version "1.10.758"}
   weavejester/dependency {:mvn/version "0.2.1"}}
 
  :paths ["src" "resources"]
