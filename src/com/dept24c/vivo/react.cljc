@@ -1,6 +1,7 @@
 (ns com.dept24c.vivo.react
   (:require
    #?(:cljs ["react" :as React])
+   #?(:cljs ["react-dom" :as ReactDOM])
    #?(:cljs ["react-dom/server" :as ReactDOMServer])
    [clojure.core.async :as ca]
    [com.dept24c.vivo.macro-impl :as macro-impl]
@@ -19,6 +20,13 @@
 (defn valid-element? [el]
   #?(:cljs
      (ocall React :isValidElement el)))
+
+(defn render
+  ([el container]
+   (render el container (constantly nil)))
+  ([el container cb]
+   #?(:cljs
+      (ocall ReactDOM :render el container cb))))
 
 (defn render-to-string [el]
   #?(:cljs
@@ -69,6 +77,10 @@
   #?(:cljs
      (ocall React :cloneElement element #js {"key" k})))
 
+(defn batch-updates [f]
+  #?(:cljs
+     (ocall ReactDOM :unstable_batchedUpdates f)))
+
 ;;;; Macros
 
 (defmacro def-component
@@ -99,6 +111,7 @@
   ([vc sub-map component-name resolution-map]
    (use-vivo-state vc sub-map component-name resolution-map []))
   ([vc sub-map component-name resolution-map parents]
+   ;; TODO: Consider memoizing the creation of ordered pairs. Is it expensive?
    #?(:cljs
       (let [ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)
             initial-state (u/get-synchronous-state vc ordered-pairs)
@@ -106,7 +119,8 @@
             effect (fn []
                      (u/subscribe! vc ordered-pairs initial-state update-fn
                                    component-name parents))]
-        (use-effect effect (clj->js [sub-map resolution-map]))
+        ;; Use str to perform a deep compare rather than javascript's ===
+        (use-effect effect #js [(str ordered-pairs)])
         state))))
 
 ;;;;;;;;;;;;;;;;;;;; Macro runtime helpers ;;;;;;;;;;;;;;;;;;;;

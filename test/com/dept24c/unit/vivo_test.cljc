@@ -563,7 +563,8 @@
                     (update 'titles-1 set)
                     (update 'titles-2 set)))))
        (catch #?(:clj Exception :cljs js/Error) e
-         (is (= :unexpected e)))))))
+         (is (= :unexpected e))
+         (println (u/ex-msg-and-stacktrace e)))))))
 
 (deftest test-empty-sequence-join
   (au/test-async
@@ -676,6 +677,34 @@
                        :value "hi"}]
         sub-paths [[:local :page]]]
     (is (= false (subscriptions/update-sub? update-infos sub-paths)))))
+
+(deftest test-order-by-lineage
+  (let [*name->info (atom {"a" {}
+                           "b" {:parents #{"a"}}
+                           "c" {:parents #{"a" "b"}}
+                           "d" {:parents #{"a"}}
+                           "e" {}
+                           "f" {:parents #{"e"}}
+                           "g" {:parents #{"e"}}
+                           "h" {:parents #{"e" "g"}}})]
+    (is (= ["a"] (subscriptions/order-by-lineage
+                  #{"a"} *name->info)))
+    (is (= ["a" "b"] (subscriptions/order-by-lineage
+                      #{"a" "b"} *name->info)))
+    (is (= ["a" "b" "c"] (subscriptions/order-by-lineage
+                          #{"a" "b" "c"} *name->info)))
+    (is (= ["b" "c"] (subscriptions/order-by-lineage
+                      #{"b" "c"} *name->info)))
+    (is (= ["a" "b" "c" "d"] (subscriptions/order-by-lineage
+                              #{"a" "b" "c" "d"} *name->info)))
+    (is (= ["a" "b" "c" "e" "d"] (subscriptions/order-by-lineage
+                                  #{"a" "b" "c" "d" "e"} *name->info)))
+    (is (= ["e"] (subscriptions/order-by-lineage
+                  #{"e"} *name->info)))
+    (is (= ["e" "f"] (subscriptions/order-by-lineage
+                      #{"e" "f"} *name->info)))
+    (is (= ["h" "f"] (subscriptions/order-by-lineage
+                      #{"h" "f"} *name->info)))))
 
 (deftest test-explicit-seq-in-path
   (au/test-async

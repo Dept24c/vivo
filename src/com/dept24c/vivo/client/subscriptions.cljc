@@ -3,9 +3,11 @@
    [clojure.core.async :as ca]
    [clojure.set :as set]
    [com.dept24c.vivo.commands :as commands]
+   [com.dept24c.vivo.react :as react]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
-   [deercreeklabs.capsule.logging :as log]))
+   [deercreeklabs.capsule.logging :as log]
+   [weavejester.dependency :as dep]))
 
 (defn get-non-numeric-part [path]
   (take-while #(not (number? %)) path))
@@ -73,20 +75,30 @@
 (defn get-sub-names-to-update
   [db local-state update-infos *subscriber-name->info]
   (reduce-kv (fn [acc sub-name info]
-               (let [{:keys [ordered-pairs]} info]
-                 (if (update-sub? update-infos (map second ordered-pairs))
+               (let [{:keys [ordered-pairs]} info
+                     paths (map second ordered-pairs)]
+                 (if (update-sub? update-infos paths)
                    (conj acc sub-name)
                    acc)))
              #{} @*subscriber-name->info))
 
-(defn remove-sub-names-whose-parents-will-update
-  [sub-names-to-update *subscriber-name->info]
-  (reduce (fn [acc sub-name]
-            (let [{:keys [parents]} (@*subscriber-name->info sub-name)]
-              (if (seq (set/intersection sub-names-to-update parents))
-                acc
-                (conj acc sub-name))))
-          [] sub-names-to-update))
+(defn order-by-lineage [sub-names-to-update *subscriber-name->info]
+  (let [g (reduce
+           (fn [acc sub-name]
+             (let [{:keys [parents]} (@*subscriber-name->info sub-name)
+                   update-parents (set/intersection parents
+                                                    sub-names-to-update)]
+               (if (empty? update-parents)
+                 (dep/depend acc sub-name :vivo/root)
+                 (reduce (fn [acc* parent]
+                           (if (sub-names-to-update parent)
+                             (dep/depend acc* sub-name parent)
+                             acc*))
+                         acc
+                         update-parents))))
+           (dep/graph)
+           sub-names-to-update)]
+    (filter #(not= :vivo/root %) (dep/topo-sort g))))
 
 (defn resolve-symbols-in-path [state path]
   ;; TODO: Could optimize by storing info about non-dependent paths
@@ -356,9 +368,10 @@
 
 (defn update-subs!
   [sub-names db local-state log-error *subscriber-name->info *subject-id]
-  (doseq [sub-name sub-names]
-    (update-sub! sub-name db local-state log-error *subscriber-name->info
-                 *subject-id)))
+  (react/batch-updates
+   #(doseq [sub-name sub-names]
+      (update-sub! sub-name db local-state log-error *subscriber-name->info
+                   *subject-id))))
 
 (defn start-subscription-update-loop! [subs-update-ch log-error]
   (ca/go-loop []
@@ -368,7 +381,7 @@
                     *subscriber-name->info *subject-id]} info]
         (-> (get-sub-names-to-update db local-state update-infos
                                      *subscriber-name->info)
-            (remove-sub-names-whose-parents-will-update *subscriber-name->info)
+            (order-by-lineage *subscriber-name->info)
             (update-subs! db local-state log-error
                           *subscriber-name->info *subject-id))
         (when cb
@@ -382,6 +395,11 @@
   [ordered-pairs initial-state update-fn subscriber-name parents* log-error
    *stopped? *subscriber-name->info *sys-db-info *local-state *subject-id]
   (when-not @*stopped?
+    (when (contains? @*subscriber-name->info subscriber-name)
+      (throw (ex-info (str "There is already a subscription named `"
+                           subscriber-name
+                           "`. Subscriber names must be unique.")
+                      (u/sym-map subscriber-name ordered-pairs parents*))))
     (let [parents (set parents*)
           *state (atom initial-state)
           info (u/sym-map ordered-pairs parents update-fn *state)

@@ -106,11 +106,11 @@
               (if (compare-and-set! *local-state cur-local-state local-state)
                 (let [update-infos (concat (:update-infos sys-ret)
                                            (:update-infos local-ret))
-                      db (:db sys-ret)]
+                      db (or (:db sys-ret)
+                             (:db @*sys-db-info))]
                   (ca/put! subs-update-ch
                            (u/sym-map db local-state update-infos cb
-                                      *subscriber-name->info
-                                      *subject-id)))
+                                      *subscriber-name->info *subject-id)))
                 (if (< num-attempts max-commit-attempts)
                   (recur (inc num-attempts))
                   (cb (ex-info (str "Failed to commit updates after "
@@ -396,15 +396,25 @@
             (l/deserialize ret-schema w-schema bytes)))))))
 
 (defn <on-connect
-  [on-connect* sys-state-source log-error log-info
-   *conn-initialized? capsule-client]
+  [opts-on-connect sys-state-source log-error log-info *conn-initialized?
+   *sys-db-info *vc capsule-client]
   (ca/go
     (try
       (let [db-info (au/<? (cc/<send-msg capsule-client :set-state-source
-                                         sys-state-source))]
+                                         sys-state-source))
+            vc @*vc]
         (reset! *conn-initialized? true)
-        (log-info "Vivo client connection initialized.")
-        (on-connect* db-info))
+        (when-not (= (:db-id db-info) (:db-id @*sys-db-info))
+          (au/<? (u/<handle-sys-state-changed
+                  vc
+                  {:new-db-id (:db-id db-info)
+                   :new-serialized-db (:serialized-db db-info)
+                   :update-infos [{:norm-path [:sys]
+                                   :op :set}]}
+                  {})))
+        (when opts-on-connect
+          (opts-on-connect vc))
+        (log-info "Vivo client connection initialized."))
       (catch #?(:clj Exception :cljs js/Error) e
         (log-error (str "Error in <on-connect: "
                         (u/ex-msg-and-stacktrace e)))))))
@@ -442,17 +452,19 @@
               (u/sym-map sys-state-source))))))
 
 (defn make-capsule-client
-  [get-server-url on-connect* on-disconnect* sys-state-schema sys-state-source
-   log-error log-info *sys-db-info *conn-initialized? set-subject-id!]
+  [get-server-url opts-on-connect opts-on-disconnect sys-state-schema
+   sys-state-source log-error log-info
+   *sys-db-info *vc *conn-initialized? set-subject-id!]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in vivo-client "
                          "constructor.")
                     {})))
   (let [get-credentials (constantly {:subject-id "vivo-client"
                                      :subject-secret ""})
-        opts {:on-connect (partial <on-connect on-connect* sys-state-source
-                                   log-error log-info *conn-initialized?)
-              :on-disconnect (partial on-disconnect on-disconnect*
+        opts {:on-connect (partial <on-connect opts-on-connect sys-state-source
+                                   log-error log-info *conn-initialized?
+                                   *sys-db-info *vc)
+              :on-disconnect (partial on-disconnect opts-on-disconnect
                                       *conn-initialized? set-subject-id!)}]
     (cc/client get-server-url get-credentials
                u/client-server-protocol :client opts)))
@@ -477,17 +489,6 @@
         *vc (atom nil)
         *subscriber-name->info (atom {})
         *next-instance-num (atom 0)
-        on-connect* (fn [db-info]
-                      (when-not (= (:db-id db-info) (:db-id @*sys-db-info))
-                        (u/<handle-sys-state-changed
-                         @*vc
-                         {:new-db-id (:db-id db-info)
-                          :new-serialized-db (:serialized-db db-info)
-                          :update-infos [{:norm-path [:sys]
-                                          :op :set}]}
-                         {}))
-                      (when on-connect
-                        (on-connect @*vc)))
         on-disconnect* #(when on-disconnect
                           (on-disconnect @*vc @*local-state))
         ;; TODO: Think about this buffer size and dropping behavior under load
@@ -510,9 +511,9 @@
         capsule-client (when get-server-url
                          (check-sys-state-source sys-state-source)
                          (make-capsule-client
-                          get-server-url on-connect* on-disconnect*
+                          get-server-url on-connect on-disconnect*
                           sys-state-schema sys-state-source
-                          log-error log-info *sys-db-info *conn-initialized?
+                          log-error log-info *sys-db-info *vc *conn-initialized?
                           set-subject-id!))
         vc (->VivoClient capsule-client
                          log-error

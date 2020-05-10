@@ -28,8 +28,8 @@
                 "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
 
   :dev {:extra-deps {org.clojure/tools.namespace {:mvn/version "1.0.0"}
-                     cljsjs/react {:mvn/version "16.13.0-0"}
-                     cljsjs/react-dom {:mvn/version "16.13.0-0"}}
+                     cljsjs/react {:mvn/version "16.13.1-0"}
+                     cljsjs/react-dom {:mvn/version "16.13.1-0"}}
         :extra-paths ["dev"]}
 
   :run-test-server {:main-opts ["-m" "user"]
