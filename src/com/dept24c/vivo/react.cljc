@@ -117,8 +117,10 @@
             initial-state (u/get-synchronous-state vc ordered-pairs)
             [state update-fn] (use-state initial-state)
             effect (fn []
-                     (u/subscribe! vc ordered-pairs initial-state update-fn
-                                   component-name parents))]
+                     (let [opts {:parents parents
+                                 :react? true}]
+                       (u/subscribe! vc ordered-pairs initial-state update-fn
+                                     component-name opts)))]
         ;; Use str to perform a deep compare rather than javascript's ===
         (use-effect effect #js [(str ordered-pairs)])
         state))))

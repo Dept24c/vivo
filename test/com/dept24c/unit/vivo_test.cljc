@@ -432,8 +432,8 @@
        (let [orig-title "Foo"
              vc (vivo/vivo-client)
              ch (ca/chan 1)
-             sub-map '{title [:local :msgs -1 :title]}
-             update-fn #(ca/put! ch (% 'title))
+             sub-map '{last-title [:local :msgs -1 :title]}
+             update-fn #(ca/put! ch (% 'last-title))
              new-title "Bar"
              ret (au/<? (vivo/<update-state!
                          vc [{:path [:local]
@@ -505,12 +505,13 @@
                     "789" {:title "Dr Jekyll and Mr Hyde"}}
              sub-map '{my-books [:local :books my-book-ids]}
              resolution-map {'my-book-ids my-book-ids}
-             update-fn #(ca/put! ch ('my-books %))
-             expected (vals (select-keys books my-book-ids))]
-         (au/<? (vivo/<update-state! vc [{:path [:local :books]
-                                          :op :set
-                                          :arg books}]))
-         (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
+             update-fn #(ca/put! ch %)
+             ret (au/<? (vivo/<update-state! vc [{:path [:local :books]
+                                                  :op :set
+                                                  :arg books}]))
+             _ (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
+             _ (is (= true ret))
+             expected {'my-books (vals (select-keys books my-book-ids))}]
          (is (= expected (au/<? ch))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
@@ -737,10 +738,10 @@
                     "789" {:title "Dr Jekyll and Mr Hyde"}}
              sub-map '{title-999 [:local :books "999" :title]}
              update-fn #(ca/put! ch %)
-             expected {'title-999 nil}]
-         (au/<? (vivo/<set-state! vc [:local :books] books))
-         (vivo/subscribe! vc sub-map nil update-fn "test")
-         (is (= expected (au/<? ch))))
+             _ (vivo/subscribe! vc sub-map nil update-fn "test")
+             ret (au/<? (vivo/<set-state! vc [:local :books] books))]
+         (is (= true ret))
+         (is (= {'title-999 nil} (au/<? ch))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 

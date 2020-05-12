@@ -35,14 +35,14 @@
   "Creates a Vivo subscription. When any of the paths in the `sub-map`
    change, calls `update-fn` with the updated state. Note that this
    is a low-level function that generally should not be called directly.
-   Prefer `def-component` or `use-vivo-state`.
+   Prefer `react/def-component` or `react/use-vivo-state`.
    Returns an unsubscribe fn that may be called to cancel the subscription."
   ([vc sub-map initial-state update-fn subscriber-name]
    (subscribe! vc sub-map initial-state update-fn subscriber-name {}))
   ([vc sub-map initial-state update-fn subscriber-name resolution-map]
    (let [ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)]
      (u/subscribe! vc ordered-pairs initial-state update-fn
-                   subscriber-name []))))
+                   subscriber-name {}))))
 
 (defn update-state!
   ([vc update-commands]

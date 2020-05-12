@@ -232,9 +232,9 @@
     (log-info "Vivo client stopped."))
 
   (subscribe!
-    [this ordered-pairs initial-state update-fn subscriber-name parents]
+    [this ordered-pairs initial-state update-fn subscriber-name opts]
     (subscriptions/subscribe!
-     ordered-pairs initial-state update-fn subscriber-name parents log-error
+     ordered-pairs initial-state update-fn subscriber-name opts
      *stopped? *subscriber-name->info *sys-db-info *local-state *subject-id))
 
   (<wait-for-conn-init [this]
@@ -533,7 +533,7 @@
                          *subscriber-name->info
                          *sys-db-info)]
     (reset! *vc vc)
-    (subscriptions/start-subscription-update-loop! subs-update-ch log-error)
+    (subscriptions/start-subscription-update-loop! subs-update-ch)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
                       (partial u/<handle-sys-state-changed vc))

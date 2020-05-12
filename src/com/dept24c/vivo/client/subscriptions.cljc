@@ -2,6 +2,7 @@
   (:require
    [clojure.core.async :as ca]
    [clojure.set :as set]
+   [clojure.string :as str]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.react :as react]
    [com.dept24c.vivo.utils :as u]
@@ -98,7 +99,8 @@
                          update-parents))))
            (dep/graph)
            sub-names-to-update)]
-    (filter #(not= :vivo/root %) (dep/topo-sort g))))
+    (->> (dep/topo-sort g)
+         (filter #(not= :vivo/root %)))))
 
 (defn resolve-symbols-in-path [state path]
   ;; TODO: Could optimize by storing info about non-dependent paths
@@ -330,50 +332,74 @@
    {}
    ordered-pairs))
 
-(defn do-update* [*subscriber-name->info sub-name new-state]
-  ;; Get the info again to ensure it's still subscribed
-  (when-let [info (@*subscriber-name->info sub-name)]
-    (let [{:keys [*state update-fn]} info]
-      (when-not (= @*state new-state)
+(defn make-applied-update-fn* [sub-name new-state *subscriber-name->info]
+  (let [{:keys [update-fn *state]} (@*subscriber-name->info sub-name)
+        old-state @*state]
+    (when (not= old-state new-state)
+      (fn []
         (reset! *state new-state)
-        (update-fn new-state)))))
+        ;; Get the info again to ensure it's still subscribed
+        (when (@*subscriber-name->info sub-name)
+          (update-fn new-state))))))
 
-(defn do-async-update!
-  [ordered-pairs db local-state sub-name log-error *subject-id
-   *subscriber-name->info]
-  (ca/go
-    (try
-      (let [new-state (au/<? (<get-subscription-state
-                              ordered-pairs db local-state *subject-id))]
-        (do-update* *subscriber-name->info sub-name new-state))
-      (catch #?(:cljs js/Error :clj Exception) e
-        (log-error (str "Error while updating `" sub-name "`:\n"
-                        (u/ex-msg-and-stacktrace e)))))))
+(defn make-applied-update-fn
+  [sub-name db local-state *subscriber-name->info *subject-id]
+  (let [sub-info (@*subscriber-name->info sub-name)
+        {:keys [ordered-pairs update-fn *state]} sub-info
+        cached? (reduce (fn [acc [sym path]]
+                          (if (in-db-cache? path)
+                            acc
+                            (reduced false)))
+                        true ordered-pairs)]
+    (if cached?
+      (let [new-state (get-synchronous-state ordered-pairs db local-state
+                                             *subject-id)]
+        (make-applied-update-fn* sub-name new-state *subscriber-name->info))
+      #(ca/go
+         (try
+           (let [new-state (au/<? (<get-subscription-state
+                                   ordered-pairs db local-state *subject-id))
+                 f (make-applied-update-fn* sub-name new-state
+                                            *subscriber-name->info)]
+             (when f
+               (f)))
+           (catch #?(:cljs js/Error :clj Exception) e
+             (log/error (str "Error while updating `" sub-name "`:\n"
+                             (u/ex-msg-and-stacktrace e)))))))))
 
-(defn update-sub!
-  [sub-name db local-state log-error *subscriber-name->info *subject-id]
-  (when-let [sub-info (@*subscriber-name->info sub-name)]
-    (let [{:keys [ordered-pairs]} sub-info
-          cached? (reduce (fn [acc [sym path]]
-                            (if (in-db-cache? path)
-                              acc
-                              (reduced false)))
-                          true ordered-pairs)]
-      (if cached?
-        (do-update* *subscriber-name->info sub-name
-                    (get-synchronous-state ordered-pairs db local-state
-                                           *subject-id))
-        (do-async-update! ordered-pairs db local-state sub-name log-error
-                          *subject-id *subscriber-name->info)))))
+(defn get-update-fn-info
+  [sub-names db local-state *subscriber-name->info *subject-id]
+  (reduce
+   (fn [acc sub-name]
+     (let [{:keys [react?]} (@*subscriber-name->info sub-name)
+           update-fn* (make-applied-update-fn sub-name db local-state
+                                              *subscriber-name->info
+                                              *subject-id)]
+       (cond
+         (not update-fn*)
+         acc
+
+         react?
+         (update acc :react-update-fns conj update-fn*)
+
+         :else
+         (update acc :non-react-update-fns conj update-fn*))))
+   {:react-update-fns []
+    :non-react-update-fns []}
+   sub-names))
 
 (defn update-subs!
-  [sub-names db local-state log-error *subscriber-name->info *subject-id]
-  (react/batch-updates
-   #(doseq [sub-name sub-names]
-      (update-sub! sub-name db local-state log-error *subscriber-name->info
-                   *subject-id))))
+  [sub-names db local-state *subscriber-name->info *subject-id]
+  (let [update-fn-info (get-update-fn-info sub-names db local-state
+                                           *subscriber-name->info *subject-id)
+        {:keys [react-update-fns non-react-update-fns]} update-fn-info]
+    (doseq [f non-react-update-fns]
+      (f))
+    (react/batch-updates
+     #(doseq [rf react-update-fns]
+        (rf)))))
 
-(defn start-subscription-update-loop! [subs-update-ch log-error]
+(defn start-subscription-update-loop! [subs-update-ch]
   (ca/go-loop []
     (try
       (let [info (au/<? subs-update-ch)
@@ -382,34 +408,34 @@
         (-> (get-sub-names-to-update db local-state update-infos
                                      *subscriber-name->info)
             (order-by-lineage *subscriber-name->info)
-            (update-subs! db local-state log-error
+            (update-subs! db local-state
                           *subscriber-name->info *subject-id))
         (when cb
           (cb true)))
       (catch #?(:cljs js/Error :clj Exception) e
-        (log-error (str "Error while reading from subs-update-ch:\n"
+        (log/error (str "Error while reading from subs-update-ch:\n"
                         (u/ex-msg-and-stacktrace e)))))
     (recur)))
 
 (defn subscribe!
-  [ordered-pairs initial-state update-fn subscriber-name parents* log-error
+  [ordered-pairs initial-state update-fn subscriber-name opts
    *stopped? *subscriber-name->info *sys-db-info *local-state *subject-id]
   (when-not @*stopped?
     (when (contains? @*subscriber-name->info subscriber-name)
       (throw (ex-info (str "There is already a subscription named `"
                            subscriber-name
                            "`. Subscriber names must be unique.")
-                      (u/sym-map subscriber-name ordered-pairs parents*))))
-    (let [parents (set parents*)
+                      (u/sym-map subscriber-name ordered-pairs opts
+                                 initial-state))))
+    (let [parents (set (:parents opts))
+          react? (:react? opts)
           *state (atom initial-state)
-          info (u/sym-map ordered-pairs parents update-fn *state)
+          info (u/sym-map ordered-pairs parents react? update-fn *state)
           unsubscribe! (fn []
                          (swap! *subscriber-name->info dissoc subscriber-name))]
       (swap! *subscriber-name->info assoc subscriber-name info)
       (when (or (nil? initial-state)
                 (= :vivo/unknown initial-state))
-        (let [db (:db @*sys-db-info)
-              local-state @*local-state]
-          (update-sub! subscriber-name db local-state log-error
-                       *subscriber-name->info *subject-id)))
+        (update-subs! [subscriber-name] (:db @*sys-db-info) @*local-state
+                      *subscriber-name->info *subject-id))
       unsubscribe!)))
