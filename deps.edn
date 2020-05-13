@@ -4,8 +4,8 @@
   com.cognitect.aws/dynamodb {:mvn/version "792.2.620.0"}
   com.cognitect.aws/endpoints {:mvn/version "1.1.11.774"}
   crypto-password {:mvn/version "0.2.1"}
-  deercreeklabs/capsule {:mvn/version "0.4.25"}
-  deercreeklabs/stockroom {:mvn/version "0.3.4"}
+  deercreeklabs/capsule {:mvn/version "0.4.26"}
+  deercreeklabs/stockroom {:mvn/version "0.3.5"}
   mvxcvi/puget {:mvn/version "1.2.1"}
   org.clojure/clojure {:mvn/version "1.10.1"}
   org.clojure/clojurescript {:mvn/version "1.10.758"}
@@ -22,7 +22,7 @@
                           "[cider.nrepl/cider-middleware]"]}
 
   :cider-cljs {:extra-deps {cider/cider-nrepl {:mvn/version "0.24.0"}
-                            cider/piggieback {:mvn/version "0.4.2"}}
+                            cider/piggieback {:mvn/version "0.5.0"}}
                :main-opts
                ["-m" "nrepl.cmdline" "--middleware"
                 "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
@@ -36,6 +36,6 @@
                     :extra-paths ["dev"]}
 
   :test {:extra-paths ["test"]
-         :extra-deps {lambdaisland/kaocha {:mvn/version "0.0-601"}
+         :extra-deps {lambdaisland/kaocha {:mvn/version "1.0.632"}
                       lambdaisland/kaocha-cljs {:mvn/version "0.0-71"}
-                      lambdaisland/kaocha-cloverage {:mvn/version "0.0-41"}}}}}
+                      lambdaisland/kaocha-cloverage {:mvn/version "1.0-45"}}}}}

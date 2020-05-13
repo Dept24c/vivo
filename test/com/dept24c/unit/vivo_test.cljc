@@ -79,7 +79,7 @@
         bad-sub-map {}]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"The sub-map parameter must contain at least one entry"
+         #"The `sub-map` argument must contain at least one entry"
          (vivo/subscribe! vc "test" bad-sub-map (constantly true))))))
 
 (deftest test-nil-sub-map
@@ -87,7 +87,7 @@
         bad-sub-map nil]
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
-         #"The sub-map parameter must be a map"
+         #"The `sub-map` argument must be a map"
          (vivo/subscribe! vc "test" bad-sub-map (constantly true))))))
 
 (deftest test-non-sym-key-in-sub-map
