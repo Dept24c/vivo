@@ -443,19 +443,21 @@
 (defn check-sub-map
   [sub-map]
   (when-not (map? sub-map)
-    (throw (ex-info "The sub-map parameter must be a map."
-                    (sym-map sub-map))))
+    (throw (ex-info
+            (str"The `sub-map` argument must be a map. Got `" sub-map "`.")
+            (sym-map sub-map))))
   (when-not (pos? (count sub-map))
-    (throw (ex-info "The sub-map parameter must contain at least one entry."
+    (throw (ex-info "The `sub-map` argument must contain at least one entry."
                     (sym-map sub-map))))
   (doseq [[sym path] sub-map]
     (when-not (symbol? sym)
       (throw (ex-info (str "Bad key `" sym "` in subscription map. Keys must "
                            "be symbols.")
-                      {:bad-key sym})))
+                      {:bad-key sym
+                       :sub-map sub-map})))
     (when (not (sequential? path))
       (throw (ex-info
-              (str "Bad path. Paths must be sequences.")
+              (str (str "Bad path. Paths must be sequences. Got: `" path "`."))
               (sym-map sym path sub-map))))))
 
 (defn local-or-vivo-only? [sub-map]
