@@ -233,7 +233,7 @@
 
   (get-subscription-info [this sub-name]
     (when-let [info (@*sub-name->info sub-name)]
-      {:state (@(:*state info))
+      {:state @(:*state info)
        :resolution-map (:resolution-map info)}))
 
   (subscribe! [this sub-name sub-map update-fn opts]
