@@ -4,6 +4,7 @@
    #?(:cljs ["react-dom" :as ReactDOM])
    #?(:cljs ["react-dom/server" :as ReactDOMServer])
    [clojure.core.async :as ca]
+   [clojure.string :as str]
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.utils :as u]
    [deercreeklabs.async-utils :as au]
@@ -111,19 +112,27 @@
   ([vc sub-map component-name resolution-map]
    (use-vivo-state vc sub-map component-name resolution-map []))
   ([vc sub-map component-name resolution-map parents]
-   ;; TODO: Consider memoizing the creation of ordered pairs. Is it expensive?
+
    #?(:cljs
-      (let [ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)
-            initial-state (u/get-synchronous-state vc ordered-pairs)
-            [state update-fn] (use-state initial-state)
-            effect (fn []
-                     (let [opts {:parents parents
-                                 :react? true}]
-                       (u/subscribe! vc ordered-pairs initial-state update-fn
-                                     component-name opts)))]
-        ;; Use str to perform a deep compare rather than javascript's ===
-        (use-effect effect #js [(str ordered-pairs)])
-        state))))
+      (let [[_ render!] (use-state nil)
+            subscribe*! #(let [opts {:parents parents
+                                     :react? true
+                                     :resolution-map resolution-map}
+                               update-fn (fn [new-state]
+                                           (render! (u/current-time-ms)))]
+                           (u/subscribe! vc component-name sub-map update-fn
+                                         opts))
+            cleanup-effect (fn []
+                             #(u/unsubscribe! vc component-name))
+            sub-info (u/get-subscription-info vc component-name)]
+        (use-effect cleanup-effect #js [])
+        (if (not sub-info)
+          (subscribe*!)
+          (if (= resolution-map (:resolution-map sub-info))
+            (:state sub-info)
+            (do
+              (u/unsubscribe! vc component-name)
+              (subscribe*!))))))))
 
 ;;;;;;;;;;;;;;;;;;;; Macro runtime helpers ;;;;;;;;;;;;;;;;;;;;
 ;; Emitted code calls these fns

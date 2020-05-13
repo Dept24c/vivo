@@ -72,7 +72,7 @@
 
 (defn do-state-updates!*
   [vc update-info cb* subs-update-ch log-error <fp->schema sys-state-schema
-   *sys-db-info *local-state *subscriber-name->info *subject-id]
+   *sys-db-info *local-state *sub-name->info *subject-id]
   (ca/go
     (try
       (au/<? (u/<wait-for-conn-init vc))
@@ -110,7 +110,7 @@
                              (:db @*sys-db-info))]
                   (ca/put! subs-update-ch
                            (u/sym-map db local-state update-infos cb
-                                      *subscriber-name->info *subject-id)))
+                                      *sub-name->info *subject-id)))
                 (if (< num-attempts max-commit-attempts)
                   (recur (inc num-attempts))
                   (cb (ex-info (str "Failed to commit updates after "
@@ -137,7 +137,7 @@
                        *next-instance-num
                        *stopped?
                        *subject-id
-                       *subscriber-name->info
+                       *sub-name->info
                        *sys-db-info]
   u/ISchemaStore
   (<fp->schema [this fp]
@@ -231,11 +231,18 @@
     (cc/shutdown capsule-client)
     (log-info "Vivo client stopped."))
 
-  (subscribe!
-    [this ordered-pairs initial-state update-fn subscriber-name opts]
-    (subscriptions/subscribe!
-     ordered-pairs initial-state update-fn subscriber-name opts
-     *stopped? *subscriber-name->info *sys-db-info *local-state *subject-id))
+  (get-subscription-info [this sub-name]
+    (when-let [info (@*sub-name->info sub-name)]
+      {:state (@(:*state info))
+       :resolution-map (:resolution-map info)}))
+
+  (subscribe! [this sub-name sub-map update-fn opts]
+    (subscriptions/subscribe! sub-name sub-map update-fn opts *stopped?
+                              *sub-name->info *sys-db-info *local-state
+                              *subject-id))
+
+  (unsubscribe! [this sub-name]
+    (swap! *sub-name->info dissoc sub-name))
 
   (<wait-for-conn-init [this]
     (au/go
@@ -259,7 +266,7 @@
       (do-state-updates!* this update-info cb subs-update-ch log-error
                           #(u/<fp->schema this %) sys-state-schema
                           *sys-db-info *local-state
-                          *subscriber-name->info *subject-id))
+                          *sub-name->info *subject-id))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -316,7 +323,7 @@
             (reset! *sys-db-info {:db-id new-db-id
                                   :db db})
             (ca/put! subs-update-ch (u/sym-map db local-state update-infos
-                                               *subscriber-name->info
+                                               *sub-name->info
                                                *subject-id))))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in <handle-sys-state-changed: "
@@ -487,7 +494,7 @@
         *fp->schema (atom {})
         *subject-id (atom nil)
         *vc (atom nil)
-        *subscriber-name->info (atom {})
+        *sub-name->info (atom {})
         *next-instance-num (atom 0)
         on-disconnect* #(when on-disconnect
                           (on-disconnect @*vc @*local-state))
@@ -502,7 +509,7 @@
                                 local-state @*local-state]
                             (ca/put! subs-update-ch
                                      (u/sym-map db local-state update-infos
-                                                *subscriber-name->info
+                                                *sub-name->info
                                                 *subject-id)))
                           nil)
         _ (when rpcs
@@ -530,7 +537,7 @@
                          *next-instance-num
                          *stopped?
                          *subject-id
-                         *subscriber-name->info
+                         *sub-name->info
                          *sys-db-info)]
     (reset! *vc vc)
     (subscriptions/start-subscription-update-loop! subs-update-ch)

@@ -50,44 +50,28 @@
                last-msg-ch (ca/chan 1)
                all-msgs-ch (ca/chan 1)
                app-name-ch (ca/chan 1)
-               ;;index-ch (ca/chan 1)
                expected-all-msgs [{:text "A msg"
                                    :user {:name "Bo Johnson"
                                           :nickname "Bo"}}
                                   {:text "This is great"
                                    :user {:name "Bo Johnson"
-                                          :nickname "Bo"}}]]
-           (vivo/subscribe! vc '{msgs [:sys :msgs]
-                                 users [:sys :users]}
-                            nil
-                            (fn [{:syms [msgs users] :as arg}]
+                                          :nickname "Bo"}}]
+               all-msgs-ufn (fn [{:syms [msgs users] :as arg}]
                               (if-not (seq msgs)
                                 (ca/put! all-msgs-ch :no-msgs)
                                 (let [msgs* (join-msgs-and-users msgs users)]
-                                  (ca/put! all-msgs-ch msgs*))))
-                            "test1")
-           (vivo/subscribe! vc '{app-name [:sys :app-name]} nil
-                            (fn [df]
-                              (if-let [app-name (df 'app-name)]
-                                (ca/put! app-name-ch app-name)
-                                (ca/put! app-name-ch :no-name)))
-                            "test2")
-           (vivo/subscribe! vc '{last-msg [:sys :msgs -1]} nil
-                            (fn [df]
-                              (if-let [last-msg (df 'last-msg)]
-                                (ca/put! last-msg-ch last-msg)
-                                (ca/put! last-msg-ch :no-last)))
-                            "test3")
-           #_(vivo/subscribe! vc '{uid->msgs [:sys :user-id-to-msgs]} nil
-                              (fn [{:syms [uid->msgs] :as df}]
-                                (if (seq uid->msgs)
-                                  (ca/put! index-ch uid->msgs)
-                                  (ca/put! index-ch :no-u->m)))
-                              "test4")
-           (is (= :no-msgs (au/<? all-msgs-ch))) ; initial subscription result
-           (is (= :no-name (au/<? app-name-ch))) ; initial subscription result
-           (is (= :no-last (au/<? last-msg-ch))) ; initial subscription result
-           ;;(is (= :no-u->m (au/<? index-ch))) ; initial subscription result
+                                  (ca/put! all-msgs-ch msgs*))))]
+           (is (= {'msgs nil
+                   'users nil}
+                  (vivo/subscribe! vc "test1" '{msgs [:sys :msgs]
+                                                users [:sys :users]}
+                                   all-msgs-ufn)))
+           (is (= {'app-name nil}
+                  (vivo/subscribe! vc "test2" '{app-name [:sys :app-name]}
+                                   #(ca/put! app-name-ch %))))
+           (is (= {'last-msg nil}
+                  (vivo/subscribe! vc "test3" '{last-msg [:sys :msgs -1]}
+                                   #(ca/put! last-msg-ch %))))
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys]
                                     :op :set
@@ -101,18 +85,13 @@
                                     :op :insert-after
                                     :arg msg2}]))))
            (is (= expected-all-msgs (au/<? all-msgs-ch)))
-           (is (= app-name (au/<? app-name-ch)))
-           (is (= msg2 (au/<? last-msg-ch)))
-           #_(is (= {"1" [{:text "This is great" :user-id "1"}
-                          {:text "A msg" :user-id "1"}]}
-                    (au/<? index-ch)))
+           (is (= {'app-name app-name} (au/<? app-name-ch)))
+           (is (= {'last-msg msg2} (au/<? last-msg-ch)))
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys :msgs -1]
                                     :op :remove}]))))
-           (is (= msg (au/<? last-msg-ch)))
-           (is (= 1 (count (au/<? all-msgs-ch))))
-           #_(is (= {"1" [{:text "A msg" :user-id "1"}]}
-                    (au/<? index-ch))))
+           (is (= {'last-msg msg} (au/<? last-msg-ch)))
+           (is (= 1 (count (au/<? all-msgs-ch)))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -132,27 +111,19 @@
                program-name-ch (ca/chan 1)
                users-ch (ca/chan 1)
                users {user-bo-id user-bo}]
-           (vivo/subscribe! vc '{program-name [:sys :program-name]} nil
-                            (fn [df]
-                              (if-let [program-name (df 'program-name)]
-                                (ca/put! program-name-ch program-name)
-                                (ca/put! program-name-ch :no-name)))
-                            "test2a")
-           (vivo/subscribe! vc '{users [:sys :users]}
-                            nil
-                            (fn [{:syms [users]}]
-                              (ca/put! users-ch (if (seq users)
-                                                  users
-                                                  :no-users)))
-                            "test1a")
-           (is (= :no-name (au/<? program-name-ch))) ; initial result
-           (is (= :no-users (au/<? users-ch))) ; initial result
+           (is (= {'program-name nil}
+                  (vivo/subscribe! vc "test2a"
+                                   '{program-name [:sys :program-name]}
+                                   #(ca/put! program-name-ch %))))
+           (is (= {'users nil}
+                  (vivo/subscribe! vc "test1a" '{users [:sys :users]}
+                                   #(ca/put! users-ch %))))
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys]
                                     :op :set
                                     :arg {:program-name program-name
                                           :users users}}]))))
-           (is (= users (au/<? users-ch))))
+           (is (= {'users users} (au/<? users-ch))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -164,20 +135,19 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ch (ca/chan 1)
-               core-user-ids ["123" "789"]
+         (let [core-user-ids ["123" "789"]
                resolution-map {'core-user-ids core-user-ids}
                users {"123" {:name "Alice" :nickname "A"}
                       "456" {:name "Bob" :nickname "Bobby"}
                       "789" {:name "Candace" :nickname "Candy"}}
                sub-map '{core-user-names [:sys :users core-user-ids :name]}
-               update-fn #(ca/put! ch ('core-user-names %))
-               expected ["Alice" "Candace"]]
+               expected '{core-user-names ["Alice" "Candace"]}]
            (au/<? (vivo/<update-state! vc [{:path [:sys :users]
                                             :op :set
                                             :arg users}]))
-           (vivo/subscribe! vc sub-map nil update-fn "test" resolution-map)
-           (is (= expected (au/<? ch))))
+           (is (= expected
+                  (vivo/subscribe! vc "test" sub-map (constantly nil)
+                                   (u/sym-map resolution-map)))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -189,23 +159,21 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ch (ca/chan 1)
-               users {"123" {:name "Alice" :nickname "A"}
+         (let [users {"123" {:name "Alice" :nickname "A"}
                       "456" {:name "Bob" :nickname "Bobby"}
                       "789" {:name "Candace" :nickname "Candy"}}
                sub-map '{core-user-ids [:sys :core-user-ids]
                          core-user-names [:sys :users core-user-ids :name]}
-               update-fn #(ca/put! ch %)
                expected '{core-user-ids []
                           core-user-names nil}]
-           (au/<? (vivo/<update-state! vc [{:path [:sys :core-user-ids]
-                                            :op :set
-                                            :arg []}
-                                           {:path [:sys :users]
-                                            :op :set
-                                            :arg users}]))
-           (vivo/subscribe! vc sub-map nil update-fn "test")
-           (is (= expected (au/<? ch))))
+           (is (= true
+                  (au/<? (vivo/<update-state! vc [{:path [:sys :core-user-ids]
+                                                   :op :set
+                                                   :arg []}
+                                                  {:path [:sys :users]
+                                                   :op :set
+                                                   :arg users}]))))
+           (is (= expected (vivo/subscribe! vc "test" sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -217,16 +185,13 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ch (ca/chan 1)
-               users {"123" {:name "Alice" :nickname "A"}
+         (let [users {"123" {:name "Alice" :nickname "A"}
                       "456" {:name "Bob" :nickname "Bobby"}
                       "789" {:name "Candace" :nickname "Candy"}}
                sub-map '{core-user-names [:sys :users ["123" "789"] :name]}
-               update-fn #(ca/put! ch %)
                expected {'core-user-names ["Alice" "Candace"]}]
-           (au/<? (vivo/<set-state! vc [:sys :users] users))
-           (vivo/subscribe! vc sub-map nil update-fn "test")
-           (is (= expected (au/<? ch))))
+           (is (= true (au/<? (vivo/<set-state! vc [:sys :users] users))))
+           (is (= expected (vivo/subscribe! vc "test" sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -238,16 +203,13 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ch (ca/chan 1)
-               users {"123" {:name "Alice" :nickname "A"}
+         (let [users {"123" {:name "Alice" :nickname "A"}
                       "456" {:name "Bob" :nickname "Bobby"}
                       "789" {:name "Candace" :nickname "Candy"}}
                sub-map '{user-name [:sys :users "999" :name]}
-               update-fn #(ca/put! ch %)
                expected {'user-name nil}]
-           (au/<? (vivo/<set-state! vc [:sys :users] users))
-           (vivo/subscribe! vc sub-map nil update-fn "test")
-           (is (= expected (au/<? ch))))
+           (is (= true (au/<? (vivo/<set-state! vc [:sys :users] users))))
+           (is (= expected (vivo/subscribe! vc "test" sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -259,16 +221,13 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ch (ca/chan 1)
-               users {"123" {:name "Alice" :nickname "A"}
+         (let [users {"123" {:name "Alice" :nickname "A"}
                       "456" {:name "Bob" :nickname "Bobby"}
                       "789" {:name "Candace" :nickname "Candy"}}
                sub-map '{core-users [:sys :users ["999"]]}
-               update-fn #(ca/put! ch %)
                expected '{core-users [nil]}]
-           (au/<? (vivo/<set-state! vc [:sys :users] users))
-           (vivo/subscribe! vc sub-map nil update-fn "test")
-           (is (= expected (au/<? ch))))
+           (is (= true (au/<? (vivo/<set-state! vc [:sys :users] users))))
+           (is (= expected (vivo/subscribe! vc "test" sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -280,8 +239,7 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [ch (ca/chan 1)
-               users {"123" {:name "Alice" :nickname "A" :fav-nums [1 2]}
+         (let [users {"123" {:name "Alice" :nickname "A" :fav-nums [1 2]}
                       "456" {:name "Bob" :nickname "Bobby" :fav-nums [10 20]}
                       "789" {:name "Candace" :nickname "Candy" :fav-nums [3 4]}}
                msgs [{:text "hi" :user-id "123"}
@@ -294,7 +252,6 @@
                          num-msgs [:sys :msgs :vivo/count]
                          msgs [:sys :msgs]
                          msg-indices [:sys :msgs :vivo/keys]}
-               update-fn #(ca/put! ch %)
                expected {'num-users 3
                          'user-ids #{"123" "456" "789"}
                          'user-names-1 #{"Alice" "Bob" "Candace"}
@@ -302,13 +259,15 @@
                          'fav-nums #{1 2 10 20 3 4}
                          'num-msgs 2
                          'msg-indices [0 1]
-                         'msgs msgs}]
-           (au/<? (vivo/<update-state! vc [{:path [:sys]
-                                            :op :set
-                                            :arg (u/sym-map msgs users)}]))
-           (vivo/subscribe! vc sub-map nil update-fn "test" {})
+                         'msgs msgs}
+               update-ret (au/<? (vivo/<update-state!
+                                  vc [{:path [:sys]
+                                       :op :set
+                                       :arg (u/sym-map msgs users)}]))
+               _ (is (= true update-ret))
+               sub-ret (vivo/subscribe! vc "test" sub-map nil)]
            (is (= expected
-                  (-> (au/<? ch)
+                  (-> sub-ret
                       (update 'user-ids set)
                       (update 'user-names-1 set)
                       (update 'user-names-2 set)
@@ -448,14 +407,12 @@
                app-name "test-app"
                ret (au/<? (vivo/<set-state! vc [:sys :app-name] app-name))
                _ (is (= true ret))
-               state-ch (ca/chan)
                sub-map '{app-name [:sys :app-name]
                          launch-codes [:sys :secret :launch-codes]}
-               unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
-                                       "test")
+               state (vivo/subscribe! vc "test" sub-map (constantly nil))
                expected-state {'app-name app-name
                                'launch-codes nil}
-               _ (is (= expected-state (au/<? state-ch)))
+               _ (is (= expected-state state))
                _ (is (= :vivo/unauthorized
                         (au/<? (vivo/<set-state!
                                 vc [:sys :secret :launch-codes] ["Foo"]))))
@@ -473,7 +430,7 @@
                                          vc token))
                _ (is (= true token-login-2-ret))
                _ (is (= 2 (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
-               _ (unsub!)
+               _ (vivo/unsubscribe! vc "test")
                logout-ret (au/<? (vivo/<log-out! vc))
                _ (is (= true logout-ret))
                token-login-ret (au/<? (vivo/<log-in-w-token!
@@ -546,13 +503,10 @@
          (let [huge-name (apply str (take 5 #_500000 (repeat "x")))
                set-ret (au/<? (vivo/<set-state! vc [:sys :app-name] huge-name))
                _ (is (= true set-ret))
-               state-ch (ca/chan)
                sub-map '{app-name [:sys :app-name]}
-               unsub! (vivo/subscribe! vc sub-map nil #(ca/put! state-ch %)
-                                       "test")
-               state-ret (au/<? state-ch)]
+               state-ret (vivo/subscribe! vc "test" sub-map (constantly nil))]
            (is (= huge-name ('app-name state-ret)))
-           (unsub!))
+           (vivo/unsubscribe! vc "test"))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e))
            (log/error (str "Exception in test-large-data-storage:\n"

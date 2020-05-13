@@ -52,6 +52,7 @@
   (<deserialize-value [this path ret])
   (<handle-sys-state-changed [this arg metadata])
   (<get-subject-id-for-identifier [this identifier])
+  (get-subscription-info [this sub-name])
   (get-synchronous-state [this ordered-pairs])
   (<log-in! [this identifier secret])
   (logged-in? [this])
@@ -62,8 +63,8 @@
   (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
-  (subscribe! [this ordered-pairs initial-state update-fn subscriber-name
-               parents])
+  (subscribe! [this sub-name sub-map update-fn opts])
+  (unsubscribe! [this sub-name])
   (<update-cmd->serializable-update-cmd [this i cmds])
   (update-state! [this update-cmds cb])
   (<update-sys-state [this update-commands])
@@ -658,7 +659,8 @@
                                        (fn [acc element]
                                          (if-not (symbol? element)
                                            (conj acc element)
-                                           (if-let [v (resolution-map element)]
+                                           (if-let [v (get resolution-map
+                                                           element)]
                                              (conj acc v)
                                              (conj acc element))))
                                        [] path))

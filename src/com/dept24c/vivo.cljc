@@ -36,13 +36,21 @@
    change, calls `update-fn` with the updated state. Note that this
    is a low-level function that generally should not be called directly.
    Prefer `react/def-component` or `react/use-vivo-state`.
-   Returns an unsubscribe fn that may be called to cancel the subscription."
-  ([vc sub-map initial-state update-fn subscriber-name]
-   (subscribe! vc sub-map initial-state update-fn subscriber-name {}))
-  ([vc sub-map initial-state update-fn subscriber-name resolution-map]
-   (let [ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)]
-     (u/subscribe! vc ordered-pairs initial-state update-fn
-                   subscriber-name {}))))
+   `opts` is a map of optional parameters:
+     - `parents`: sequence of sub-names
+     - `react?`: boolean. Enables react update batching
+     - `resolution-map`: map of symbols to values to be used w/ sub-map
+   Returns the current state if it is immediately available, else :vivo/unknown.
+   Use `unsubscribe!` to cancel the subscription."
+  ([vc sub-name sub-map update-fn]
+   (subscribe! vc sub-name sub-map update-fn {}))
+  ([vc sub-name sub-map update-fn opts]
+   (u/subscribe! vc sub-name sub-map update-fn opts)))
+
+(defn unsubscribe!
+  "Cancels a subscription"
+  [vc sub-name]
+  (u/unsubscribe! vc sub-name))
 
 (defn update-state!
   ([vc update-commands]
