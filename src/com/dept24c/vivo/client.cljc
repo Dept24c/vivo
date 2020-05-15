@@ -233,8 +233,7 @@
 
   (get-subscription-info [this sub-name]
     (when-let [info (@*sub-name->info sub-name)]
-      {:state @(:*state info)
-       :resolution-map (:resolution-map info)}))
+      (select-keys info [:state :resolution-map])))
 
   (subscribe! [this sub-name sub-map update-fn opts]
     (subscriptions/subscribe! sub-name sub-map update-fn opts *stopped?
@@ -328,10 +327,6 @@
         (catch #?(:cljs js/Error :clj Throwable) e
           (log-error (str "Exception in <handle-sys-state-changed: "
                           (u/ex-msg-and-stacktrace e)))))))
-
-  (get-synchronous-state [this ordered-pairs]
-    (subscriptions/get-synchronous-state ordered-pairs (:db @*sys-db-info)
-                                         @*local-state *subject-id))
 
   (<get-subject-id-for-identifier [this identifier]
     (cc/<send-msg capsule-client :get-subject-id-for-identifier identifier))

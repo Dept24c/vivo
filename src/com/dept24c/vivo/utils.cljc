@@ -29,6 +29,9 @@
 (def max-data-block-bytes (* 300 1000)) ;; Approx. DDB max via Cognitect API
 (def max-secret-len 64) ;; To prevent DoS attacks against bcrypt
 
+(def terminal-kw-ops #{:vivo/keys :vivo/count :vivo/concat})
+(def kw-ops (conj terminal-kw-ops :vivo/*))
+
 (defmacro sym-map
   "Builds a map from symbols.
    Symbol names are turned into keywords and become the map's keys.
@@ -53,7 +56,6 @@
   (<handle-sys-state-changed [this arg metadata])
   (<get-subject-id-for-identifier [this identifier])
   (get-subscription-info [this sub-name])
-  (get-synchronous-state [this ordered-pairs])
   (<log-in! [this identifier secret])
   (logged-in? [this])
   (<log-in-w-token! [this token])
@@ -126,6 +128,10 @@
 
 (defn ex-msg-and-stacktrace [e]
   (str "\nException:\n" (ex-msg e) "\nStacktrace:\n" (ex-stacktrace e)))
+
+(defn spy [v label]
+  (log/info (str "SPY " label ":\n" (pprint-str v)))
+  v)
 
 (defn current-time-ms []
   #?(:clj (System/currentTimeMillis)
@@ -631,9 +637,6 @@
                "valid path keys.")
           (sym-map k path))))
 
-(defn terminal-kw? [k]
-  (boolean (#{:vivo/keys :vivo/count :vivo/concat} k)))
-
 (defn check-key-types [path]
   (doseq [k path]
     (when (not (or (keyword? k)  (string? k) (int? k) (symbol? k) (nil? k)
@@ -645,7 +648,7 @@
         last-i (dec num-elements)]
     (doseq [i (range num-elements)]
       (let [k (nth path i)]
-        (when (and (terminal-kw? k)
+        (when (and (terminal-kw-ops k)
                    (not= last-i i))
           (throw (ex-info (str "`" k "` can only appear at the end of a path")
                           (sym-map path k))))))))

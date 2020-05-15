@@ -26,7 +26,7 @@
     (is (= expected (macro-impl/parse-def-component-args 'foo args)))))
 
 (deftest test-parse-def-component-args-with-docstring
-  (let [docstring "This is my component"
+  (let [docstring "My component"
         arglist '[vc a b]
         sub-map '{x [:local :c]}
         args [docstring arglist sub-map]
@@ -490,6 +490,76 @@
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
+(deftest test-sequence-join-in-sub-map
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             update-ch (ca/chan 1)
+             my-book-ids ["123" "456"]
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{my-book-ids [:local :my-book-ids]
+                       my-books [:local :books my-book-ids]}
+             update-fn #(ca/put! update-ch %)
+             expected {'my-book-ids my-book-ids
+                       'my-books (vals (select-keys books my-book-ids))}]
+         (is (= true (au/<? (vivo/<update-state!
+                             vc [{:path [:local :books]
+                                  :op :set
+                                  :arg books}
+                                 {:path [:local :my-book-ids]
+                                  :op :set
+                                  :arg my-book-ids}]))))
+         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn)))
+         (is (= true (au/<? (vivo/<update-state!
+                             vc [{:path [:local :my-book-ids 0]
+                                  :op :remove}]))))
+         (is (= {'my-book-ids ["456"]
+                 'my-books [{:title "Kidnapped"}]} (au/<? update-ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-sequence-join-in-sub-map-2
+  ;; Tests changing state whose path depends on a different path in sub-map
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             update-ch (ca/chan 1)
+             my-book-ids ["123" "789"]
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{my-book-ids [:local :my-book-ids]
+                       my-books [:local :books my-book-ids]}
+             update-fn #(ca/put! update-ch %)
+             new-title "Strange Case of Dr Jekyll and Mr Hyde"
+             expected1 {'my-book-ids my-book-ids
+                        'my-books [{:title "Treasure Island"}
+                                   {:title "Dr Jekyll and Mr Hyde"}]}
+             expected2 {'my-book-ids my-book-ids
+                        'my-books [{:title "Treasure Island"}
+                                   {:title new-title}]}]
+         (is (= true (au/<? (vivo/<update-state!
+                             vc [{:path [:local :books]
+                                  :op :set
+                                  :arg books}
+                                 {:path [:local :my-book-ids]
+                                  :op :set
+                                  :arg my-book-ids}]))))
+         (is (= expected1 (vivo/subscribe! vc "test" sub-map update-fn)))
+         (is (= true (au/<? (vivo/<update-state!
+                             vc [{:path [:local :books "789" :title]
+                                  :op :set
+                                  :arg new-title}]))))
+         (is (= expected2 (au/<? update-ch))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
 (deftest test-set-join
   (au/test-async
    1000
@@ -765,9 +835,9 @@
      (try
        (let [vc (vivo/vivo-client)
              ch (ca/chan 1)
-             books {"123" {:title "Treasure Island" :nums [2 4 6]}
-                    "456" {:title "Kidnapped" :nums [1 3]}
-                    "789" {:title "Dr Jekyll and Mr Hyde" :nums [5 7]}}
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
              titles-set (set (map :title (vals books)))
              sub-map '{titles [:local :books :vivo/* :title]}
              update-fn #(ca/put! ch (update % 'titles set))
@@ -778,8 +848,7 @@
              _ (is (= {'titles titles-set} (au/<? ch)))
              ret2 (au/<? (vivo/<update-state! vc [{:path [:local :books "999"]
                                                    :op :set
-                                                   :arg {:title "1984"
-                                                         :nums [20 30]}}]))
+                                                   :arg {:title "1984"}}]))
              _ (is (= true ret2))
              _ (is (= {'titles (conj titles-set "1984")} (au/<? ch)))
              ret3 (au/<? (vivo/<update-state! vc [{:path [:local :books "456"]
@@ -788,5 +857,38 @@
              expected-titles (-> (conj titles-set "1984")
                                  (disj "Kidnapped"))
              _ (is (= {'titles expected-titles} (au/<? ch)))])
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-array-ops
+  (au/test-async
+   3000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             ch (ca/chan 1)
+             id-to-fav-nums {1 [7 8 9]
+                             2 [2 3 4]}
+             ret1 (au/<? (vivo/<set-state! vc
+                                           [:local :id-to-fav-nums]
+                                           id-to-fav-nums))
+             _ (is (= true ret1))
+             resolution-map {'id 2}
+             sub-map '{my-nums [:local :id-to-fav-nums id]}
+             update-fn #(ca/put! ch %)
+             ret2 (vivo/subscribe! vc "test" sub-map update-fn
+                                   (u/sym-map resolution-map))
+             _ (is (= {'my-nums [2 3 4]} ret2))
+             ret3 (au/<? (vivo/<update-state!
+                          vc [{:path [:local :id-to-fav-nums 2 1]
+                               :op :remove}]))
+             _ (is (= true ret3))
+             _ (is (= {'my-nums [2 4]} (au/<? ch)))
+             ret4 (au/<? (vivo/<update-state!
+                          vc [{:path [:local :id-to-fav-nums 2 -1]
+                               :op :insert-after
+                               :arg 5}]))
+             _ (is (= true ret4))
+             _ (is (= {'my-nums [2 4 5]} (au/<? ch)))])
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))

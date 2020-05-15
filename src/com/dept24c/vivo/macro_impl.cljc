@@ -95,11 +95,10 @@
   (let [sub-map-ks (set (keys sub-map))]
     (-> (reduce-kv (fn [acc k path]
                      (reduce (fn [acc* element]
-                               (if-not (symbol? element)
+                               (if (or (not (symbol? element))
+                                       (sub-map-ks element))
                                  acc*
-                                 (if (sub-map-ks element)
-                                   acc*
-                                   (conj acc* element))))
+                                 (conj acc* element)))
                              acc path))
                    #{} sub-map)
         (vec))))

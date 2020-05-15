@@ -745,7 +745,7 @@
             <get-at-path #(u/<get-in storage data-id state-schema % :sys)
             last-path-k (last path)
             join? (u/has-join? path)
-            term-kw? (u/terminal-kw? last-path-k)]
+            term-kw? (u/terminal-kw-ops last-path-k)]
         (cond
           (not data-id)
           [:vivo/unauthorized [path]] ;; bad db-id

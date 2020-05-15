@@ -54,7 +54,7 @@
 
 (defn transform-operators-in-sub-path [sub-path]
   (reduce (fn [acc k]
-            (if (#{:vivo/* :vivo/concat :vivo/keys :vivo/count} k)
+            (if (u/kw-ops k)
               (reduced acc)
               (conj acc k)))
           [] sub-path))
@@ -76,9 +76,9 @@
 (defn get-sub-names-to-update
   [db local-state update-infos *sub-name->info]
   (reduce-kv (fn [acc sub-name info]
-               (let [{:keys [ordered-pairs]} info
-                     paths (map second ordered-pairs)]
-                 (if (update-sub? update-infos paths)
+               (let [{:keys [expanded-paths]} info
+                     update? (update-sub? update-infos expanded-paths)]
+                 (if update?
                    (conj acc sub-name)
                    acc)))
              #{} @*sub-name->info))
@@ -161,50 +161,60 @@
     (apply concat seqs)))
 
 (defn get-state-and-expanded-path [state path prefix]
+  ;; TODO: Optimize this. Only traverse the path once.
   (let [last-path-k (last path)
         join? (u/has-join? path)
-        term-kw? (u/terminal-kw? last-path-k)
+        wildcard-parent (-> (partition-by #(= :vivo/* %) path)
+                            (first))
+        wildcard? (not= path wildcard-parent)
+        terminal-kw? (u/terminal-kw-ops last-path-k)
         ks-at-path* #(ks-at-path :vivo/* state % prefix path)]
     (cond
       (u/empty-sequence-in-path? path)
       [nil [path]]
 
-      (and (not term-kw?) (not join?))
+      (and (not terminal-kw?) (not join?))
       (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
         [val [norm-path]])
 
-      (and term-kw? (not join?))
+      (and terminal-kw? (not join?))
       (let [path* (butlast path)
             val (case last-path-k
                   :vivo/keys (ks-at-path :vivo/keys state path* prefix path)
                   :vivo/count (count-at-path state path* prefix)
                   :vivo/concat (do-concat state path* prefix))]
-        [val [path]])
+        [val [path*]])
 
-      (and (not term-kw?) join?)
-      (let [xpath (u/expand-path ks-at-path* path)
-            num-results (count xpath)]
+      (and (not terminal-kw?) join?)
+      (let [xpaths (u/expand-path ks-at-path* path)
+            num-results (count xpaths)
+            xpaths* (if wildcard?
+                      [wildcard-parent]
+                      xpaths)]
         (if (zero? num-results)
-          [[] []]
+          [[] xpaths*]
           ;; Use loop to stay in go block
           (loop [out []
                  i 0]
-            (let [path* (nth xpath i)
+            (let [path* (nth xpaths i)
                   ret (get-state-and-expanded-path state path* prefix)
                   new-out (conj out (first ret))
                   new-i (inc i)]
               (if (not= num-results new-i)
                 (recur new-out new-i)
-                [new-out xpath])))))
+                [new-out xpaths*])))))
 
-      (and term-kw? join?)
-      (let [xpath (u/expand-path ks-at-path* (butlast path))
-            num-results (count xpath)]
+      (and terminal-kw? join?)
+      (let [xpaths (u/expand-path ks-at-path* (butlast path))
+            num-results (count xpaths)
+            xpaths* (if wildcard?
+                      [wildcard-parent]
+                      xpaths)]
         (if (zero? num-results)
-          [[] []]
+          [[] xpaths*]
           (let [results (loop [out [] ;; Use loop to stay in go block
                                i 0]
-                          (let [path* (nth xpath i)
+                          (let [path* (nth xpaths i)
                                 ret (get-state-and-expanded-path
                                      state path* prefix)
                                 new-out (conj out (first ret))
@@ -216,72 +226,12 @@
                     :vivo/keys (range (count results))
                     :vivo/count (count results)
                     :vivo/concat (apply concat results))]
-            [v xpath]))))))
+            [v xpaths*]))))))
 
 (defn <get-state-and-expanded-path [state path prefix]
-  ;; TODO: DRY this up with the sync version when implementing
-  ;; offline/online data
-  #_
+  ;; TODO: Implement
   (au/go
-    (let [last-path-k (last path)
-          join? (u/has-join? path)
-          term-kw? (u/terminal-kw? last-path-k)
-          <ks-at-path* #(<ks-at-path :vivo/* state % prefix path)]
-      (cond
-        (u/empty-sequence-in-path? path)
-        [nil [path]]
-
-        (and (not term-kw?) (not join?))
-        (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
-          [val [norm-path]])
-
-        (and term-kw? (not join?))
-        (let [path* (butlast path)
-              val (case last-path-k
-                    :vivo/keys (au/<? (<ks-at-path :vivo/keys state path* prefix
-                                                   path))
-                    :vivo/count (count-at-path state path* prefix)
-                    :vivo/concat (do-concat state path* prefix))]
-          [val [path]])
-
-        (and (not term-kw?) join?)
-        (let [xpath (au/<? (u/<expand-path <ks-at-path* path))
-              num-results (count xpath)]
-          (if (zero? num-results)
-            [[] []]
-            ;; Use loop to stay in go block
-            (loop [out []
-                   i 0]
-              (let [path* (nth xpath i)
-                    ret (au/<? (<get-state-and-expanded-path
-                                state path* prefix))
-                    new-out (conj out (first ret))
-                    new-i (inc i)]
-                (if (not= num-results new-i)
-                  (recur new-out new-i)
-                  [new-out xpath])))))
-
-        (and term-kw? join?)
-        (let [<ks-at-path* #(<ks-at-path :vivo/* state % prefix path)
-              xpath (au/<? (u/<expand-path <ks-at-path* (butlast path)))
-              num-results (count xpath)]
-          (if (zero? num-results)
-            [[] []]
-            (let [results (loop [out [] ;; Use loop to stay in go block
-                                 i 0]
-                            (let [path* (nth xpath i)
-                                  ret (au/<? (<get-state-and-expanded-path
-                                              state path* prefix))
-                                  new-out (conj out (first ret))
-                                  new-i (inc i)]
-                              (if (not= num-results new-i)
-                                (recur new-out new-i)
-                                new-out)))
-                  v (case last-path-k
-                      :vivo/keys (range (count results))
-                      :vivo/count (count results)
-                      :vivo/concat (apply concat results))]
-              [v xpath])))))))
+    ))
 
 (defn get-path-info [acc path db local-state *subject-id]
   (if (= [:vivo/subject-id] path)
@@ -296,25 +246,28 @@
 (defn <get-subscription-state [ordered-pairs db local-state *subject-id]
   ;; This is async because it may need to fetch some state from either
   ;; local async storage or the server (in the future)
-  (au/go
-    (let [num-pairs (count ordered-pairs)]
-      (if (zero? num-pairs)
-        {}
-        ;; Use loop to stay in go block
-        (loop [acc {}
-               i 0]
-          (let [[sym path*] (nth ordered-pairs i)
-                info (get-path-info acc path* db local-state *subject-id)
-                {:keys [v state path head]} info
-                v* (or v
-                       (-> (<get-state-and-expanded-path state path head)
-                           (au/<?)
-                           (first)))
-                new-acc (assoc acc sym v*)
-                new-i (inc i)]
-            (if (= num-pairs new-i)
-              new-acc
-              (recur new-acc new-i))))))))
+
+  ;; TODO: Store expanded paths - MUST DO BEFORE USING!!
+
+  #_(au/go
+      (let [num-pairs (count ordered-pairs)]
+        (if (zero? num-pairs)
+          {}
+          ;; Use loop to stay in go block
+          (loop [acc {}
+                 i 0]
+            (let [[sym path*] (nth ordered-pairs i)
+                  info (get-path-info acc path* db local-state *subject-id)
+                  {:keys [v state path head]} info
+                  v* (or v
+                         (-> (<get-state-and-expanded-path state path head)
+                             (au/<?)
+                             (first)))
+                  new-acc (assoc acc sym v*)
+                  new-i (inc i)]
+              (if (= num-pairs new-i)
+                new-acc
+                (recur new-acc new-i))))))))
 
 (defn in-db-cache? [path]
   ;; TODO: Expand when offline data is implemented
@@ -327,44 +280,52 @@
               (reduced false)))
           true ordered-pairs))
 
-(defn get-synchronous-state [ordered-pairs db local-state *subject-id]
+(defn get-synchronous-state-and-expanded-paths
+  [ordered-pairs db local-state *subject-id]
   (reduce
    (fn [acc [sym path*]]
      (if-not (in-db-cache? path*)
-       (reduced :vivo/unknown)
-       (let [info (get-path-info acc path* db local-state *subject-id)
+       (reduced {:state :vivo/unknown})
+       (let [info (get-path-info (:state acc) path* db local-state *subject-id)
              {:keys [v state path head]} info
-             v* (or v (first (get-state-and-expanded-path state path head)))]
-         (assoc acc sym v*))))
-   {}
+             [v* xps] (get-state-and-expanded-path state path head)]
+         (-> acc
+             (update :state assoc sym (or v v*))
+             (update :expanded-paths concat xps)))))
+   {:state {}
+    :expanded-paths []}
    ordered-pairs))
 
-(defn make-applied-update-fn* [sub-name new-state *sub-name->info]
-  (let [{:keys [update-fn *state]} (@*sub-name->info sub-name)
-        old-state @*state]
-    (when (not= old-state new-state)
+(defn make-applied-update-fn*
+  [sub-name new-state expanded-paths *sub-name->info]
+  (when-let [old-sub-info (@*sub-name->info sub-name)]
+    (when (not= (:state old-sub-info) new-state)
       (fn []
-        (reset! *state new-state)
-        ;; Get the info again to ensure it's still subscribed
-        (when (@*sub-name->info sub-name)
+        (let [{:keys [update-fn]} old-sub-info
+              new-sub-info (-> old-sub-info
+                               (assoc :state new-state)
+                               (assoc :expanded-paths expanded-paths))]
+          (swap! *sub-name->info assoc sub-name new-sub-info)
           (update-fn new-state))))))
 
 (defn make-applied-update-fn
   [sub-name db local-state *sub-name->info *subject-id]
   (let [sub-info (@*sub-name->info sub-name)
-        {:keys [ordered-pairs update-fn *state]} sub-info]
+        {:keys [ordered-pairs update-fn]} sub-info]
     (if (cached? ordered-pairs)
-      (let [new-state (get-synchronous-state ordered-pairs db local-state
-                                             *subject-id)]
-        (make-applied-update-fn* sub-name new-state *sub-name->info))
+      (let [sxps (get-synchronous-state-and-expanded-paths
+                  ordered-pairs db local-state *subject-id)
+            {:keys [state expanded-paths]} sxps]
+        (make-applied-update-fn* sub-name state expanded-paths *sub-name->info))
       #(ca/go
          (try
-           (let [new-state (au/<? (<get-subscription-state
-                                   ordered-pairs db local-state *subject-id))
-                 f (make-applied-update-fn* sub-name new-state
-                                            *sub-name->info)]
-             (when f
-               (f)))
+           ;; TODO: Implement. Follow synchronous patterns.
+           #_(let [new-state (au/<? (<get-subscription-state
+                                     ordered-pairs db local-state *subject-id))
+                   f (make-applied-update-fn* sub-name new-state
+                                              *sub-name->info)]
+               (when f
+                 (f)))
            (catch #?(:cljs js/Error :clj Exception) e
              (log/error (str "Error while updating `" sub-name "`:\n"
                              (u/ex-msg-and-stacktrace e)))))))))
@@ -430,18 +391,18 @@
     (let [{:keys [react? resolution-map]} opts
           ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)
           parents (set (:parents opts))
-          *state (atom :vivo/unknown)
-          info (u/sym-map ordered-pairs resolution-map parents react?
-                          update-fn *state)
-          _ (swap! *sub-name->info assoc sub-name info)
           db (:db @*sys-db-info)
           local-state @*local-state]
       (if (cached? ordered-pairs)
-        (let [new-state (get-synchronous-state ordered-pairs db local-state
-                                               *subject-id)]
-          (reset! *state new-state)
-          new-state)
-        (let [f (make-applied-update-fn sub-name db local-state
-                                        *sub-name->info *subject-id)]
-          (f)
-          :vivo/unknown))))) ;; async update will happen later via update-fn
+        (let [sxps (get-synchronous-state-and-expanded-paths
+                    ordered-pairs db local-state *subject-id)
+              {:keys [state expanded-paths]} sxps
+              info (u/sym-map ordered-pairs resolution-map expanded-paths
+                              parents react? update-fn state)]
+          (swap! *sub-name->info assoc sub-name info)
+          state)
+        (do ;; TODO: Implement
+          #_(let [f (make-applied-update-fn sub-name db local-state
+                                            *sub-name->info *subject-id)]
+              (f)
+              :vivo/unknown)))))) ;; async update will happen later via update-fn
