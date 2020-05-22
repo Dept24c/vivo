@@ -135,8 +135,12 @@
   [vc fp]
   (u/<fp->schema vc fp))
 
+(defn default-rpc-timeout-ms 30000)
+
 (defn rpc
   "Calls a remote procedure on the server. Calls callback `cb` with result."
+  ([vc rpc-name-kw arg]
+   (rpc vc rpc-name-kw arg default-rpc-timeout-ms nil))
   ([vc rpc-name-kw arg timeout-ms]
    (rpc vc rpc-name-kw arg timeout-ms nil))
   ([vc rpc-name-kw arg timeout-ms cb]
@@ -156,7 +160,7 @@
   "Calls a remote procedure on the server. Returns a channel which will yield
    the result."
   ([vc rpc-name-kw arg]
-   (<rpc vc rpc-name-kw arg 30000))
+   (<rpc vc rpc-name-kw arg default-rpc-timeout-ms))
   ([vc rpc-name-kw arg timeout-ms]
    (u/<rpc vc rpc-name-kw arg timeout-ms)))
 
