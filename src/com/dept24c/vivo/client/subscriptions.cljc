@@ -384,10 +384,6 @@
   [sub-name sub-map update-fn opts
    *stopped? *sub-name->info *sys-db-info *local-state *subject-id]
   (when-not @*stopped?
-    (when (contains? @*sub-name->info sub-name)
-      (throw (ex-info (str "There is already a subscription named `"
-                           sub-name "`. Subscription names must be unique.")
-                      (u/sym-map sub-name sub-map opts))))
     (let [{:keys [react? resolution-map]} opts
           ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)
           parents (set (:parents opts))
