@@ -981,18 +981,20 @@
                                metadata))
                        branch*))
             db-id (au/<? (<get-db-id this branch))
-            db (au/<? (<get-in this db-id [:sys]))
-            fp (au/<? (u/<schema->fp perm-storage state-schema))
-            serialized-db {:fp fp
-                           :bytes (l/serialize state-schema db)}]
-        (swap! *conn-id->info update conn-id assoc
-               :branch branch :temp-branch? (not perm-branch))
-        (swap! *branch->info update branch
-               (fn [{:keys [conn-ids] :as info}]
-                 (if conn-ids
-                   (update info :conn-ids conj conn-id)
-                   (assoc info :conn-ids #{conn-id}))))
-        (u/sym-map db-id serialized-db))))
+            db (au/<? (<get-in this db-id [:sys]))]
+        (if (= :vivo/unauthorized db)
+          :vivo/unauthorized
+          (let [fp (au/<? (u/<schema->fp perm-storage state-schema))
+                serialized-db {:fp fp
+                               :bytes (l/serialize state-schema db)}]
+            (swap! *conn-id->info update conn-id assoc
+                   :branch branch :temp-branch? (not perm-branch))
+            (swap! *branch->info update branch
+                   (fn [{:keys [conn-ids] :as info}]
+                     (if conn-ids
+                       (update info :conn-ids conj conn-id)
+                       (assoc info :conn-ids #{conn-id}))))
+            (u/sym-map db-id serialized-db))))))
 
   (<rpc [this msg-arg metadata]
     (au/go
