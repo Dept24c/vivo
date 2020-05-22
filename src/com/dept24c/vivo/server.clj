@@ -339,7 +339,8 @@
                 ;; information sent to them directly.
                 ;; This allows local+sys updates to be atomic.
                 (doseq [conn-id* (disj (set conn-ids) conn-id)]
-                  (let [new-db (redaction-fn subject-id whole-db)
+                  (let [subject-id* (:subject-id (@*conn-id->info conn-id*))
+                        new-db (redaction-fn subject-id* whole-db)
                         fp (l/fingerprint64 state-schema)
                         bytes (l/serialize state-schema new-db)
                         new-serialized-db (u/sym-map fp bytes)
