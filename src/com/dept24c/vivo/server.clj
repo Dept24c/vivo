@@ -301,7 +301,7 @@
 
 (defn <modify-db*
   [branch conn-id storage subject-id <update-fn msg redaction-fn
-   state-schema vc-ep *branch->info]
+   state-schema vc-ep *branch->info *conn-id->info]
   (au/go
     (let [num-tries 10
           {:keys [conn-ids]} (@*branch->info branch)
@@ -359,7 +359,7 @@
 
 (defn start-modify-db-loop
   [^ConcurrentLinkedQueue q log-error redaction-fn state-schema vc-ep
-   *branch->info]
+   *branch->info *conn-id->info]
   (ca/go
     (while true
       (try
@@ -369,7 +369,8 @@
             (try
               (cb (au/<? (<modify-db* branch conn-id storage subject-id
                                       <update-fn msg redaction-fn
-                                      state-schema vc-ep *branch->info)))
+                                      state-schema vc-ep *branch->info
+                                      *conn-id->info)))
               (catch Exception e
                 (cb e))))
           (ca/<! (ca/timeout 5)))
@@ -1260,7 +1261,7 @@
                                   *branch->info
                                   *rpc->handler)]
     (start-modify-db-loop modify-q log-error redaction-fn state-schema vc-ep
-                          *branch->info)
+                          *branch->info *conn-id->info)
     (set-handlers! vivo-server vc-ep admin-ep)
     (log-info (str "Vivo server started on port " port "."))
     vivo-server))

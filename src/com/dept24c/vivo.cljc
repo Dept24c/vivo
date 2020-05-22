@@ -135,7 +135,7 @@
   [vc fp]
   (u/<fp->schema vc fp))
 
-(defn default-rpc-timeout-ms 30000)
+(def default-rpc-timeout-ms 30000)
 
 (defn rpc
   "Calls a remote procedure on the server. Calls callback `cb` with result."
