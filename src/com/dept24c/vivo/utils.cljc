@@ -425,7 +425,9 @@
                 :ret rpc-ret-schema
                 :sender :client}
           :set-state-source {:arg state-source-schema
-                             :ret sys-state-info-schema
+                             :ret (l/union-schema
+                                   [sys-state-info-schema
+                                    unauthorized-schema])
                              :sender :client}
           :sys-state-changed {:arg sys-state-change-schema
                               :sender :server}
