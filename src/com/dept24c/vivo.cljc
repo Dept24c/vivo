@@ -4,7 +4,8 @@
    [com.dept24c.vivo.client :as client]
    #?(:clj [com.dept24c.vivo.server :as server])
    [com.dept24c.vivo.utils :as u]
-   [deercreeklabs.async-utils :as au]))
+   [deercreeklabs.async-utils :as au]
+   [deercreeklabs.capsule.logging :as log]))
 
 ;;;;;;;;;;;;;;;;;;;; Server fns ;;;;;;;;;;;;;;;;;;;;
 
@@ -150,8 +151,7 @@
          (when cb
            (cb ret)))
        (catch #?(:cljs js/Error :clj Throwable) e
-         (when-let [logger (:log-error vc)]
-           (logger (str "Exception in rpc:\n" (u/ex-msg-and-stacktrace e))))
+         (log/error (str "Exception in rpc:\n" (u/ex-msg-and-stacktrace e)))
          (when cb
            (cb e)))))
    nil))

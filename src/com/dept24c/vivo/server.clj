@@ -358,7 +358,7 @@
                 (recur (dec num-tries-left))))))))))
 
 (defn start-modify-db-loop
-  [^ConcurrentLinkedQueue q log-error redaction-fn state-schema vc-ep
+  [^ConcurrentLinkedQueue q redaction-fn state-schema vc-ep
    *branch->info *conn-id->info]
   (ca/go
     (while true
@@ -375,8 +375,8 @@
                 (cb e))))
           (ca/<! (ca/timeout 5)))
         (catch Exception e
-          (log-error "Unexpected error in txn-loop: %s"
-                     (u/ex-msg-and-stacktrace e)))))))
+          (log/error (str "Unexpected error in txn-loop: "
+                          (u/ex-msg-and-stacktrace e))))))))
 
 (defn <ks-at-path [kw <get-at-path p full-path]
   (au/go
@@ -526,8 +526,6 @@
           (u/sym-map new-db-id new-serialized-db update-infos))))))
 
 (defrecord VivoServer [authorization-fn
-                       log-error
-                       log-info
                        login-identifier-case-sensitive?
                        login-lifetime-mins
                        modify-q
@@ -913,7 +911,7 @@
             conn-ids (@*subject-id->conn-ids subject-id)]
         (au/<? (<modify-db this <log-out-update-fn "Log out"
                            subject-id branch conn-id))
-        (log-info (str "Logging out subject " subject-id ". " (count conn-ids)
+        (log/info (str "Logging out subject " subject-id ". " (count conn-ids)
                        " active connection(s)."))
         (ca/go
           ;; Wait for `true` response to be rcvd before closing conns
@@ -947,13 +945,13 @@
               (do
                 (au/<? (<modify-db this <log-out-update-fn "Log out"
                                    subject-id branch conn-id))
-                (log-info (str "Logging out subject " subject-id ". "
+                (log/info (str "Logging out subject " subject-id ". "
                                (count conn-ids) " active connections."))
                 (ca/go
                   ;; Wait for `true` response to be rcvd before closing conns
                   (ca/<! (ca/timeout 5000))
                   (doseq [conn-id conn-ids]
-                    (log-info (str "Closing conn " conn-id))
+                    (log/info (str "Closing conn " conn-id))
                     (ep/close-conn vc-ep conn-id)))
                 true)))))))
 
@@ -1088,7 +1086,7 @@
       (if-let [schema (au/<? (u/<fp->schema perm-storage fp))]
         (l/pcf schema)
         (do
-          (log-error (str "Could not find PCF for fingerprint `" fp "`."))
+          (log/error (str "Could not find PCF for fingerprint `" fp "`."))
           nil))))
 
   (<store-schema-pcf [this pcf metadata]
@@ -1122,8 +1120,6 @@
    :authenticate-admin-client (constantly false)
    :handle-http default-health-http-handler
    :http-timeout-ms 60000
-   :log-info println
-   :log-error println ;; TODO: use stderr
    :login-lifetime-mins (* 60 24 15)  ;; 15 days
    :redaction-fn (fn [subject-id db]
                    db)})
@@ -1143,7 +1139,7 @@
 
 (defn on-disconnect
   [*conn-id->info *subject-id->conn-ids *branch->info temp-storage
-   log-error log-info {:keys [conn-id] :as conn-info}]
+   {:keys [conn-id] :as conn-info}]
   (ca/go
     (try
       (let [{:keys [branch subject-id temp-branch?]} (@*conn-id->info conn-id)]
@@ -1157,9 +1153,9 @@
                      (dissoc m subject-id)))))
         (when temp-branch?
           (au/<? (<delete-branch* branch temp-storage)))
-        (log-info (str "Client disconnected (conn-info: " conn-info ").")))
+        (log/info (str "Client disconnected (conn-info: " conn-info ").")))
       (catch Throwable e
-        (log-error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
+        (log/error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn <get-subject-id-for-identifier* [vivo-server identifier metadata]
@@ -1205,8 +1201,6 @@
                 disable-ddb?
                 handle-http
                 http-timeout-ms
-                log-error
-                log-info
                 login-identifier-case-sensitive?
                 login-lifetime-mins
                 port
@@ -1233,7 +1227,7 @@
         *rpc->handler (atom {})
         vc-ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
                                             *subject-id->conn-ids *branch->info
-                                            temp-storage log-error log-info)}
+                                            temp-storage)}
         vc-ep (ep/endpoint "vivo-client" (constantly true)
                            u/client-server-protocol :server vc-ep-opts)
         admin-ep (ep/endpoint "admin-client" authenticate-admin-client
@@ -1243,8 +1237,6 @@
         stop-server (cs/server (conj additional-endpoints vc-ep admin-ep)
                                port cs-opts)
         vivo-server (->VivoServer authorization-fn
-                                  log-error
-                                  log-info
                                   login-identifier-case-sensitive?
                                   login-lifetime-mins
                                   modify-q
@@ -1262,8 +1254,8 @@
                                   *subject-id->conn-ids
                                   *branch->info
                                   *rpc->handler)]
-    (start-modify-db-loop modify-q log-error redaction-fn state-schema vc-ep
+    (start-modify-db-loop modify-q redaction-fn state-schema vc-ep
                           *branch->info *conn-id->info)
     (set-handlers! vivo-server vc-ep admin-ep)
-    (log-info (str "Vivo server started on port " port "."))
+    (log/info (str "Vivo server started on port " port "."))
     vivo-server))

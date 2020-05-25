@@ -12,10 +12,6 @@
    [deercreeklabs.lancaster :as l]
    [deercreeklabs.stockroom :as sr]))
 
-(def default-vc-opts
-  {:log-error println
-   :log-info println})
-
 (def get-state-timeout-ms 30000)
 (def max-commit-attempts 100)
 (def update-state-timeout-ms 30000)
@@ -71,7 +67,7 @@
      :clj (throw (ex-info "js-object? is not supported in clj." {}))))
 
 (defn do-state-updates!*
-  [vc update-info cb* subs-update-ch log-error <fp->schema sys-state-schema
+  [vc update-info cb* subs-update-ch <fp->schema sys-state-schema
    *sys-db-info *local-state *sub-name->info *subject-id]
   (ca/go
     (try
@@ -120,11 +116,9 @@
       (catch #?(:cljs js/Error :clj Throwable) e
         (if cb*
           (cb* e)
-          (log-error (u/ex-msg-and-stacktrace e)))))) )
+          (log/error (u/ex-msg-and-stacktrace e)))))) )
 
 (defrecord VivoClient [capsule-client
-                       log-error
-                       log-info
                        path->schema-cache
                        rpcs
                        set-subject-id!
@@ -215,13 +209,13 @@
     (au/go
       (set-subject-id! nil)
       (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
-        (log-info (str "Logout " (if ret "succeeded." "failed.")))
+        (log/info (str "Logout " (if ret "succeeded." "failed.")))
         ret)))
 
   (<log-out-w-token! [this token]
     (au/go
       (let [ret (au/<? (cc/<send-msg capsule-client :log-out-w-token token))]
-        (log-info (str "Token logout " (if ret "succeeded." "failed."))))))
+        (log/info (str "Token logout " (if ret "succeeded." "failed."))))))
 
   (logged-in? [this]
     (boolean @*subject-id))
@@ -229,7 +223,7 @@
   (shutdown! [this]
     (reset! *stopped? true)
     (cc/shutdown capsule-client)
-    (log-info "Vivo client stopped."))
+    (log/info "Vivo client stopped."))
 
   (get-subscription-info [this sub-name]
     (when-let [info (@*sub-name->info sub-name)]
@@ -262,7 +256,7 @@
         (cb (ex-info "The update-cmds parameter must be a sequence."
                      (u/sym-map update-cmds)))))
     (let [update-info (make-update-info update-cmds)]
-      (do-state-updates!* this update-info cb subs-update-ch log-error
+      (do-state-updates!* this update-info cb subs-update-ch
                           #(u/<fp->schema this %) sys-state-schema
                           *sys-db-info *local-state
                           *sub-name->info *subject-id))
@@ -325,7 +319,7 @@
                                                *sub-name->info
                                                *subject-id))))
         (catch #?(:cljs js/Error :clj Throwable) e
-          (log-error (str "Exception in <handle-sys-state-changed: "
+          (log/error (str "Exception in <handle-sys-state-changed: "
                           (u/ex-msg-and-stacktrace e)))))))
 
   (<get-subject-id-for-identifier [this identifier]
@@ -398,8 +392,8 @@
             (l/deserialize ret-schema w-schema bytes)))))))
 
 (defn <on-connect
-  [opts-on-connect sys-state-source log-error log-info *conn-initialized?
-   *sys-db-info *vc capsule-client]
+  [opts-on-connect sys-state-source *conn-initialized? *sys-db-info *vc
+   capsule-client]
   (ca/go
     (try
       (let [db-info (au/<? (cc/<send-msg capsule-client :set-state-source
@@ -416,15 +410,14 @@
                   {})))
         (when opts-on-connect
           (opts-on-connect vc))
-        (log-info "Vivo client connection initialized."))
+        (log/info "Vivo client connection initialized."))
       (catch #?(:clj Exception :cljs js/Error) e
-        (log-error (str "Error in <on-connect: "
+        (log/error (str "Error in <on-connect: "
                         (u/ex-msg-and-stacktrace e)))))))
 
 (defn on-disconnect
   [on-disconnect* *conn-initialized? set-subject-id! capsule-client]
   (on-disconnect*)
-  (set-subject-id! nil)
   (reset! *conn-initialized? false))
 
 (defn check-sys-state-source [sys-state-source]
@@ -455,8 +448,7 @@
 
 (defn make-capsule-client
   [get-server-url opts-on-connect opts-on-disconnect sys-state-schema
-   sys-state-source log-error log-info
-   *sys-db-info *vc *conn-initialized? set-subject-id!]
+   sys-state-source *sys-db-info *vc *conn-initialized? set-subject-id!]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in vivo-client "
                          "constructor.")
@@ -464,8 +456,7 @@
   (let [get-credentials (constantly {:subject-id "vivo-client"
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect opts-on-connect sys-state-source
-                                   log-error log-info *conn-initialized?
-                                   *sys-db-info *vc)
+                                   *conn-initialized? *sys-db-info *vc)
               :on-disconnect (partial on-disconnect opts-on-disconnect
                                       *conn-initialized? set-subject-id!)}]
     (cc/client get-server-url get-credentials
@@ -474,13 +465,11 @@
 (defn vivo-client [opts]
   (let [{:keys [get-server-url
                 initial-local-state
-                log-error
-                log-info
                 on-connect
                 on-disconnect
                 rpcs
                 sys-state-source
-                sys-state-schema]} (merge default-vc-opts opts)
+                sys-state-schema]} opts
         *local-state (atom initial-local-state)
         *sys-db-info (atom {:db-id nil
                             :db nil})
@@ -515,11 +504,8 @@
                          (make-capsule-client
                           get-server-url on-connect on-disconnect*
                           sys-state-schema sys-state-source
-                          log-error log-info *sys-db-info *vc *conn-initialized?
-                          set-subject-id!))
+                          *sys-db-info *vc *conn-initialized? set-subject-id!))
         vc (->VivoClient capsule-client
-                         log-error
-                         log-info
                          path->schema-cache
                          rpcs
                          set-subject-id!
@@ -544,7 +530,7 @@
                         (if-let [schema (@*fp->schema fp)]
                           (l/pcf schema)
                           (do
-                            (log-error
+                            (log/error
                              (str "Could not find PCF for fingerprint `"
                                   fp "`."))
                             nil)))))
