@@ -525,6 +525,76 @@
               new-serialized-db (u/sym-map fp bytes)]
           (u/sym-map new-db-id new-serialized-db update-infos))))))
 
+(defn <log-in-w-token* [vivo-server token metadata]
+  (au/go
+    (let [{:keys [conn-id]} metadata
+          {:keys [*conn-id->info *subject-id->conn-ids]} vivo-server
+          {:keys [branch]} (@*conn-id->info conn-id)
+          storage (get-storage vivo-server branch)
+          db-info (au/<? (<get-db-info vivo-server branch storage))
+          {:keys [token-to-token-info-data-id]} db-info
+          info (when token-to-token-info-data-id
+                 (au/<? (u/<get-in storage token-to-token-info-data-id
+                                   u/token-map-schema [token] nil)))
+          {:keys [expiration-time-mins subject-id]} info
+          now-mins (-> (u/current-time-ms)
+                       (u/ms->mins))]
+      (when info
+        (if (>= now-mins expiration-time-mins)
+          (do
+            (au/<? (<modify-db vivo-server
+                               (partial <delete-token-update-fn token)
+                               "Delete expired token"
+                               subject-id branch conn-id))
+            nil)
+          (do
+            (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
+            (swap! *subject-id->conn-ids update subject-id
+                   (fn [conn-ids]
+                     (conj (or conn-ids #{}) conn-id)))
+            subject-id))))))
+
+(defn <set-state-source* [vivo-server source metadata]
+  (au/go
+    (let [{:keys [conn-id]} metadata
+          {:keys [perm-storage state-schema
+                  *branch->info *conn-id->info]} vivo-server
+          perm-branch (:branch/name source)
+          branch (if perm-branch
+                   (let [branch-reference (branch->reference perm-branch)
+                         storage (get-storage vivo-server perm-branch)]
+                     (when-not (au/<? (u/<get-data-id storage branch-reference))
+                       (au/<? (<create-branch
+                               vivo-server
+                               {:branch perm-branch
+                                :db-id nil
+                                :is-temp false}
+                               metadata)))
+                     perm-branch)
+                   (let [branch* (str "-temp-branch-" (rand-int 1e9))]
+                     (au/<? (<create-branch
+                             vivo-server {:branch branch*
+                                          :db-id (:temp-branch/db-id source)
+                                          :is-temp true}
+                             metadata))
+                     branch*))
+          db-id (au/<? (<get-db-id vivo-server branch))
+          db (au/<? (<get-in vivo-server db-id [:sys]))]
+      (if (= :vivo/unauthorized db)
+        :vivo/unauthorized
+        (let [fp (au/<? (u/<schema->fp perm-storage state-schema))
+              serialized-db (when db
+                              {:fp fp
+                               :bytes (l/serialize state-schema db)})]
+          (swap! *conn-id->info update conn-id assoc
+                 :branch branch :temp-branch? (not perm-branch))
+          (swap! *branch->info update branch
+                 (fn [{:keys [conn-ids] :as info}]
+                   (if conn-ids
+                     (update info :conn-ids conj conn-id)
+                     (assoc info :conn-ids #{conn-id}))))
+          (u/sym-map db-id serialized-db))))))
+
 (defrecord VivoServer [authorization-fn
                        login-identifier-case-sensitive?
                        login-lifetime-mins
@@ -702,6 +772,8 @@
                                          :get-schema-pcf fp))]
             (l/json->schema pcf)))))
 
+  ;; TODO: Fix <get-all-branches to use a scan.
+  ;; Get rid of all-branches-reference
   (<get-all-branches [this]
     (au/go
       (let [perm-branches (au/<? (u/<get-in-reference
@@ -747,10 +819,7 @@
             join? (u/has-join? path)
             term-kw? (u/terminal-kw-ops last-path-k)]
         (cond
-          (not data-id)
-          [:vivo/unauthorized [path]] ;; bad db-id
-
-          (u/empty-sequence-in-path? path)
+          (or (not data-id) (u/empty-sequence-in-path? path))
           [nil [path]]
 
           (and (not term-kw?) (not join?))
@@ -878,31 +947,7 @@
                login-lifetime-mins *conn-id->info *subject-id->conn-ids))
 
   (<log-in-w-token [this token metadata]
-    (au/go
-      (let [{:keys [conn-id]} metadata
-            {:keys [branch]} (@*conn-id->info conn-id)
-            storage (get-storage this branch)
-            db-info (au/<? (<get-db-info this branch storage))
-            {:keys [token-to-token-info-data-id]} db-info
-            info (when token-to-token-info-data-id
-                   (au/<? (u/<get-in storage token-to-token-info-data-id
-                                     u/token-map-schema [token] nil)))
-            {:keys [expiration-time-mins subject-id]} info
-            now-mins (-> (u/current-time-ms)
-                         (u/ms->mins))]
-        (when info
-          (if (>= now-mins expiration-time-mins)
-            (do
-              (au/<? (<modify-db this (partial <delete-token-update-fn token)
-                                 "Delete expired token"
-                                 subject-id branch conn-id))
-              nil)
-            (do
-              (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
-              (swap! *subject-id->conn-ids update subject-id
-                     (fn [conn-ids]
-                       (conj (or conn-ids #{}) conn-id)))
-              subject-id))))))
+    (<log-in-w-token* this token metadata))
 
   (<log-out [this arg metadata]
     (au/go
@@ -911,8 +956,6 @@
             conn-ids (@*subject-id->conn-ids subject-id)]
         (au/<? (<modify-db this <log-out-update-fn "Log out"
                            subject-id branch conn-id))
-        (log/info (str "Logging out subject " subject-id ". " (count conn-ids)
-                       " active connection(s)."))
         (ca/go
           ;; Wait for `true` response to be rcvd before closing conns
           (ca/<! (ca/timeout 5000))
@@ -945,54 +988,16 @@
               (do
                 (au/<? (<modify-db this <log-out-update-fn "Log out"
                                    subject-id branch conn-id))
-                (log/info (str "Logging out subject " subject-id ". "
-                               (count conn-ids) " active connections."))
-                (ca/go
-                  ;; Wait for `true` response to be rcvd before closing conns
-                  (ca/<! (ca/timeout 5000))
-                  (doseq [conn-id conn-ids]
-                    (log/info (str "Closing conn " conn-id))
-                    (ep/close-conn vc-ep conn-id)))
+                ;; Wait for `true` response to be rcvd by clients
+                ;; before closing conns
+                (au/<? (ca/timeout 5000))
+                (doseq [conn-id conn-ids]
+                  (log/info (str "Closing conn " conn-id))
+                  (ep/close-conn vc-ep conn-id))
                 true)))))))
 
   (<set-state-source [this source metadata]
-    (au/go
-      (let [{:keys [conn-id]} metadata
-            perm-branch (:branch/name source)
-            branch (if perm-branch
-                     (let [;;all-branches (set (au/<? (<get-all-branches this)))
-                           ]
-                       ;; TODO: Fix <get-all-branches to use a scan,
-                       ;;       then re-enable this
-                       #_(when-not (all-branches perm-branch)
-                           (au/<? (<create-branch
-                                   this {:branch perm-branch
-                                         :db-id nil
-                                         :is-temp false}
-                                   metadata)))
-                       perm-branch)
-                     (let [branch* (str "-temp-branch-" (rand-int 1e9))]
-                       (au/<? (<create-branch
-                               this {:branch branch*
-                                     :db-id (:temp-branch/db-id source)
-                                     :is-temp true}
-                               metadata))
-                       branch*))
-            db-id (au/<? (<get-db-id this branch))
-            db (au/<? (<get-in this db-id [:sys]))]
-        (if (= :vivo/unauthorized db)
-          :vivo/unauthorized
-          (let [fp (au/<? (u/<schema->fp perm-storage state-schema))
-                serialized-db {:fp fp
-                               :bytes (l/serialize state-schema db)}]
-            (swap! *conn-id->info update conn-id assoc
-                   :branch branch :temp-branch? (not perm-branch))
-            (swap! *branch->info update branch
-                   (fn [{:keys [conn-ids] :as info}]
-                     (if conn-ids
-                       (update info :conn-ids conj conn-id)
-                       (assoc info :conn-ids #{conn-id}))))
-            (u/sym-map db-id serialized-db))))))
+    (<set-state-source* this source metadata))
 
   (<rpc [this msg-arg metadata]
     (au/go
