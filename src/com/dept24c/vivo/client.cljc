@@ -201,7 +201,7 @@
       (let [subject-id (au/<? (cc/<send-msg capsule-client
                                             :log-in-w-token token))]
         (set-subject-id! subject-id)
-        (boolean subject-id))))
+        subject-id)))
 
   (<log-out! [this]
     (au/go
