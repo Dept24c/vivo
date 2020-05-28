@@ -47,6 +47,7 @@
   (<get-state-and-expanded-path [this db-id path])
   (<get-subject-id-for-identifier [this identifier branch])
   (<log-in [this arg metadata])
+  (<log-in* [this identifier secret minutes-valid conn-id branch])
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
   (<log-out-w-token [this token metadata])
@@ -435,13 +436,10 @@
       (apply concat seqs))))
 
 (defn <do-login
-  [vs arg metadata login-identifier-case-sensitive? login-lifetime-mins
-   *conn-id->info *subject-id->conn-ids]
+  [vs conn-id branch identifier secret login-identifier-case-sensitive?
+   login-lifetime-mins *conn-id->info *subject-id->conn-ids]
   (au/go
-    (let [{:keys [identifier secret]} arg
-          {:keys [conn-id]} metadata
-          {:keys [branch]} (@*conn-id->info conn-id)
-          identifier* (if login-identifier-case-sensitive?
+    (let [identifier* (if login-identifier-case-sensitive?
                         identifier
                         (str/lower-case identifier))
           storage (get-storage vs branch)
@@ -467,10 +465,11 @@
                                       login-lifetime-mins)
               token-info (u/sym-map expiration-time-mins subject-id)
               was-successful true]
-          (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
-          (swap! *subject-id->conn-ids update subject-id
-                 (fn [conn-ids]
-                   (conj (or conn-ids #{}) conn-id)))
+          (when conn-id
+            (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
+            (swap! *subject-id->conn-ids update subject-id
+                   (fn [conn-ids]
+                     (conj (or conn-ids #{}) conn-id))))
           (au/<? (<modify-db vs (partial <log-in-update-fn token token-info)
                              "Log in" subject-id branch conn-id))
           (u/sym-map subject-id token was-successful))))))
@@ -942,9 +941,16 @@
         (au/<? (u/<get-in storage id->sid-data-id
                           u/string-map-schema [identifier] nil)))))
 
+  (<log-in* [this identifier secret minutes-valid conn-id branch]
+    (<do-login this conn-id branch identifier secret
+               login-identifier-case-sensitive? minutes-valid
+               *conn-id->info *subject-id->conn-ids))
+
   (<log-in [this arg metadata]
-    (<do-login this arg metadata login-identifier-case-sensitive?
-               login-lifetime-mins *conn-id->info *subject-id->conn-ids))
+    (let [{:keys [identifier secret]} arg
+          {:keys [conn-id]} metadata
+          {:keys [branch]} (@*conn-id->info conn-id)]
+      (<log-in* this identifier secret login-lifetime-mins conn-id branch)))
 
   (<log-in-w-token [this token metadata]
     (<log-in-w-token* this token metadata))
