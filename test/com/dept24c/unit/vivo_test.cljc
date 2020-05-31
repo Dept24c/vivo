@@ -892,3 +892,29 @@
              _ (is (= {'my-nums [2 4 5]} (au/<? ch)))])
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
+
+(deftest test-get-synchronous-state-and-expanded-paths
+  (let [*subject-id (atom nil)
+        ordered-pairs [['page [:local :page]]
+                       ['subject-id [:vivo/subject-id]]]
+        db {}
+        local-state {:page :frobnozzle}
+        ret (subscriptions/get-synchronous-state-and-expanded-paths
+             ordered-pairs db local-state *subject-id)
+        {:keys [state expanded-paths]} ret
+        expected-state {'page :frobnozzle
+                        'subject-id nil}
+        expected-expanded-paths [[:local :page]
+                                 [:vivo/subject-id]]
+        _ (is (= expected-state state))
+        _ (is (= expected-expanded-paths expanded-paths))
+        _ (reset! *subject-id "AAAA")
+        ret (subscriptions/get-synchronous-state-and-expanded-paths
+             ordered-pairs db local-state *subject-id)
+        {:keys [state expanded-paths]} ret
+        expected-state {'page :frobnozzle
+                        'subject-id "AAAA"}
+        expected-expanded-paths [[:local :page]
+                                 [:vivo/subject-id]]
+        _ (is (= expected-state state))
+        _ (is (= expected-expanded-paths expanded-paths))]))

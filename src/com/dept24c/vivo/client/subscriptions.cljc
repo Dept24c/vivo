@@ -160,7 +160,7 @@
          :value seqs})))
     (apply concat seqs)))
 
-(defn get-state-and-expanded-path [state path prefix]
+(defn get-value-and-expanded-paths [state path prefix *subject-id]
   ;; TODO: Optimize this. Only traverse the path once.
   (let [last-path-k (last path)
         join? (u/has-join? path)
@@ -172,6 +172,9 @@
     (cond
       (u/empty-sequence-in-path? path)
       [nil [path]]
+
+      (= [:vivo/subject-id] path)
+      [@*subject-id [path]]
 
       (and (not terminal-kw?) (not join?))
       (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
@@ -197,7 +200,8 @@
           (loop [out []
                  i 0]
             (let [path* (nth xpaths i)
-                  ret (get-state-and-expanded-path state path* prefix)
+                  ret (get-value-and-expanded-paths
+                       state path* prefix *subject-id)
                   new-out (conj out (first ret))
                   new-i (inc i)]
               (if (not= num-results new-i)
@@ -215,8 +219,8 @@
           (let [results (loop [out [] ;; Use loop to stay in go block
                                i 0]
                           (let [path* (nth xpaths i)
-                                ret (get-state-and-expanded-path
-                                     state path* prefix)
+                                ret (get-value-and-expanded-paths
+                                     state path* prefix *subject-id)
                                 new-out (conj out (first ret))
                                 new-i (inc i)]
                             (if (not= num-results new-i)
@@ -228,46 +232,26 @@
                     :vivo/concat (apply concat results))]
             [v xpaths*]))))))
 
-(defn <get-state-and-expanded-path [state path prefix]
+(defn <get-state-and-expanded-paths [state path prefix]
   ;; TODO: Implement
   (au/go
     ))
 
-(defn get-path-info [acc path db local-state *subject-id]
-  (if (= [:vivo/subject-id] path)
-    {:v @*subject-id}
-    (let [path (resolve-symbols-in-path acc path)
-          [head & tail] path
-          state (case head
-                  :local local-state
-                  :sys db)]
-      (u/sym-map state path head))))
+(defn get-path-info [acc path db local-state]
+  (let [resolved-path (resolve-symbols-in-path acc path)
+        [head & tail] resolved-path
+        state-src (case head
+                    :local local-state
+                    :sys db
+                    {})]
+    (u/sym-map state-src resolved-path head)))
 
 (defn <get-subscription-state [ordered-pairs db local-state *subject-id]
   ;; This is async because it may need to fetch some state from either
   ;; local async storage or the server (in the future)
 
   ;; TODO: Store expanded paths - MUST DO BEFORE USING!!
-
-  #_(au/go
-      (let [num-pairs (count ordered-pairs)]
-        (if (zero? num-pairs)
-          {}
-          ;; Use loop to stay in go block
-          (loop [acc {}
-                 i 0]
-            (let [[sym path*] (nth ordered-pairs i)
-                  info (get-path-info acc path* db local-state *subject-id)
-                  {:keys [v state path head]} info
-                  v* (or v
-                         (-> (<get-state-and-expanded-path state path head)
-                             (au/<?)
-                             (first)))
-                  new-acc (assoc acc sym v*)
-                  new-i (inc i)]
-              (if (= num-pairs new-i)
-                new-acc
-                (recur new-acc new-i))))))))
+  )
 
 (defn in-db-cache? [path]
   ;; TODO: Expand when offline data is implemented
@@ -283,14 +267,15 @@
 (defn get-synchronous-state-and-expanded-paths
   [ordered-pairs db local-state *subject-id]
   (reduce
-   (fn [acc [sym path*]]
-     (if-not (in-db-cache? path*)
+   (fn [acc [sym path]]
+     (if-not (in-db-cache? path)
        (reduced {:state :vivo/unknown})
-       (let [info (get-path-info (:state acc) path* db local-state *subject-id)
-             {:keys [v state path head]} info
-             [v* xps] (get-state-and-expanded-path state path head)]
+       (let [info (get-path-info (:state acc) path db local-state)
+             {:keys [state-src resolved-path head]} info
+             [v xps] (get-value-and-expanded-paths state-src resolved-path head
+                                                   *subject-id)]
          (-> acc
-             (update :state assoc sym (or v v*))
+             (update :state assoc sym v)
              (update :expanded-paths concat xps)))))
    {:state {}
     :expanded-paths []}
