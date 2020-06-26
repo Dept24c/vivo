@@ -86,10 +86,14 @@
   (u/logged-in? vc))
 
 (defn <log-in!
+  "If successful, returns a map with :subject-id and :token keys,
+   otherwise returns false."
   [vc identifier secret]
   (u/<log-in! vc identifier secret))
 
 (defn <log-in-w-token!
+  "If successful, returns a map with :subject-id and :token keys,
+   otherwise returns false."
   [vc token]
   (u/<log-in-w-token! vc token))
 
@@ -99,7 +103,8 @@
   (u/<log-out! vc))
 
 (defn <log-out-w-token!
-  "Log out a user from the Vivo server using their token"
+  "Log out a user from the Vivo server using their token.
+   Returns a boolean success value."
   [vc token]
   (u/<log-out-w-token! vc token))
 

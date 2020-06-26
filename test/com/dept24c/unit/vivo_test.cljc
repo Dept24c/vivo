@@ -468,6 +468,32 @@
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
+(deftest test-symbolic-path
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             book-id "123"
+             book-title "Treasure Island"
+             resolution-map {'d-path [:local :books 'the-id :title]}
+             sub-map '{the-id [:local :the-id]
+                       title d-path}
+             update-fn (constantly nil)]
+         (is (= true
+                (au/<? (vivo/<update-state! vc [{:path [:local :the-id]
+                                                 :op :set
+                                                 :arg book-id}
+                                                {:path [:local :books book-id]
+                                                 :op :set
+                                                 :arg {:title book-title}}]))))
+         (is (= '{the-id "123"
+                  title "Treasure Island"}
+                (vivo/subscribe! vc "test" sub-map update-fn
+                                 (u/sym-map resolution-map)))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
 (deftest test-sequence-join
   (au/test-async
    1000
@@ -661,6 +687,25 @@
          (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
+
+(deftest test-sub-map->map-info
+  (let [sub-map '{c [:local :b-to-c b]
+                  b [:local :a-to-b a]
+                  a [:local :a]
+                  x [:local x]
+                  z dynamic-path}
+        resolution-map '{x :foo
+                         dynamic-path [:local :dp]}
+        info (u/sub-map->map-info sub-map resolution-map)
+        {:keys [independent-pairs ordered-dependent-pairs]} info
+        expected-independent-pairs-set (set '[[x [:local :foo]]
+                                              [a [:local :a]]
+                                              [z [:local :dp]]]),
+        expected-ordered-dependent-pairs '[[b [:local :a-to-b a]]
+                                           [c [:local :b-to-c b]]]]
+    (is (= expected-ordered-dependent-pairs ordered-dependent-pairs))
+    (is (= expected-independent-pairs-set
+           (set independent-pairs)))))
 
 (deftest test-relationship
   (are [ret ks1 ks2] (= ret (u/relationship-info ks1 ks2))
@@ -895,12 +940,14 @@
 
 (deftest test-get-synchronous-state-and-expanded-paths
   (let [*subject-id (atom nil)
-        ordered-pairs [['page [:local :page]]
-                       ['subject-id [:vivo/subject-id]]]
+        independent-pairs [['page [:local :page]]
+                           ['subject-id [:vivo/subject-id]]]
+        ordered-dependent-pairs []
         db {}
         local-state {:page :frobnozzle}
         ret (subscriptions/get-synchronous-state-and-expanded-paths
-             ordered-pairs db local-state *subject-id)
+             independent-pairs ordered-dependent-pairs
+             db local-state *subject-id)
         {:keys [state expanded-paths]} ret
         expected-state {'page :frobnozzle
                         'subject-id nil}
@@ -910,7 +957,8 @@
         _ (is (= expected-expanded-paths expanded-paths))
         _ (reset! *subject-id "AAAA")
         ret (subscriptions/get-synchronous-state-and-expanded-paths
-             ordered-pairs db local-state *subject-id)
+             independent-pairs ordered-dependent-pairs
+             db local-state *subject-id)
         {:keys [state expanded-paths]} ret
         expected-state {'page :frobnozzle
                         'subject-id "AAAA"}

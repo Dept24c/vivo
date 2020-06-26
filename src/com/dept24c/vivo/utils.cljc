@@ -463,9 +463,11 @@
                            "be symbols.")
                       {:bad-key sym
                        :sub-map sub-map})))
-    (when (not (sequential? path))
+    (when (and (not (sequential? path))
+               (not (symbol? path)))
       (throw (ex-info
-              (str (str "Bad path. Paths must be sequences. Got: `" path "`."))
+              (str (str "Bad path. Paths must be sequences or symbols that "
+                        "resolve to sequences. Got `" path "`."))
               (sym-map sym path sub-map))))))
 
 (defn local-or-vivo-only? [sub-map]
@@ -659,7 +661,7 @@
   (check-key-types path)
   (check-terminal-kws path))
 
-(defn sub-map->ordered-pairs [sub-map resolution-map]
+(defn sub-map->map-info [sub-map resolution-map]
   (check-sub-map sub-map)
   (let [resolve-resolution-map-syms (fn [path]
                                       (reduce
@@ -678,32 +680,35 @@
                           (str "All keys in sub-map must be symbols. Got `"
                                sym "`.")
                           (sym-map sym sub-map))))
-                (if (= [:vivo/subject-id] path)
-                  (update acc :sym->path assoc sym path)
-                  (let [_ (check-path path)
-                        path* (resolve-resolution-map-syms path)
-                        deps (filter symbol? path*)]
-                    (when-not (#{:local :sys :vivo/subject-id} (first path))
-                      (throw-bad-path-root path))
-                    (cond-> (update acc :sym->path assoc sym path*)
-                      (seq deps) (update :g #(reduce
-                                              (fn [g dep]
-                                                (dep/depend g sym dep))
-                                              % deps))))))
+                (let [path* (resolve-resolution-map-syms
+                             (if (symbol? path)
+                               (get resolution-map path)
+                               path))
+                      _ (check-path path*)
+                      deps (filter symbol? path*)
+                      add-deps (fn [init-g]
+                                 (reduce (fn [g dep]
+                                           (dep/depend g sym dep))
+                                         init-g deps))]
+                  (when-not (#{:local :sys :vivo/subject-id} (first path*))
+                    (throw-bad-path-root path))
+                  (cond-> acc
+                    true (update :sym->path assoc sym path*)
+                    true (update :g add-deps)
+                    (empty? deps) (update :independent-syms conj sym))))
               {:g (dep/graph)
+               :independent-syms #{}
                :sym->path {}}
               sub-map)
-        {:keys [g sym->path]} info
-        ordered-dep-syms (dep/topo-sort g)
-        no-dep-syms (set/difference (set (keys sym->path))
-                                    (set ordered-dep-syms))]
-    (reduce (fn [acc sym]
-              (if-let [path (sym->path sym)]
-                (conj acc [sym path])
-                acc))
-            []
-            (concat (seq no-dep-syms)
-                    ordered-dep-syms))))
+        {:keys [g independent-syms sym->path]} info
+        independent-pairs (mapv #(vector % (sym->path %)) independent-syms)
+        ordered-dependent-pairs (reduce
+                                 (fn [acc sym]
+                                   (if (independent-syms sym)
+                                     acc
+                                     (conj acc [sym (sym->path sym)])))
+                                 [] (dep/topo-sort g))]
+    (sym-map independent-pairs ordered-dependent-pairs)))
 
 (defn empty-sequence-in-path? [path]
   (reduce (fn [acc element]

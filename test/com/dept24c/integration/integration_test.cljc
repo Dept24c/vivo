@@ -336,10 +336,9 @@
                _ (is (= false token-login-ret))
                login-2-ret (au/<? (vivo/<log-in! vc tu/test-identifier
                                                  tu/test-secret))
-               _ (is (= false (:was-successful login-2-ret)))
+               _ (is (= false login-2-ret))
                login-3-ret (au/<? (vivo/<log-in! vc tu/test-identifier
                                                  new-secret))]
-           (is (= true (:was-successful login-3-ret)))
            (is (string? (:token login-3-ret)))
            (is (= tu/test-subject-id (:subject-id login-3-ret))))
          (catch #?(:clj Exception :cljs js/Error) e
@@ -378,11 +377,10 @@
                ;; Using old identifier fails
                login-2-ret (au/<? (vivo/<log-in! vc tu/test-identifier
                                                  tu/test-secret))
-               _ (is (= false (:was-successful login-2-ret)))
+               _ (is (= false login-2-ret))
                ;; Using new identifier works
                login-3-ret (au/<? (vivo/<log-in! vc new-identifier
                                                  tu/test-secret))]
-           (is (= true (:was-successful login-3-ret)))
            (is (string? (:token login-3-ret)))
            (is (= tu/test-subject-id (:subject-id login-3-ret))))
          (catch #?(:clj Exception :cljs js/Error) e
@@ -399,7 +397,7 @@
        (try
          (let [login-ret1 (au/<? (vivo/<log-in! vc tu/test-identifier
                                                 tu/test-secret))
-               _ (is (= false (:was-successful login-ret1)))
+               _ (is (= false login-ret1))
                sid (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
@@ -422,13 +420,12 @@
                       (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
                login-ret2 (au/<? (vivo/<log-in! vc tu/test-identifier
                                                 tu/test-secret))
-               {:keys [subject-id token was-successful]} login-ret2
-               _ (is (= true was-successful))
+               {:keys [subject-id token]} login-ret2
                _ (is (= tu/test-subject-id subject-id))
                _ (is (string? token))
                token-login-2-ret (au/<? (vivo/<log-in-w-token!
                                          vc token))
-               _ (is (= true token-login-2-ret))
+               _ (is (= (u/sym-map subject-id token) token-login-2-ret))
                _ (is (= 2 (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
                _ (vivo/unsubscribe! vc "test")
                logout-ret (au/<? (vivo/<log-out! vc))

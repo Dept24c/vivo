@@ -94,12 +94,14 @@
 (defn get-resolution-map-keys [sub-map]
   (let [sub-map-ks (set (keys sub-map))]
     (-> (reduce-kv (fn [acc k path]
-                     (reduce (fn [acc* element]
-                               (if (or (not (symbol? element))
-                                       (sub-map-ks element))
-                                 acc*
-                                 (conj acc* element)))
-                             acc path))
+                     (if (symbol? path)
+                       (conj acc path)
+                       (reduce (fn [acc* element]
+                                 (if (or (not (symbol? element))
+                                         (sub-map-ks element))
+                                   acc*
+                                   (conj acc* element)))
+                               acc path)))
                    #{} sub-map)
         (vec))))
 

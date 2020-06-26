@@ -186,10 +186,11 @@
       (au/<? (u/<wait-for-conn-init this))
       (let [arg (u/sym-map identifier secret)
             ret (au/<? (cc/<send-msg capsule-client :log-in arg))
-            {:keys [subject-id]} ret]
-        (when subject-id
-          (set-subject-id! subject-id))
-        ret)))
+            {:keys [subject-id token was-successful]} ret]
+        (set-subject-id! subject-id)
+        (if was-successful
+          (u/sym-map subject-id token)
+          false))))
 
   (<log-in-w-token! [this token]
     (when-not capsule-client
@@ -201,19 +202,17 @@
       (let [subject-id (au/<? (cc/<send-msg capsule-client
                                             :log-in-w-token token))]
         (set-subject-id! subject-id)
-        subject-id)))
+        (if subject-id
+          (u/sym-map subject-id token)
+          false))))
 
   (<log-out! [this]
     (au/go
       (set-subject-id! nil)
-      (let [ret (au/<? (cc/<send-msg capsule-client :log-out nil))]
-        (log/info (str "Logout " (if ret "succeeded." "failed.")))
-        ret)))
+      (au/<? (cc/<send-msg capsule-client :log-out nil))))
 
   (<log-out-w-token! [this token]
-    (au/go
-      (let [ret (au/<? (cc/<send-msg capsule-client :log-out-w-token token))]
-        (log/info (str "Token logout " (if ret "succeeded." "failed."))))))
+    (cc/<send-msg capsule-client :log-out-w-token token))
 
   (logged-in? [this]
     (boolean @*subject-id))

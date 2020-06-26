@@ -106,7 +106,8 @@
 ;;;; Custom Hooks
 
 (defn use-vivo-state
-  "React hook for Vivo"
+  "React hook for Vivo.
+   Note that the component-name parameter must be unique for each invocation."
   ([vc sub-map component-name]
    (use-vivo-state vc sub-map component-name {} []))
   ([vc sub-map component-name resolution-map]

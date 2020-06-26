@@ -103,12 +103,13 @@
          (filter #(not= :vivo/root %)))))
 
 (defn resolve-symbols-in-path [state path]
-  ;; TODO: Could optimize by storing info about non-dependent paths
-  (reduce (fn [acc element]
-            (conj acc (if-not (symbol? element)
-                        element
-                        (state element))))
-          [] path))
+  (if (symbol? path)
+    (get state path)
+    (reduce (fn [acc element]
+              (conj acc (if-not (symbol? element)
+                          element
+                          (state element))))
+            [] path)))
 
 (defn ks-at-path [kw state path prefix full-path]
   (let [coll (:val (commands/get-in-state state path prefix))]
@@ -237,8 +238,11 @@
   (au/go
     ))
 
-(defn get-path-info [acc path db local-state]
-  (let [resolved-path (resolve-symbols-in-path acc path)
+(defn get-path-info [acc path db local-state resolve-path?]
+  (let [resolved-path (cond
+                        ;;(symbol? path) (get acc path)
+                        resolve-path? (resolve-symbols-in-path acc path)
+                        :else path)
         [head & tail] resolved-path
         state-src (case head
                     :local local-state
@@ -246,40 +250,34 @@
                     {})]
     (u/sym-map state-src resolved-path head)))
 
-(defn <get-subscription-state [ordered-pairs db local-state *subject-id]
-  ;; This is async because it may need to fetch some state from either
-  ;; local async storage or the server (in the future)
-
-  ;; TODO: Store expanded paths - MUST DO BEFORE USING!!
-  )
-
 (defn in-db-cache? [path]
   ;; TODO: Expand when offline data is implemented
   true)
 
-(defn cached? [ordered-pairs]
+(defn cached? [pairs]
   (reduce (fn [acc [sym path]]
             (if (in-db-cache? path)
               acc
               (reduced false)))
-          true ordered-pairs))
+          true pairs))
 
 (defn get-synchronous-state-and-expanded-paths
-  [ordered-pairs db local-state *subject-id]
-  (reduce
-   (fn [acc [sym path]]
-     (if-not (in-db-cache? path)
-       (reduced {:state :vivo/unknown})
-       (let [info (get-path-info (:state acc) path db local-state)
-             {:keys [state-src resolved-path head]} info
-             [v xps] (get-value-and-expanded-paths state-src resolved-path head
-                                                   *subject-id)]
-         (-> acc
-             (update :state assoc sym v)
-             (update :expanded-paths concat xps)))))
-   {:state {}
-    :expanded-paths []}
-   ordered-pairs))
+  [independent-pairs ordered-dependent-pairs db local-state *subject-id]
+  (let [reducer* (fn [resolve-path? acc [sym path]]
+                   (if-not (in-db-cache? path)
+                     (reduced {:state :vivo/unknown})
+                     (let [info (get-path-info (:state acc) path db local-state
+                                               resolve-path?)
+                           {:keys [state-src resolved-path head]} info
+                           [v xps] (get-value-and-expanded-paths
+                                    state-src resolved-path head *subject-id)]
+                       (-> acc
+                           (update :state assoc sym v)
+                           (update :expanded-paths concat xps)))))
+        init {:state {}
+              :expanded-paths []}
+        indep-ret (reduce (partial reducer* false) init independent-pairs)]
+    (reduce (partial reducer* true) indep-ret ordered-dependent-pairs)))
 
 (defn make-applied-update-fn*
   [sub-name new-state expanded-paths *sub-name->info]
@@ -296,21 +294,18 @@
 (defn make-applied-update-fn
   [sub-name db local-state *sub-name->info *subject-id]
   (let [sub-info (@*sub-name->info sub-name)
-        {:keys [ordered-pairs update-fn]} sub-info]
-    (if (cached? ordered-pairs)
+        {:keys [independent-pairs ordered-dependent-pairs update-fn]} sub-info]
+    (if (and (cached? independent-pairs)
+             (cached? ordered-dependent-pairs))
       (let [sxps (get-synchronous-state-and-expanded-paths
-                  ordered-pairs db local-state *subject-id)
+                  independent-pairs ordered-dependent-pairs db local-state
+                  *subject-id)
             {:keys [state expanded-paths]} sxps]
         (make-applied-update-fn* sub-name state expanded-paths *sub-name->info))
       #(ca/go
          (try
            ;; TODO: Implement. Follow synchronous patterns.
-           #_(let [new-state (au/<? (<get-subscription-state
-                                     ordered-pairs db local-state *subject-id))
-                   f (make-applied-update-fn* sub-name new-state
-                                              *sub-name->info)]
-               (when f
-                 (f)))
+
            (catch #?(:cljs js/Error :clj Exception) e
              (log/error (str "Error while updating `" sub-name "`:\n"
                              (u/ex-msg-and-stacktrace e)))))))))
@@ -370,15 +365,20 @@
    *stopped? *sub-name->info *sys-db-info *local-state *subject-id]
   (when-not @*stopped?
     (let [{:keys [react? resolution-map]} opts
-          ordered-pairs (u/sub-map->ordered-pairs sub-map resolution-map)
+          map-info (u/sub-map->map-info sub-map resolution-map)
+          {:keys [independent-pairs ordered-dependent-pairs]} map-info
           parents (set (:parents opts))
           db (:db @*sys-db-info)
           local-state @*local-state]
-      (if (cached? ordered-pairs)
+      (if (and (cached? independent-pairs)
+               (cached? ordered-dependent-pairs))
         (let [sxps (get-synchronous-state-and-expanded-paths
-                    ordered-pairs db local-state *subject-id)
-              {:keys [state expanded-paths]} sxps
-              info (u/sym-map ordered-pairs resolution-map expanded-paths
+                    independent-pairs ordered-dependent-pairs db local-state
+                    *subject-id)
+              {:keys [expanded-paths]} sxps
+              state (select-keys (:state sxps) (keys sub-map))
+              info (u/sym-map independent-pairs ordered-dependent-pairs
+                              resolution-map expanded-paths
                               parents react? update-fn state)]
           (swap! *sub-name->info assoc sub-name info)
           state)
