@@ -360,9 +360,14 @@
                         (u/ex-msg-and-stacktrace e)))))
     (recur)))
 
-(defn subscribe!
+(defn subscribe-to-state-changes!
   [sub-name sub-map update-fn opts
    *stopped? *sub-name->info *sys-db-info *local-state *subject-id]
+  (when-not (string? sub-name)
+    (throw (ex-info
+            (str "The `sub-name` argument to `subscribe-to-state-changes!` "
+                 " must be a string. Got `" sub-name "`.")
+            (u/sym-map sub-name sub-map opts))))
   (when-not @*stopped?
     (let [{:keys [react? resolution-map]} opts
           map-info (u/sub-map->map-info sub-map resolution-map)

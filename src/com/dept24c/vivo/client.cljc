@@ -14,6 +14,7 @@
 
 (def get-state-timeout-ms 30000)
 (def max-commit-attempts 100)
+(def publish-event-timeout-ms 30000)
 (def update-state-timeout-ms 30000)
 
 (defn make-update-info [update-cmds]
@@ -118,6 +119,49 @@
           (cb* e)
           (log/error (u/ex-msg-and-stacktrace e)))))) )
 
+(defn subscribe-to-event!*
+  [scope event-name cb *event-subs *event-sub-id]
+  (when-not (#{:local :sys} scope)
+    (throw (ex-info
+            (str "`scope` argument to `subscribe-to-event!` must be "
+                 "either `:local` or `:sys`. Got `" scope "`.")
+            (u/sym-map scope event-name))))
+  (when-not (string? event-name)
+    (throw (ex-info
+            (str "`event-name` argument to `subscribe-to-event!` must be "
+                 "a string. Got: `" event-name "`.")
+            (u/sym-map scope event-name))))
+  (when-not (ifn? cb)
+    (throw (ex-info
+            (str "`cb` argument to `subscribe-to-event!` must be "
+                 "a function of one argument. Got: `" event-name "`.")
+            (u/sym-map scope event-name))))
+  (let [sub-id (swap! *event-sub-id inc)]
+    (swap! *event-subs assoc-in [scope event-name sub-id] cb)
+    (fn unsubscribe! []
+      (swap! *event-subs u/dissoc-in [scope event-name sub-id])
+      true)))
+
+(defn notify-event-subs! [scope event-name event-str *event-subs]
+  (let [cbs (some-> @*event-subs
+                    (get scope)
+                    (get event-name)
+                    (vals))]
+    (doseq [cb cbs]
+      (cb event-str))))
+
+(defn publish-event!* [vc scope event-name event-str capsule-client *event-subs]
+  (notify-event-subs! scope event-name event-str *event-subs)
+  (when (= :sys scope)
+    (ca/go
+      (try
+        (let [arg (u/sym-map event-name event-str)]
+          (au/<? (u/<wait-for-conn-init vc))
+          (au/<? (cc/<send-msg capsule-client :publish-event arg
+                               publish-event-timeout-ms)))
+        (catch #?(:cljs js/Error :clj Throwable) e
+          (log/error (u/ex-msg-and-stacktrace e)))))))
+
 (defrecord VivoClient [capsule-client
                        path->schema-cache
                        rpcs
@@ -126,6 +170,8 @@
                        sys-state-schema
                        sys-state-source
                        *conn-initialized?
+                       *event-sub-id
+                       *event-subs
                        *fp->schema
                        *local-state
                        *next-instance-num
@@ -222,16 +268,12 @@
     (cc/shutdown capsule-client)
     (log/info "Vivo client stopped."))
 
-  (get-subscription-info [this sub-name]
-    (when-let [info (@*sub-name->info sub-name)]
-      (select-keys info [:state :resolution-map])))
+  (subscribe-to-state-changes! [this sub-name sub-map update-fn opts]
+    (subscriptions/subscribe-to-state-changes!
+     sub-name sub-map update-fn opts *stopped? *sub-name->info *sys-db-info
+     *local-state *subject-id))
 
-  (subscribe! [this sub-name sub-map update-fn opts]
-    (subscriptions/subscribe! sub-name sub-map update-fn opts *stopped?
-                              *sub-name->info *sys-db-info *local-state
-                              *subject-id))
-
-  (unsubscribe! [this sub-name]
+  (unsubscribe-from-state-changes! [this sub-name]
     (swap! *sub-name->info dissoc sub-name))
 
   (<wait-for-conn-init [this]
@@ -388,7 +430,14 @@
           :else
           (let [{:keys [fp bytes]} ret*
                 w-schema (au/<? (u/<fp->schema this fp))]
-            (l/deserialize ret-schema w-schema bytes)))))))
+            (l/deserialize ret-schema w-schema bytes))))))
+
+  (subscribe-to-event! [this scope event-name cb]
+    (subscribe-to-event!* scope event-name cb *event-subs *event-sub-id))
+
+  (publish-event! [this scope event-name event-str]
+    (publish-event!* this scope event-name event-str capsule-client
+                     *event-subs)))
 
 (defn <on-connect
   [opts-on-connect sys-state-source *conn-initialized? *sys-db-info *vc
@@ -483,6 +532,8 @@
         *vc (atom nil)
         *sub-name->info (atom {})
         *next-instance-num (atom 0)
+        *event-sub-id (atom 0)
+        *event-subs (atom {})
         on-disconnect* #(when on-disconnect
                           (on-disconnect @*vc @*local-state))
         ;; TODO: Think about this buffer size and dropping behavior under load
@@ -516,6 +567,8 @@
                          sys-state-schema
                          sys-state-source
                          *conn-initialized?
+                         *event-sub-id
+                         *event-subs
                          *fp->schema
                          *local-state
                          *next-instance-num
@@ -536,5 +589,9 @@
                             (log/error
                              (str "Could not find PCF for fingerprint `"
                                   fp "`."))
-                            nil)))))
+                            nil))))
+      (cc/set-handler capsule-client :publish-event
+                      (fn [{:keys [event-name event-str]} metadata]
+                        (notify-event-subs! :sys event-name event-str
+                                            *event-subs))))
     vc))

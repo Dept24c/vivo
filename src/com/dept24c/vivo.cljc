@@ -32,26 +32,52 @@
   ([opts]
    (client/vivo-client opts)))
 
-(defn subscribe!
-  "Creates a Vivo subscription. When any of the paths in the `sub-map`
-   change, calls `update-fn` with the updated state. Note that this
-   is a low-level function that generally should not be called directly.
-   Prefer `react/def-component` or `react/use-vivo-state`.
+(defn subscribe-to-state-changes!
+  "Creates a Vivo state subscription. When the state referred to by any
+   of the paths in the `sub-map` changes, `update-fn` is called with the
+    updated state. Note that this is a low-level function that generally
+   should not be called directly. Prefer `react/def-component`
+   or `react/use-vivo-state`.
+
    `opts` is a map of optional parameters:
      - `parents`: sequence of sub-names
      - `react?`: boolean. Enables react update batching
-     - `resolution-map`: map of symbols to values to be used w/ sub-map
-   Returns the current state if it is immediately available, else :vivo/unknown.
-   Use `unsubscribe!` to cancel the subscription."
+     - `resolution-map`: map of symbols to values to be used in resolving
+                         symbols in values of the sub-map"
   ([vc sub-name sub-map update-fn]
-   (subscribe! vc sub-name sub-map update-fn {}))
+   (subscribe-to-state-changes! vc sub-name sub-map update-fn {}))
   ([vc sub-name sub-map update-fn opts]
-   (u/subscribe! vc sub-name sub-map update-fn opts)))
+   (u/subscribe-to-state-changes! vc sub-name sub-map update-fn opts)))
 
-(defn unsubscribe!
-  "Cancels a subscription"
+(defn unsubscribe-from-state-changes!
+  "Cancels a state-changes subscription and releases the related
+   resources."
   [vc sub-name]
-  (u/unsubscribe! vc sub-name))
+  (u/unsubscribe-from-state-changes! vc sub-name))
+
+(defn subscribe-to-event!
+  "Creates a Vivo event subscription.
+   Parameters:
+    - `vc`: the Vivo client
+    - `scope`: Either `:local` or `:sys`.
+    - `event-name`: The name of the event to subscribe to (string).
+    - `cb`: A callback fn of one argument to be called when the event
+            is received. The event's string value will be passed to the fn.
+   Returns a zero-arg `unsubscribe!` fn that can be called to cancel
+   the subscription and clean up related resources."
+  [vc scope event-name cb]
+  (u/subscribe-to-event! vc scope event-name cb))
+
+(defn publish-event!
+  "Publish an event to active subscribers.
+
+   Parameters:
+    - `vc`: the Vivo client
+    - `scope`: Either `:local` or `:sys`.
+    - `event-name`: The name of the event to publish (string).
+    - `event-str`: The value of the event to publish (string)."
+  [vc scope event-name event-str]
+  (u/publish-event! vc scope event-name event-str))
 
 (defn update-state!
   ([vc update-commands]
@@ -168,6 +194,15 @@
    (<rpc vc rpc-name-kw arg default-rpc-timeout-ms))
   ([vc rpc-name-kw arg timeout-ms]
    (u/<rpc vc rpc-name-kw arg timeout-ms)))
+
+(defn <wait-for-conn-init
+  "Returns a channel that yields either:
+    - `true`: When the client connection is initialized.
+    - `false`: When the client has been shut down.
+    - an exception when more than 60 seconds elapse.
+  Primarily useful for setting up testing environments."
+  [vc]
+  (u/<wait-for-conn-init vc))
 
 (defn shutdown!
   "Shutdown the vivo client and its connection to the server.

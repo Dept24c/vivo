@@ -65,8 +65,10 @@
   (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
-  (subscribe! [this sub-name sub-map update-fn opts])
-  (unsubscribe! [this sub-name])
+  (subscribe-to-state-changes! [this sub-name sub-map update-fn opts])
+  (unsubscribe-from-state-changes! [this sub-name])
+  (subscribe-to-event! [this scope event-name cb])
+  (publish-event! [this scope event-name event-str])
   (<update-cmd->serializable-update-cmd [this i cmds])
   (update-state! [this update-cmds cb])
   (<update-sys-state [this update-commands])
@@ -381,6 +383,10 @@
 (def create-branch-ret-schema
   (l/union-schema [branch-exists-schema l/boolean-schema]))
 
+(l/def-record-schema sys-event-schema
+  [:event-name l/string-schema]
+  [:event-str l/string-schema])
+
 ;;;;;;;;;;;;;;;;;;;; Protocols ;;;;;;;;;;;;;;;;;;;;
 
 (def client-server-protocol
@@ -418,6 +424,9 @@
           :log-out-w-token {:arg token-schema
                             :ret l/boolean-schema
                             :sender :client}
+          :publish-event {:arg sys-event-schema
+                          :ret l/boolean-schema
+                          :sender :either}
           :remove-subject-identifier {:arg identifier-schema
                                       :ret l/boolean-schema
                                       :sender :client}
@@ -745,6 +754,21 @@
               (str "Secrets must not be longer than " max-secret-len
                    " characters. Got " secret-len " characters.")
               (sym-map secret-len max-secret-len))))))
+
+;; Borrowed from https://github.com/clojure/core.incubator/blob/master/src/main/clojure/clojure/core/incubator.clj
+(defn dissoc-in
+  "Dissociates an entry from a nested associative structure returning a new
+  nested structure. keys is a sequence of keys. Any empty maps that result
+  will not be present in the new structure."
+  [m [k & ks :as keys]]
+  (if ks
+    (if-let [nextmap (get m k)]
+      (let [newmap (dissoc-in nextmap ks)]
+        (if (seq newmap)
+          (assoc m k newmap)
+          (dissoc m k)))
+      m)
+    (dissoc m k)))
 
 ;;;;;;;;;;;;;;;;;;;; Platform detection ;;;;;;;;;;;;;;;;;;;;
 
