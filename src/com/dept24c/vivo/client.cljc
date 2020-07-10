@@ -222,6 +222,10 @@
     (cc/shutdown capsule-client)
     (log/info "Vivo client stopped."))
 
+  (get-subscription-info [this sub-name]
+    (when-let [info (@*sub-name->info sub-name)]
+      (select-keys info [:state :resolution-map])))
+
   (subscribe! [this sub-name sub-map update-fn opts]
     (subscriptions/subscribe!
      sub-name sub-map update-fn opts *stopped? *sub-name->info *sys-db-info
