@@ -847,8 +847,27 @@
              update-fn (constantly nil)
              expected {'my-titles ["Treasure Island" "Dr Jekyll and Mr Hyde"]}]
          (au/<? (vivo/<set-state! vc [:local :books] books))
-         (is (= expected (vivo/subscribe! vc "test" sub-map
-                                          update-fn))))
+         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-nil-in-path
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{num [:local :num]
+                       title [:local :books num :title]}
+             update-fn (constantly nil)
+             ret (au/<? (vivo/<set-state! vc [:local :books] books))
+             _ (is (= true ret))
+             expected {'num nil
+                       'title nil}]
+         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -866,8 +885,7 @@
              ret (au/<? (vivo/<set-state! vc [:local :books] books))]
          (is (= true ret))
          (is (= {'title-999 nil}
-                (vivo/subscribe! vc "test" sub-map
-                                 update-fn))))
+                (vivo/subscribe! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -884,8 +902,7 @@
              update-fn (constantly nil)
              expected {'my-titles [nil]}]
          (au/<? (vivo/<set-state! vc [:local :books] books))
-         (is (= expected (vivo/subscribe! vc "test" sub-map
-                                          update-fn))))
+         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
