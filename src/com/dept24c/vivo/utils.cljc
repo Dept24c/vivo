@@ -29,6 +29,7 @@
 (def max-data-block-bytes (* 300 1000)) ;; Approx. DDB max via Cognitect API
 (def max-secret-len 64) ;; To prevent DoS attacks against bcrypt
 
+(def msg-scopes #{:local-msgs :sys-msgs})
 (def terminal-kw-ops #{:vivo/keys :vivo/count :vivo/concat})
 (def kw-ops (conj terminal-kw-ops :vivo/*))
 
@@ -65,10 +66,9 @@
   (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
-  (subscribe-to-state-changes! [this sub-name sub-map update-fn opts])
-  (unsubscribe-from-state-changes! [this sub-name])
-  (subscribe-to-event! [this scope event-name cb])
-  (publish-event! [this scope event-name event-str])
+  (subscribe! [this sub-name sub-map update-fn opts])
+  (unsubscribe! [this sub-name])
+  (publish! [this scope msg-name msg-val])
   (<update-cmd->serializable-update-cmd [this i cmds])
   (update-state! [this update-cmds cb])
   (<update-sys-state [this update-commands])
@@ -383,9 +383,9 @@
 (def create-branch-ret-schema
   (l/union-schema [branch-exists-schema l/boolean-schema]))
 
-(l/def-record-schema sys-event-schema
-  [:event-name l/string-schema]
-  [:event-str l/string-schema])
+(l/def-record-schema sys-msg-schema
+  [:msg-path path-schema]
+  [:msg-val l/string-schema])
 
 ;;;;;;;;;;;;;;;;;;;; Protocols ;;;;;;;;;;;;;;;;;;;;
 
@@ -424,9 +424,9 @@
           :log-out-w-token {:arg token-schema
                             :ret l/boolean-schema
                             :sender :client}
-          :publish-event {:arg sys-event-schema
-                          :ret l/boolean-schema
-                          :sender :either}
+          :publish-msg {:arg sys-msg-schema
+                        :ret l/boolean-schema
+                        :sender :either}
           :remove-subject-identifier {:arg identifier-schema
                                       :ret l/boolean-schema
                                       :sender :client}
@@ -456,6 +456,9 @@
                           :sender :admin-client}}})
 
 ;;;;;;;;;;;;;;;;;;;; Helper fns ;;;;;;;;;;;;;;;;;;;;
+
+(defn msg-path? [path]
+  (msg-scopes (first path)))
 
 (defn check-sub-map
   [sub-map]
@@ -636,11 +639,13 @@
           (sr/put! path->schema-cache path sch))
         sch)))
 
+(def valid-path-roots #{:local :sys :vivo/subject-id :local-msgs :sys-msgs})
+
 (defn throw-bad-path-root [path]
   (let [[head & tail] path
         disp-head (or head "nil")]
-    (throw (ex-info (str "Paths must begin with :local or :sys. Got `"
-                         disp-head "` in path `" path "`.")
+    (throw (ex-info (str "Paths must begin with one of " valid-path-roots
+                         ". Got: `" disp-head "` in path `" path "`.")
                     (sym-map path head)))))
 
 (defn throw-bad-path-key [path k]
@@ -699,7 +704,7 @@
                                  (reduce (fn [g dep]
                                            (dep/depend g sym dep))
                                          init-g deps))]
-                  (when-not (#{:local :sys :vivo/subject-id} (first path*))
+                  (when-not (valid-path-roots (first path*))
                     (throw-bad-path-root path))
                   (cond-> acc
                     true (update :sym->path assoc sym path*)
@@ -710,7 +715,14 @@
                :sym->path {}}
               sub-map)
         {:keys [g independent-syms sym->path]} info
-        independent-pairs (mapv #(vector % (sym->path %)) independent-syms)
+        i-sym->pair (fn [i-sym]
+                      (let [path* (->(sym->path i-sym))
+                            [head & tail] path*
+                            path (if (msg-path? path*)
+                                   [head (apply str tail)]
+                                   path*)]
+                        [i-sym path]))
+        independent-pairs (mapv i-sym->pair independent-syms)
         ordered-dependent-pairs (reduce
                                  (fn [acc sym]
                                    (if (independent-syms sym)

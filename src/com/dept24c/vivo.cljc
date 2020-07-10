@@ -32,10 +32,10 @@
   ([opts]
    (client/vivo-client opts)))
 
-(defn subscribe-to-state-changes!
-  "Creates a Vivo state subscription. When the state referred to by any
-   of the paths in the `sub-map` changes, `update-fn` is called with the
-    updated state. Note that this is a low-level function that generally
+(defn subscribe!
+  "Creates a Vivo subscription. When the state or events referred to by any
+   of the paths in the `sub-map` changes, `update-fn` is called.
+   Note that this is a low-level function that generally
    should not be called directly. Prefer `react/def-component`
    or `react/use-vivo-state`.
 
@@ -45,39 +45,16 @@
      - `resolution-map`: map of symbols to values to be used in resolving
                          symbols in values of the sub-map"
   ([vc sub-name sub-map update-fn]
-   (subscribe-to-state-changes! vc sub-name sub-map update-fn {}))
+   (subscribe! vc sub-name sub-map update-fn {}))
   ([vc sub-name sub-map update-fn opts]
-   (u/subscribe-to-state-changes! vc sub-name sub-map update-fn opts)))
+   (u/subscribe! vc sub-name sub-map update-fn opts)))
 
-(defn unsubscribe-from-state-changes!
+(defn unsubscribe!
   "Cancels a state-changes subscription and releases the related
    resources."
   [vc sub-name]
-  (u/unsubscribe-from-state-changes! vc sub-name))
+  (u/unsubscribe! vc sub-name))
 
-(defn subscribe-to-event!
-  "Creates a Vivo event subscription.
-   Parameters:
-    - `vc`: the Vivo client
-    - `scope`: Either `:local` or `:sys`.
-    - `event-name`: The name of the event to subscribe to (string).
-    - `cb`: A callback fn of one argument to be called when the event
-            is received. The event's string value will be passed to the fn.
-   Returns a zero-arg `unsubscribe!` fn that can be called to cancel
-   the subscription and clean up related resources."
-  [vc scope event-name cb]
-  (u/subscribe-to-event! vc scope event-name cb))
-
-(defn publish-event!
-  "Publish an event to active subscribers.
-
-   Parameters:
-    - `vc`: the Vivo client
-    - `scope`: Either `:local` or `:sys`.
-    - `event-name`: The name of the event to publish (string).
-    - `event-str`: The value of the event to publish (string)."
-  [vc scope event-name event-str]
-  (u/publish-event! vc scope event-name event-str))
 
 (defn update-state!
   ([vc update-commands]
@@ -107,6 +84,18 @@
          cb #(ca/put! ch %)]
      (set-state! vc path arg cb)
      ch)))
+
+(defn publish!
+  "Publish a message to active subscribers. Returns nil.
+
+   Parameters:
+    - `vc`: Vivo client.
+    - `msg-scope`: Message scope. Either `:local-msgs` or `:sys-msgs`.
+    - `msg-name`: The name of the message (string).
+    - `msg-val`: The value of the message."
+
+  [vc msg-scope msg-name msg-val]
+  (u/publish! vc msg-scope msg-name msg-val))
 
 (defn logged-in? [vc]
   (u/logged-in? vc))

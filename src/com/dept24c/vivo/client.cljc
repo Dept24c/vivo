@@ -14,7 +14,6 @@
 
 (def get-state-timeout-ms 30000)
 (def max-commit-attempts 100)
-(def publish-event-timeout-ms 30000)
 (def update-state-timeout-ms 30000)
 
 (defn make-update-info [update-cmds]
@@ -67,8 +66,8 @@
   #?(:cljs (object? v)
      :clj (throw (ex-info "js-object? is not supported in clj." {}))))
 
-(defn do-state-updates!*
-  [vc update-info cb* subs-update-ch <fp->schema sys-state-schema
+(defn do-sub-updates!*
+  [vc update-info msg-info cb* subs-update-ch <fp->schema sys-state-schema
    *sys-db-info *local-state *sub-name->info *subject-id]
   (ca/go
     (try
@@ -107,7 +106,7 @@
                              (:db @*sys-db-info))]
                   (ca/put! subs-update-ch
                            (u/sym-map db local-state update-infos cb
-                                      *sub-name->info *subject-id)))
+                                      msg-info *sub-name->info *subject-id)))
                 (if (< num-attempts max-commit-attempts)
                   (recur (inc num-attempts))
                   (cb (ex-info (str "Failed to commit updates after "
@@ -115,52 +114,9 @@
                                (u/sym-map max-commit-attempts
                                           sys-cmds local-cmds)))))))))
       (catch #?(:cljs js/Error :clj Throwable) e
-        (if cb*
-          (cb* e)
-          (log/error (u/ex-msg-and-stacktrace e)))))) )
-
-(defn subscribe-to-event!*
-  [scope event-name cb *event-subs *event-sub-id]
-  (when-not (#{:local :sys} scope)
-    (throw (ex-info
-            (str "`scope` argument to `subscribe-to-event!` must be "
-                 "either `:local` or `:sys`. Got `" scope "`.")
-            (u/sym-map scope event-name))))
-  (when-not (string? event-name)
-    (throw (ex-info
-            (str "`event-name` argument to `subscribe-to-event!` must be "
-                 "a string. Got: `" event-name "`.")
-            (u/sym-map scope event-name))))
-  (when-not (ifn? cb)
-    (throw (ex-info
-            (str "`cb` argument to `subscribe-to-event!` must be "
-                 "a function of one argument. Got: `" event-name "`.")
-            (u/sym-map scope event-name))))
-  (let [sub-id (swap! *event-sub-id inc)]
-    (swap! *event-subs assoc-in [scope event-name sub-id] cb)
-    (fn unsubscribe! []
-      (swap! *event-subs u/dissoc-in [scope event-name sub-id])
-      true)))
-
-(defn notify-event-subs! [scope event-name event-str *event-subs]
-  (let [cbs (some-> @*event-subs
-                    (get scope)
-                    (get event-name)
-                    (vals))]
-    (doseq [cb cbs]
-      (cb event-str))))
-
-(defn publish-event!* [vc scope event-name event-str capsule-client *event-subs]
-  (notify-event-subs! scope event-name event-str *event-subs)
-  (when (= :sys scope)
-    (ca/go
-      (try
-        (let [arg (u/sym-map event-name event-str)]
-          (au/<? (u/<wait-for-conn-init vc))
-          (au/<? (cc/<send-msg capsule-client :publish-event arg
-                               publish-event-timeout-ms)))
-        (catch #?(:cljs js/Error :clj Throwable) e
-          (log/error (u/ex-msg-and-stacktrace e)))))))
+        (log/error (u/ex-msg-and-stacktrace e))
+        (cb* e))))
+  nil)
 
 (defrecord VivoClient [capsule-client
                        path->schema-cache
@@ -170,8 +126,6 @@
                        sys-state-schema
                        sys-state-source
                        *conn-initialized?
-                       *event-sub-id
-                       *event-subs
                        *fp->schema
                        *local-state
                        *next-instance-num
@@ -268,13 +222,14 @@
     (cc/shutdown capsule-client)
     (log/info "Vivo client stopped."))
 
-  (subscribe-to-state-changes! [this sub-name sub-map update-fn opts]
-    (subscriptions/subscribe-to-state-changes!
+  (subscribe! [this sub-name sub-map update-fn opts]
+    (subscriptions/subscribe!
      sub-name sub-map update-fn opts *stopped? *sub-name->info *sys-db-info
      *local-state *subject-id))
 
-  (unsubscribe-from-state-changes! [this sub-name]
-    (swap! *sub-name->info dissoc sub-name))
+  (unsubscribe! [this sub-name]
+    (swap! *sub-name->info dissoc sub-name)
+    nil)
 
   (<wait-for-conn-init [this]
     (au/go
@@ -295,10 +250,10 @@
         (cb (ex-info "The update-cmds parameter must be a sequence."
                      (u/sym-map update-cmds)))))
     (let [update-info (make-update-info update-cmds)]
-      (do-state-updates!* this update-info cb subs-update-ch
-                          #(u/<fp->schema this %) sys-state-schema
-                          *sys-db-info *local-state
-                          *sub-name->info *subject-id))
+      (do-sub-updates!* this update-info nil cb subs-update-ch
+                        #(u/<fp->schema this %) sys-state-schema
+                        *sys-db-info *local-state
+                        *sub-name->info *subject-id))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -432,12 +387,25 @@
                 w-schema (au/<? (u/<fp->schema this fp))]
             (l/deserialize ret-schema w-schema bytes))))))
 
-  (subscribe-to-event! [this scope event-name cb]
-    (subscribe-to-event!* scope event-name cb *event-subs *event-sub-id))
-
-  (publish-event! [this scope event-name event-str]
-    (publish-event!* this scope event-name event-str capsule-client
-                     *event-subs)))
+  (publish! [this msg-scope msg-name msg-val]
+    (when-not (u/msg-scopes msg-scope)
+      (throw (ex-info (str "`msg-scope` argument to `publish` must "
+                           "be one of " u/msg-scopes ". Got `"
+                           msg-scope "`.")
+                      (u/sym-map msg-scope msg-name msg-val))))
+    (when-not (string? msg-name)
+      (throw (ex-info (str "`msg-name` argument to `publish` must "
+                           "be a string. Got `" msg-scope "`.")
+                      (u/sym-map msg-scope msg-name msg-val))))
+    (when (= :sys-msgs msg-scope)
+      (throw (ex-info ":sys-msgs scope is not yet supported."
+                      (u/sym-map msg-scope msg-name msg-val))))
+    (let [msg-info (u/sym-map msg-scope msg-name msg-val)]
+      (do-sub-updates!* this nil msg-info nil subs-update-ch
+                        #(u/<fp->schema this %) sys-state-schema
+                        *sys-db-info *local-state
+                        *sub-name->info *subject-id))
+    nil))
 
 (defn <on-connect
   [opts-on-connect sys-state-source *conn-initialized? *sys-db-info *vc
@@ -532,8 +500,6 @@
         *vc (atom nil)
         *sub-name->info (atom {})
         *next-instance-num (atom 0)
-        *event-sub-id (atom 0)
-        *event-subs (atom {})
         on-disconnect* #(when on-disconnect
                           (on-disconnect @*vc @*local-state))
         ;; TODO: Think about this buffer size and dropping behavior under load
@@ -567,8 +533,6 @@
                          sys-state-schema
                          sys-state-source
                          *conn-initialized?
-                         *event-sub-id
-                         *event-subs
                          *fp->schema
                          *local-state
                          *next-instance-num
@@ -589,9 +553,5 @@
                             (log/error
                              (str "Could not find PCF for fingerprint `"
                                   fp "`."))
-                            nil))))
-      (cc/set-handler capsule-client :publish-event
-                      (fn [{:keys [event-name event-str]} metadata]
-                        (notify-event-subs! :sys event-name event-str
-                                            *event-subs))))
+                            nil)))))
     vc))

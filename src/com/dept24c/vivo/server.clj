@@ -60,7 +60,7 @@
   (<update-state [this arg metadata])
   (<scmds->cmds [this scmds conn-id])
   (get-storage [this branch])
-  (publish-event [this arg metadata])
+  (publish-msg [this arg metadata])
   (set-rpc-handler! [this rpc-name-kw handler])
   (shutdown! [this]))
 
@@ -595,11 +595,11 @@
                      (assoc info :conn-ids #{conn-id}))))
           (u/sym-map db-id serialized-db))))))
 
-(defn publish-event* [vc-ep *conn-id->info arg metadata]
+(defn publish-msg* [vc-ep *conn-id->info arg metadata]
   (let [{:keys [conn-id]} metadata
         conn-ids (keys @*conn-id->info)]
     (doseq [conn-id* (disj (set conn-ids) conn-id)]
-      (ep/send-msg vc-ep conn-id* :publish-event arg))
+      (ep/send-msg vc-ep conn-id* :publish-msg arg))
     true))
 
 (defrecord VivoServer [authorization-fn
@@ -1122,8 +1122,8 @@
   (set-rpc-handler! [this rpc-name-kw handler]
     (swap! *rpc->handler assoc rpc-name-kw handler))
 
-  (publish-event [this arg metadata]
-    (publish-event* vc-ep *conn-id->info arg metadata))
+  (publish-msg [this arg metadata]
+    (publish-msg* vc-ep *conn-id->info arg metadata))
 
   (shutdown! [this]
     (stop-server)))
@@ -1200,8 +1200,8 @@
   (ep/set-handler vc-ep :log-in-w-token (partial <log-in-w-token vivo-server))
   (ep/set-handler vc-ep :log-out (partial <log-out vivo-server))
   (ep/set-handler vc-ep :log-out-w-token (partial <log-out-w-token vivo-server))
-  (ep/set-handler vc-ep :publish-event
-                  (partial publish-event vivo-server))
+  (ep/set-handler vc-ep :publish-msg
+                  (partial publish-msg vivo-server))
   (ep/set-handler vc-ep :remove-subject-identifier
                   (partial <remove-subject-identifier vivo-server))
   (ep/set-handler vc-ep :rpc (partial <rpc vivo-server))

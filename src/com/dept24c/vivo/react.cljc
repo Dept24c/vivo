@@ -121,11 +121,10 @@
                                      :resolution-map resolution-map}
                                update-fn (fn [new-state]
                                            (render! (u/current-time-ms)))]
-                           (u/subscribe-to-state-changes!
-                            vc component-name sub-map update-fn opts))
+                           (u/subscribe! vc component-name sub-map
+                                         update-fn opts))
             cleanup-effect (fn []
-                             #(u/unsubscribe-from-state-changes!
-                               vc component-name))
+                             #(u/unsubscribe! vc component-name))
             sub-info (u/get-subscription-info vc component-name)]
         (use-effect cleanup-effect #js [])
         (if (not sub-info)
@@ -133,7 +132,7 @@
           (if (= resolution-map (:resolution-map sub-info))
             (:state sub-info)
             (do
-              (u/unsubscribe-from-state-changes! vc component-name)
+              (u/unsubscribe! vc component-name)
               (subscribe*!))))))))
 
 ;;;;;;;;;;;;;;;;;;;; Macro runtime helpers ;;;;;;;;;;;;;;;;;;;;

@@ -63,18 +63,18 @@
                                   (ca/put! all-msgs-ch msgs*))))]
            (is (= {'msgs nil
                    'users nil}
-                  (vivo/subscribe-to-state-changes! vc "test1"
-                                                    '{msgs [:sys :msgs]
-                                                      users [:sys :users]}
-                                                    all-msgs-ufn)))
+                  (vivo/subscribe! vc "test1"
+                                   '{msgs [:sys :msgs]
+                                     users [:sys :users]}
+                                   all-msgs-ufn)))
            (is (= {'app-name nil}
-                  (vivo/subscribe-to-state-changes! vc "test2"
-                                                    '{app-name [:sys :app-name]}
-                                                    #(ca/put! app-name-ch %))))
+                  (vivo/subscribe! vc "test2"
+                                   '{app-name [:sys :app-name]}
+                                   #(ca/put! app-name-ch %))))
            (is (= {'last-msg nil}
-                  (vivo/subscribe-to-state-changes! vc "test3"
-                                                    '{last-msg [:sys :msgs -1]}
-                                                    #(ca/put! last-msg-ch %))))
+                  (vivo/subscribe! vc "test3"
+                                   '{last-msg [:sys :msgs -1]}
+                                   #(ca/put! last-msg-ch %))))
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys]
                                     :op :set
@@ -115,14 +115,14 @@
                users-ch (ca/chan 1)
                users {user-bo-id user-bo}]
            (is (= {'program-name nil}
-                  (vivo/subscribe-to-state-changes!
+                  (vivo/subscribe!
                    vc "test2a"
                    '{program-name [:sys :program-name]}
                    #(ca/put! program-name-ch %))))
            (is (= {'users nil}
-                  (vivo/subscribe-to-state-changes! vc "test1a"
-                                                    '{users [:sys :users]}
-                                                    #(ca/put! users-ch %))))
+                  (vivo/subscribe! vc "test1a"
+                                   '{users [:sys :users]}
+                                   #(ca/put! users-ch %))))
            (is (= true (au/<? (vivo/<update-state!
                                vc [{:path [:sys]
                                     :op :set
@@ -151,7 +151,7 @@
                                             :op :set
                                             :arg users}]))
            (is (= expected
-                  (vivo/subscribe-to-state-changes!
+                  (vivo/subscribe!
                    vc "test" sub-map (constantly nil)
                    (u/sym-map resolution-map)))))
          (catch #?(:clj Exception :cljs js/Error) e
@@ -179,8 +179,8 @@
                                                   {:path [:sys :users]
                                                    :op :set
                                                    :arg users}]))))
-           (is (= expected (vivo/subscribe-to-state-changes! vc "test"
-                                                             sub-map nil))))
+           (is (= expected (vivo/subscribe! vc "test"
+                                            sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -198,8 +198,8 @@
                sub-map '{core-user-names [:sys :users ["123" "789"] :name]}
                expected {'core-user-names ["Alice" "Candace"]}]
            (is (= true (au/<? (vivo/<set-state! vc [:sys :users] users))))
-           (is (= expected (vivo/subscribe-to-state-changes! vc "test"
-                                                             sub-map nil))))
+           (is (= expected (vivo/subscribe! vc "test"
+                                            sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -217,8 +217,8 @@
                sub-map '{user-name [:sys :users "999" :name]}
                expected {'user-name nil}]
            (is (= true (au/<? (vivo/<set-state! vc [:sys :users] users))))
-           (is (= expected (vivo/subscribe-to-state-changes! vc "test"
-                                                             sub-map nil))))
+           (is (= expected (vivo/subscribe! vc "test"
+                                            sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -236,8 +236,8 @@
                sub-map '{core-users [:sys :users ["999"]]}
                expected '{core-users [nil]}]
            (is (= true (au/<? (vivo/<set-state! vc [:sys :users] users))))
-           (is (= expected (vivo/subscribe-to-state-changes! vc "test"
-                                                             sub-map nil))))
+           (is (= expected (vivo/subscribe! vc "test"
+                                            sub-map nil))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally
@@ -275,7 +275,7 @@
                                        :op :set
                                        :arg (u/sym-map msgs users)}]))
                _ (is (= true update-ret))
-               sub-ret (vivo/subscribe-to-state-changes! vc "test" sub-map nil)]
+               sub-ret (vivo/subscribe! vc "test" sub-map nil)]
            (is (= expected
                   (-> sub-ret
                       (update 'user-ids set)
@@ -417,8 +417,8 @@
                _ (is (= true ret))
                sub-map '{app-name [:sys :app-name]
                          launch-codes [:sys :secret :launch-codes]}
-               state (vivo/subscribe-to-state-changes! vc "test" sub-map
-                                                       (constantly nil))
+               state (vivo/subscribe! vc "test" sub-map
+                                      (constantly nil))
                expected-state {'app-name app-name
                                'launch-codes nil}
                _ (is (= expected-state state))
@@ -438,7 +438,7 @@
                                          vc token))
                _ (is (= (u/sym-map subject-id token) token-login-2-ret))
                _ (is (= 2 (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
-               _ (vivo/unsubscribe-from-state-changes! vc "test")
+               _ (vivo/unsubscribe! vc "test")
                logout-ret (au/<? (vivo/<log-out! vc))
                _ (is (= true logout-ret))
                token-login-ret (au/<? (vivo/<log-in-w-token!
@@ -512,10 +512,10 @@
                set-ret (au/<? (vivo/<set-state! vc [:sys :app-name] huge-name))
                _ (is (= true set-ret))
                sub-map '{app-name [:sys :app-name]}
-               state-ret (vivo/subscribe-to-state-changes! vc "test" sub-map
-                                                           (constantly nil))]
+               state-ret (vivo/subscribe! vc "test" sub-map
+                                          (constantly nil))]
            (is (= huge-name ('app-name state-ret)))
-           (vivo/unsubscribe-from-state-changes! vc "test"))
+           (vivo/unsubscribe! vc "test"))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e))
            (log/error (str "Exception in test-large-data-storage:\n"
@@ -525,6 +525,8 @@
            (vivo/shutdown! vc)
            (ac/shutdown! ac)))))))
 
+;; TODO: Enable this when :sys-msgs are implemented
+#_
 (deftest test-sys-pub-sub
   (au/test-async
    10000
@@ -534,14 +536,19 @@
        (try
          (let [ch (ca/chan)
                cb #(ca/put! ch %)
-               event-name "an-event-name"
-               event-str "lalala"
+               sub-name "my-sub"
+               msg-name "a-msg"
+               msg-val "the-val"
+               sub-map {'foo [:sys-msgs msg-name]}
                _ (is (= true (au/<? (vivo/<wait-for-conn-init vc1))))
                _ (is (= true (au/<? (vivo/<wait-for-conn-init vc2))))
-               unsub! (vivo/subscribe-to-event! vc1 :sys event-name cb)]
-           (vivo/publish-event! vc2 :sys event-name event-str)
-           (is (= event-str (au/<? ch)))
-           (is (= true (unsub!))))
+               ret1 (vivo/subscribe! vc1 sub-name sub-map cb)
+               _ (is (= {'foo nil} ret1))
+               ret2 (vivo/publish! vc2 :sys-msgs msg-name msg-val)
+               _ (is (= nil ret2))
+               expected {'foo msg-val}]
+           (is (= expected (au/<? ch)))
+           (is (= nil (vivo/unsubscribe! vc1 sub-name))))
          (catch #?(:clj Exception :cljs js/Error) e
            (is (= :unexpected e)))
          (finally

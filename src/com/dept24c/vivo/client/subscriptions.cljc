@@ -23,34 +23,37 @@
       (let [[relationship _] (u/relationship-info u-front s-front)]
         (not= :sibling relationship)))))
 
-(defn update-sub?* [update-infos sub-path]
-  (reduce (fn [acc {:keys [norm-path op] :as update-info}]
-            (cond
-              (= [:vivo/subject-id] sub-path)
-              (if (= [:vivo/subject-id] norm-path)
-                (reduced true)
-                false)
+(defn update-sub?* [update-infos msg-info sub-path]
+  (or (and (u/msg-path? sub-path)
+           (= (:msg-scope msg-info) (first sub-path))
+           (= (:msg-name msg-info) (second sub-path)))
+      (reduce (fn [acc {:keys [norm-path op]}]
+                (cond
+                  (= [:vivo/subject-id] sub-path)
+                  (if (= [:vivo/subject-id] norm-path)
+                    (reduced true)
+                    false)
 
-              (= [:vivo/subject-id] norm-path)
-              (if (= [:vivo/subject-id] sub-path)
-                (reduced true)
-                false)
+                  (= [:vivo/subject-id] norm-path)
+                  (if (= [:vivo/subject-id] sub-path)
+                    (reduced true)
+                    false)
 
-              (or (some number? norm-path)
-                  (some number? sub-path))
-              (if (update-numeric? norm-path sub-path op)
-                (reduced true)
-                false)
+                  (or (some number? norm-path)
+                      (some number? sub-path))
+                  (if (update-numeric? norm-path sub-path op)
+                    (reduced true)
+                    false)
 
-              :else
-              (let [[relationship _] (u/relationship-info
-                                      (or norm-path [])
-                                      (or sub-path []))]
-                (if (= :sibling relationship)
-                  false
-                  ;; TODO: Compare values here if :parent
-                  (reduced true)))))
-          false update-infos))
+                  :else
+                  (let [[relationship _] (u/relationship-info
+                                          (or norm-path [])
+                                          (or sub-path []))]
+                    (if (= :sibling relationship)
+                      false
+                      ;; TODO: Compare values here if :parent
+                      (reduced true)))))
+              false update-infos)))
 
 (defn transform-operators-in-sub-path [sub-path]
   (reduce (fn [acc k]
@@ -59,14 +62,14 @@
               (conj acc k)))
           [] sub-path))
 
-(defn update-sub? [update-infos sub-paths]
+(defn update-sub? [update-infos msg-info sub-paths]
   (reduce
    (fn [acc sub-path]
      (when-not (sequential? sub-path)
        (throw (ex-info (str "`sub-path` must be seqential. Got: `"
                             sub-path "`.")
                        (u/sym-map sub-path))))
-     (if (update-sub?* update-infos
+     (if (update-sub?* update-infos msg-info
                        (transform-operators-in-sub-path sub-path))
        (reduced true)
        false))
@@ -74,11 +77,10 @@
    sub-paths))
 
 (defn get-sub-names-to-update
-  [db local-state update-infos *sub-name->info]
+  [update-infos msg-info *sub-name->info]
   (reduce-kv (fn [acc sub-name info]
-               (let [{:keys [expanded-paths]} info
-                     update? (update-sub? update-infos expanded-paths)]
-                 (if update?
+               (let [{:keys [expanded-paths]} info]
+                 (if (update-sub? update-infos msg-info expanded-paths)
                    (conj acc sub-name)
                    acc)))
              #{} @*sub-name->info))
@@ -103,13 +105,21 @@
          (filter #(not= :vivo/root %)))))
 
 (defn resolve-symbols-in-path [state path]
-  (if (symbol? path)
-    (get state path)
-    (reduce (fn [acc element]
-              (conj acc (if-not (symbol? element)
-                          element
-                          (state element))))
-            [] path)))
+  (let [reducer (fn [acc element]
+                  (conj acc (if-not (symbol? element)
+                              element
+                              (get state element))))]
+    (cond
+      (symbol? path)
+      (get state path)
+
+      (u/msg-path? path)
+      (let [[head & tail] path
+            parts (reduce reducer [] tail)]
+        [head (apply str parts)])
+
+      :else
+      (reduce reducer [] path))))
 
 (defn ks-at-path [kw state path prefix full-path]
   (let [coll (:val (commands/get-in-state state path prefix))]
@@ -177,6 +187,12 @@
       (= [:vivo/subject-id] path)
       [@*subject-id [path]]
 
+      (u/msg-path? path)
+      (let [{:keys [msg-scope msg-name msg-val]} state]
+        (if (= path [msg-scope msg-name])
+          [msg-val [path]]
+          [nil [path]]))
+
       (and (not terminal-kw?) (not join?))
       (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
         [val [norm-path]])
@@ -238,15 +254,16 @@
   (au/go
     ))
 
-(defn get-path-info [acc path db local-state resolve-path?]
-  (let [resolved-path (cond
-                        ;;(symbol? path) (get acc path)
-                        resolve-path? (resolve-symbols-in-path acc path)
-                        :else path)
+(defn get-path-info [acc-state path db local-state msg-info resolve-path?]
+  (let [resolved-path (if resolve-path?
+                        (resolve-symbols-in-path acc-state path)
+                        path)
         [head & tail] resolved-path
         state-src (case head
                     :local local-state
                     :sys db
+                    :local-msgs msg-info
+                    :sys-msgs msg-info
                     {})]
     (u/sym-map state-src resolved-path head)))
 
@@ -262,12 +279,13 @@
           true pairs))
 
 (defn get-synchronous-state-and-expanded-paths
-  [independent-pairs ordered-dependent-pairs db local-state *subject-id]
+  [independent-pairs ordered-dependent-pairs db local-state msg-info
+   *subject-id]
   (let [reducer* (fn [resolve-path? acc [sym path]]
                    (if-not (in-db-cache? path)
                      (reduced {:state :vivo/unknown})
                      (let [info (get-path-info (:state acc) path db local-state
-                                               resolve-path?)
+                                               msg-info resolve-path?)
                            {:keys [state-src resolved-path head]} info
                            [v xps] (get-value-and-expanded-paths
                                     state-src resolved-path head *subject-id)]
@@ -292,14 +310,14 @@
           (update-fn new-state))))))
 
 (defn make-applied-update-fn
-  [sub-name db local-state *sub-name->info *subject-id]
+  [sub-name db local-state msg-info *sub-name->info *subject-id]
   (let [sub-info (@*sub-name->info sub-name)
         {:keys [independent-pairs ordered-dependent-pairs update-fn]} sub-info]
     (if (and (cached? independent-pairs)
              (cached? ordered-dependent-pairs))
       (let [sxps (get-synchronous-state-and-expanded-paths
                   independent-pairs ordered-dependent-pairs db local-state
-                  *subject-id)
+                  msg-info *subject-id)
             {:keys [state expanded-paths]} sxps]
         (make-applied-update-fn* sub-name state expanded-paths *sub-name->info))
       #(ca/go
@@ -311,13 +329,12 @@
                              (u/ex-msg-and-stacktrace e)))))))))
 
 (defn get-update-fn-info
-  [sub-names db local-state *sub-name->info *subject-id]
+  [sub-names db local-state msg-info *sub-name->info *subject-id]
   (reduce
    (fn [acc sub-name]
      (let [{:keys [react?]} (@*sub-name->info sub-name)
-           update-fn* (make-applied-update-fn sub-name db local-state
-                                              *sub-name->info
-                                              *subject-id)]
+           update-fn* (make-applied-update-fn sub-name db local-state msg-info
+                                              *sub-name->info *subject-id)]
        (cond
          (not update-fn*)
          acc
@@ -332,8 +349,8 @@
    sub-names))
 
 (defn update-subs!
-  [sub-names db local-state *sub-name->info *subject-id]
-  (let [update-fn-info (get-update-fn-info sub-names db local-state
+  [sub-names db local-state msg-info *sub-name->info *subject-id]
+  (let [update-fn-info (get-update-fn-info sub-names db local-state msg-info
                                            *sub-name->info *subject-id)
         {:keys [react-update-fns non-react-update-fns]} update-fn-info]
     (doseq [f non-react-update-fns]
@@ -347,25 +364,23 @@
     (try
       (let [info (au/<? subs-update-ch)
             {:keys [db local-state update-infos cb
-                    *sub-name->info *subject-id]} info]
-        (-> (get-sub-names-to-update db local-state update-infos
-                                     *sub-name->info)
+                    msg-info *sub-name->info *subject-id]} info]
+        (-> (get-sub-names-to-update update-infos msg-info *sub-name->info)
             (order-by-lineage *sub-name->info)
-            (update-subs! db local-state
-                          *sub-name->info *subject-id))
+            (update-subs! db local-state msg-info *sub-name->info *subject-id))
         (when cb
           (cb true)))
       (catch #?(:cljs js/Error :clj Exception) e
-        (log/error (str "Error while reading from subs-update-ch:\n"
+        (log/error (str "Error in subscription-update-loop."
                         (u/ex-msg-and-stacktrace e)))))
     (recur)))
 
-(defn subscribe-to-state-changes!
+(defn subscribe!
   [sub-name sub-map update-fn opts
    *stopped? *sub-name->info *sys-db-info *local-state *subject-id]
   (when-not (string? sub-name)
     (throw (ex-info
-            (str "The `sub-name` argument to `subscribe-to-state-changes!` "
+            (str "The `sub-name` argument to `subscribe!` "
                  " must be a string. Got `" sub-name "`.")
             (u/sym-map sub-name sub-map opts))))
   (when-not @*stopped?
@@ -379,12 +394,11 @@
                (cached? ordered-dependent-pairs))
         (let [sxps (get-synchronous-state-and-expanded-paths
                     independent-pairs ordered-dependent-pairs db local-state
-                    *subject-id)
+                    nil *subject-id)
               {:keys [expanded-paths]} sxps
               state (select-keys (:state sxps) (keys sub-map))
               info (u/sym-map independent-pairs ordered-dependent-pairs
-                              resolution-map expanded-paths
-                              parents react? update-fn state)]
+                              expanded-paths parents react? update-fn state)]
           (swap! *sub-name->info assoc sub-name info)
           state)
         (do ;; TODO: Implement
