@@ -113,7 +113,6 @@
   ([vc sub-map component-name resolution-map]
    (use-vivo-state vc sub-map component-name resolution-map []))
   ([vc sub-map component-name resolution-map parents]
-
    #?(:cljs
       (let [[_ render!] (use-state nil)
             subscribe*! #(let [opts {:parents parents

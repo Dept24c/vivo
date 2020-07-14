@@ -851,7 +851,7 @@
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
-(deftest test-nil-in-path
+(deftest test-nil-in-path-1
   (au/test-async
    1000
    (ca/go
@@ -868,6 +868,26 @@
              expected {'num nil
                        'title nil}]
          (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (is (= :unexpected e)))))))
+
+(deftest test-nil-in-path-2
+  (au/test-async
+   1000
+   (ca/go
+     (try
+       (let [vc (vivo/vivo-client)
+             books {"123" {:title "Treasure Island"}
+                    "456" {:title "Kidnapped"}
+                    "789" {:title "Dr Jekyll and Mr Hyde"}}
+             sub-map '{title [:local :books num :title]}
+             resolution-map {'num nil}
+             opts (u/sym-map resolution-map)
+             update-fn (constantly nil)
+             ret (au/<? (vivo/<set-state! vc [:local :books] books))
+             _ (is (= true ret))
+             expected {'title nil}]
+         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn opts))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 

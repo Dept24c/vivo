@@ -725,7 +725,8 @@
         independent-pairs (mapv i-sym->pair independent-syms)
         ordered-dependent-pairs (reduce
                                  (fn [acc sym]
-                                   (if (independent-syms sym)
+                                   (if (or (independent-syms sym)
+                                           (not (sym->path sym)))
                                      acc
                                      (conj acc [sym (sym->path sym)])))
                                  [] (dep/topo-sort g))]
