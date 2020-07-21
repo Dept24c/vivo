@@ -115,7 +115,8 @@
                                           sys-cmds local-cmds)))))))))
       (catch #?(:cljs js/Error :clj Throwable) e
         (log/error (u/ex-msg-and-stacktrace e))
-        (cb* e))))
+        (when cb*
+          (cb* e)))))
   nil)
 
 (defrecord VivoClient [capsule-client
