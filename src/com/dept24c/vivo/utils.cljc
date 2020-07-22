@@ -29,7 +29,7 @@
 (def max-data-block-bytes (* 300 1000)) ;; Approx. DDB max via Cognitect API
 (def max-secret-len 64) ;; To prevent DoS attacks against bcrypt
 
-(def msg-scopes #{:local-msgs :sys-msgs})
+(def topic-scopes #{:local :sys})
 (def terminal-kw-ops #{:vivo/keys :vivo/count :vivo/concat})
 (def kw-ops (conj terminal-kw-ops :vivo/*))
 
@@ -66,9 +66,10 @@
   (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
   (shutdown! [this])
-  (subscribe! [this sub-name sub-map update-fn opts])
-  (unsubscribe! [this sub-name])
-  (publish! [this scope msg-name msg-val])
+  (subscribe-to-state! [this sub-name sub-map update-fn opts])
+  (unsubscribe-from-state! [this sub-name])
+  (subscribe-to-topic! [this scope topic-name cb])
+  (publish-to-topic! [this scope topic-name msg])
   (<update-cmd->serializable-update-cmd [this i cmds])
   (update-state! [this update-cmds cb])
   (<update-sys-state [this update-commands])
@@ -457,9 +458,6 @@
 
 ;;;;;;;;;;;;;;;;;;;; Helper fns ;;;;;;;;;;;;;;;;;;;;
 
-(defn msg-path? [path]
-  (msg-scopes (first path)))
-
 (defn check-sub-map
   [sub-map]
   (when-not (map? sub-map)
@@ -716,11 +714,8 @@
               sub-map)
         {:keys [g independent-syms sym->path]} info
         i-sym->pair (fn [i-sym]
-                      (let [path* (->(sym->path i-sym))
-                            [head & tail] path*
-                            path (if (msg-path? path*)
-                                   [head (apply str tail)]
-                                   path*)]
+                      (let [path (->(sym->path i-sym))
+                            [head & tail] path]
                         [i-sym path]))
         independent-pairs (mapv i-sym->pair independent-syms)
         ordered-dependent-pairs (reduce

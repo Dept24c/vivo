@@ -4,7 +4,7 @@
    [clojure.string :as str]
    [clojure.test :refer [are deftest is]]
    [com.dept24c.vivo :as vivo]
-   [com.dept24c.vivo.client.subscriptions :as subscriptions]
+   [com.dept24c.vivo.client.state-subscriptions :as state-subscriptions]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.macro-impl :as macro-impl]
    [com.dept24c.vivo.utils :as u]
@@ -80,7 +80,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The `sub-map` argument must contain at least one entry"
-         (vivo/subscribe! vc "test" bad-sub-map
+         (vivo/subscribe-to-state! vc "test" bad-sub-map
                                            (constantly true))))))
 
 (deftest test-nil-sub-map
@@ -89,7 +89,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"The `sub-map` argument must be a map"
-         (vivo/subscribe! vc "test" bad-sub-map
+         (vivo/subscribe-to-state! vc "test" bad-sub-map
                                            (constantly true))))))
 
 (deftest test-non-sym-key-in-sub-map
@@ -98,7 +98,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Keys must be symbols"
-         (vivo/subscribe! vc "test" bad-sub-map
+         (vivo/subscribe-to-state! vc "test" bad-sub-map
                                            (constantly true))))))
 
 (deftest test-bad-path-in-sub-map
@@ -107,7 +107,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Only integers"
-         (vivo/subscribe! vc "test" bad-sub-map
+         (vivo/subscribe-to-state! vc "test" bad-sub-map
                                            (constantly true))))))
 
 (deftest test-subscribe!
@@ -130,7 +130,7 @@
                                               {:path [:local :user-id]
                                                :op :set
                                                :arg user-id}]))))
-       (is (= expected (vivo/subscribe! vc "test" sub-map
+       (is (= expected (vivo/subscribe-to-state! vc "test" sub-map
                                                          update-fn)))))))
 
 (deftest test-subscribe!-single-entry
@@ -145,7 +145,7 @@
        (au/<? (vivo/<update-state! vc [{:path [:local :user-id]
                                         :op :set
                                         :arg user-id}]))
-       (is (= {'id user-id} (vivo/subscribe! vc "test" sub-map
+       (is (= {'id user-id} (vivo/subscribe-to-state! vc "test" sub-map
                                                               update-fn)))))))
 
 (deftest test-commands-get-set
@@ -305,7 +305,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Paths must begin with "
-         (vivo/subscribe! vc "test" sub-map
+         (vivo/subscribe-to-state! vc "test" sub-map
                                            (constantly nil))))))
 
 (deftest test-bad-path-root-in-sub-map-not-a-sequence
@@ -314,7 +314,7 @@
     (is (thrown-with-msg?
          #?(:clj ExceptionInfo :cljs js/Error)
          #"Paths must be sequences"
-         (vivo/subscribe! vc "test" sub-map
+         (vivo/subscribe-to-state! vc "test" sub-map
                                            (constantly nil))))))
 
 (deftest test-bad-insert*-on-map
@@ -411,7 +411,7 @@
                                   :op :set
                                   :arg {:msgs [{:title orig-title}]}}]))))
          (is (= {'title orig-title}
-                (vivo/subscribe! vc "test" sub-map update-fn)))
+                (vivo/subscribe-to-state! vc "test" sub-map update-fn)))
          (au/<? (vivo/<update-state! vc
                                      [{:path [:local :msgs 0]
                                        :op :insert-before
@@ -447,7 +447,7 @@
                               :arg {:msgs [{:title orig-title}]}}]))]
          (is (= true ret))
          (is (= {'last-title orig-title}
-                (vivo/subscribe! vc "test" sub-map update-fn)))
+                (vivo/subscribe-to-state! vc "test" sub-map update-fn)))
          (au/<? (vivo/<update-state! vc [{:path [:local :msgs -1]
                                           :op :insert-after
                                           :arg {:title new-title}}]))
@@ -471,7 +471,7 @@
                                                  :op :set
                                                  :arg {:title book-title}}]))))
          (is (= {'title book-title}
-                (vivo/subscribe! vc "test" sub-map update-fn
+                (vivo/subscribe-to-state! vc "test" sub-map update-fn
                                  (u/sym-map resolution-map)))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
@@ -497,7 +497,7 @@
                                                  :arg {:title book-title}}]))))
          (is (= '{the-id "123"
                   title "Treasure Island"}
-                (vivo/subscribe! vc "test" sub-map update-fn
+                (vivo/subscribe-to-state! vc "test" sub-map update-fn
                                  (u/sym-map resolution-map)))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
@@ -519,7 +519,7 @@
          (is (= true (au/<? (vivo/<update-state! vc [{:path [:local :books]
                                                       :op :set
                                                       :arg books}]))))
-         (is (= expected (vivo/subscribe!
+         (is (= expected (vivo/subscribe-to-state!
                           vc "test" sub-map update-fn
                           (u/sym-map resolution-map)))))
        (catch #?(:clj Exception :cljs js/Error) e
@@ -548,7 +548,7 @@
                                  {:path [:local :my-book-ids]
                                   :op :set
                                   :arg my-book-ids}]))))
-         (is (= expected (vivo/subscribe! vc "test"
+         (is (= expected (vivo/subscribe-to-state! vc "test"
                                           sub-map update-fn)))
          (is (= true (au/<? (vivo/<update-state!
                              vc [{:path [:local :my-book-ids 0]
@@ -587,8 +587,8 @@
                                  {:path [:local :my-book-ids]
                                   :op :set
                                   :arg my-book-ids}]))))
-         (is (= expected1 (vivo/subscribe! vc "test" sub-map
-                                           update-fn)))
+         (is (= expected1 (vivo/subscribe-to-state! vc "test" sub-map
+                                                    update-fn)))
          (is (= true (au/<? (vivo/<update-state!
                              vc [{:path [:local :books "789" :title]
                                   :op :set
@@ -613,8 +613,8 @@
              update-fn #(ca/put! ch %)
              expected {'my-books (vals (select-keys books my-book-ids))}]
          (is (= {'my-books [nil nil]}
-                (vivo/subscribe! vc "test" sub-map update-fn
-                                 (u/sym-map resolution-map))))
+                (vivo/subscribe-to-state! vc "test" sub-map update-fn
+                                          (u/sym-map resolution-map))))
          (is (= true (au/<? (vivo/<update-state! vc [{:path [:local :books]
                                                       :op :set
                                                       :arg books}]))))
@@ -662,8 +662,8 @@
                                 vc [{:path [:local]
                                      :op :set
                                      :arg (u/sym-map books msgs)}]))
-             sub-ret (vivo/subscribe! vc "test" sub-map
-                                      update-fn)]
+             sub-ret (vivo/subscribe-to-state! vc "test" sub-map
+                                               update-fn)]
          (is (= true update-ret))
          (is (= expected
                 (-> sub-ret
@@ -696,8 +696,8 @@
                                          {:path [:local :books]
                                           :op :set
                                           :arg books}]))
-         (is (= expected (vivo/subscribe! vc "test" sub-map
-                                          update-fn))))
+         (is (= expected (vivo/subscribe-to-state! vc "test" sub-map
+                                                   update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -804,7 +804,7 @@
                        :op :insert
                        :value "hi"}]
         sub-paths [[:local :page]]]
-    (is (= false (subscriptions/update-sub? update-infos nil sub-paths)))))
+    (is (= false (state-subscriptions/update-sub? update-infos sub-paths)))))
 
 (deftest test-order-by-lineage
   (let [*name->info (atom {"a" {}
@@ -815,23 +815,23 @@
                            "f" {:parents #{"e"}}
                            "g" {:parents #{"e"}}
                            "h" {:parents #{"e" "g"}}})]
-    (is (= ["a"] (subscriptions/order-by-lineage
+    (is (= ["a"] (state-subscriptions/order-by-lineage
                   #{"a"} *name->info)))
-    (is (= ["a" "b"] (subscriptions/order-by-lineage
+    (is (= ["a" "b"] (state-subscriptions/order-by-lineage
                       #{"a" "b"} *name->info)))
-    (is (= ["a" "b" "c"] (subscriptions/order-by-lineage
+    (is (= ["a" "b" "c"] (state-subscriptions/order-by-lineage
                           #{"a" "b" "c"} *name->info)))
-    (is (= ["b" "c"] (subscriptions/order-by-lineage
+    (is (= ["b" "c"] (state-subscriptions/order-by-lineage
                       #{"b" "c"} *name->info)))
-    (is (= ["a" "b" "c" "d"] (subscriptions/order-by-lineage
+    (is (= ["a" "b" "c" "d"] (state-subscriptions/order-by-lineage
                               #{"a" "b" "c" "d"} *name->info)))
-    (is (= ["a" "b" "c" "e" "d"] (subscriptions/order-by-lineage
+    (is (= ["a" "b" "c" "e" "d"] (state-subscriptions/order-by-lineage
                                   #{"a" "b" "c" "d" "e"} *name->info)))
-    (is (= ["e"] (subscriptions/order-by-lineage
+    (is (= ["e"] (state-subscriptions/order-by-lineage
                   #{"e"} *name->info)))
-    (is (= ["e" "f"] (subscriptions/order-by-lineage
+    (is (= ["e" "f"] (state-subscriptions/order-by-lineage
                       #{"e" "f"} *name->info)))
-    (is (= ["h" "f"] (subscriptions/order-by-lineage
+    (is (= ["h" "f"] (state-subscriptions/order-by-lineage
                       #{"h" "f"} *name->info)))))
 
 (deftest test-explicit-seq-in-path
@@ -847,7 +847,7 @@
              update-fn (constantly nil)
              expected {'my-titles ["Treasure Island" "Dr Jekyll and Mr Hyde"]}]
          (au/<? (vivo/<set-state! vc [:local :books] books))
-         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
+         (is (= expected (vivo/subscribe-to-state! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -867,7 +867,7 @@
              _ (is (= true ret))
              expected {'num nil
                        'title nil}]
-         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
+         (is (= expected (vivo/subscribe-to-state! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -887,7 +887,7 @@
              ret (au/<? (vivo/<set-state! vc [:local :books] books))
              _ (is (= true ret))
              expected {'title nil}]
-         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn opts))))
+         (is (= expected (vivo/subscribe-to-state! vc "test" sub-map update-fn opts))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -905,7 +905,7 @@
              ret (au/<? (vivo/<set-state! vc [:local :books] books))]
          (is (= true ret))
          (is (= {'title-999 nil}
-                (vivo/subscribe! vc "test" sub-map update-fn))))
+                (vivo/subscribe-to-state! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -922,7 +922,7 @@
              update-fn (constantly nil)
              expected {'my-titles [nil]}]
          (au/<? (vivo/<set-state! vc [:local :books] books))
-         (is (= expected (vivo/subscribe! vc "test" sub-map update-fn))))
+         (is (= expected (vivo/subscribe-to-state! vc "test" sub-map update-fn))))
        (catch #?(:clj Exception :cljs js/Error) e
          (is (= :unexpected e)))))))
 
@@ -939,8 +939,8 @@
              titles-set (set (map :title (vals books)))
              sub-map '{titles [:local :books :vivo/* :title]}
              update-fn #(ca/put! ch (update % 'titles set))
-             ret0 (vivo/subscribe! vc "test" sub-map
-                                   update-fn)
+             ret0 (vivo/subscribe-to-state! vc "test" sub-map
+                                            update-fn)
              _ (is (= {'titles []} ret0))
              ret1 (au/<? (vivo/<set-state! vc [:local :books] books))
              _ (is (= true ret1))
@@ -975,8 +975,8 @@
              resolution-map {'id 2}
              sub-map '{my-nums [:local :id-to-fav-nums id]}
              update-fn #(ca/put! ch %)
-             ret2 (vivo/subscribe! vc "test" sub-map update-fn
-                                   (u/sym-map resolution-map))
+             ret2 (vivo/subscribe-to-state! vc "test" sub-map update-fn
+                                            (u/sym-map resolution-map))
              _ (is (= {'my-nums [2 3 4]} ret2))
              ret3 (au/<? (vivo/<update-state!
                           vc [{:path [:local :id-to-fav-nums 2 1]
@@ -999,9 +999,9 @@
         ordered-dependent-pairs []
         db {}
         local-state {:page :frobnozzle}
-        ret (subscriptions/get-synchronous-state-and-expanded-paths
+        ret (state-subscriptions/get-synchronous-state-and-expanded-paths
              independent-pairs ordered-dependent-pairs
-             db local-state nil *subject-id)
+             db local-state *subject-id)
         {:keys [state expanded-paths]} ret
         expected-state {'page :frobnozzle
                         'subject-id nil}
@@ -1010,9 +1010,9 @@
         _ (is (= expected-state state))
         _ (is (= expected-expanded-paths expanded-paths))
         _ (reset! *subject-id "AAAA")
-        ret (subscriptions/get-synchronous-state-and-expanded-paths
+        ret (state-subscriptions/get-synchronous-state-and-expanded-paths
              independent-pairs ordered-dependent-pairs
-             db local-state nil *subject-id)
+             db local-state *subject-id)
         {:keys [state expanded-paths]} ret
         expected-state {'page :frobnozzle
                         'subject-id "AAAA"}

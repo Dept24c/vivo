@@ -18,81 +18,76 @@
      (let [vc (vivo/vivo-client)
            ch (ca/chan)
            cb #(ca/put! ch %)
-           sub-map {'foo [:local-msgs "my-num-123-msg"]}
-           msg-val "lalala"
-           sub-name "test123"
-           ret1 (vivo/subscribe! vc sub-name sub-map cb)
-           _ (is (= {'foo nil} ret1))
-           ret2 (vivo/publish! vc :local-msgs "my-num-123-msg" msg-val)
-           expected {'foo msg-val}]
-       (is (= nil ret2))
-       (is (= expected (au/<? ch)))
-       (is (= nil (vivo/unsubscribe! vc sub-name)))))))
+           topic "my-num-topic"
+           msg "100"
+           unsub! (vivo/subscribe-to-topic! vc :local topic cb)]
+       (is (ifn? unsub!))
+       (is (= nil (vivo/publish-to-topic! vc :local topic msg)))
+       (is (= msg (au/<? ch)))
+       (is (= true (unsub!)))))))
 
-(deftest test-local-pub-sub-multiple-updates
+(deftest test-local-pub-sub-multiple-pubs
   (au/test-async
    1000
    (au/go
      (let [vc (vivo/vivo-client)
            ch (ca/chan)
            cb #(ca/put! ch %)
-           sub-map {'foo [:local-msgs "my-num-123-msg"]
-                    'bar [:local :bar]}
-           msg-val "lalala"
-           sub-name "test123"
-           ret1 (vivo/subscribe! vc sub-name sub-map cb)
-           _ (is (= {'foo nil
-                     'bar nil} ret1))
-           ret2 (vivo/publish! vc :local-msgs "my-num-123-msg" msg-val)
-           _ (is (= nil ret2))
-           expected1 {'foo msg-val
-                      'bar nil}
-           _ (is (= expected1 (au/<? ch)))
-           ret3 (au/<? (vivo/<set-state! vc [:local :bar] 123))
-           expected2 {'foo nil
-                      'bar 123}]
-       _ (is (= expected2 (au/<? ch)))
-       (is (= nil (vivo/unsubscribe! vc sub-name)))))))
+           topic "my-num-topic"
+           msg1 "100"
+           msg2 "Ignore that last message"
+           unsub! (vivo/subscribe-to-topic! vc :local topic cb)]
+       (is (ifn? unsub!))
+       (is (= nil (vivo/publish-to-topic! vc :local topic msg1)))
+       (is (= msg1 (au/<? ch)))
+       (is (= nil (vivo/publish-to-topic! vc :local topic msg2)))
+       (is (= msg2 (au/<? ch)))
+       (is (= true (unsub!)))))))
 
-(deftest test-local-pub-sub-parameterized-in-sub-map
+(deftest test-local-pub-sub-multiple-subs
   (au/test-async
    1000
    (au/go
      (let [vc (vivo/vivo-client)
-           ret1 (au/<? (vivo/<set-state! vc [:local :a-num] 123))
-           _ (is (= true ret1))
-           ch (ca/chan)
-           cb #(ca/put! ch %)
-           sub-map '{a-num [:local :a-num]
-                     foo [:local-msgs "my-num-" a-num "-msg"]}
-           msg-val "lalala"
-           sub-name "test123"
-           ret2 (vivo/subscribe! vc sub-name sub-map cb)
-           _ (is (= {'a-num 123
-                     'foo nil}
-                    ret2))
-           ret3 (vivo/publish! vc :local-msgs "my-num-123-msg" msg-val)
-           _ (is (= nil ret3))
-           expected {'a-num 123
-                     'foo msg-val}]
-       (is (= expected (au/<? ch)))
-       (is (= nil (vivo/unsubscribe! vc sub-name)))))))
+           ch1 (ca/chan)
+           ch2 (ca/chan)
+           cb1 #(ca/put! ch1 %)
+           cb2 #(ca/put! ch2 %)
+           topic "my-fav-topic"
+           msg "blue is my favorite color"
+           unsub1! (vivo/subscribe-to-topic! vc :local topic cb1)
+           unsub2! (vivo/subscribe-to-topic! vc :local topic cb2)]
+       (is (ifn? unsub1!))
+       (is (ifn? unsub2!))
+       (is (= nil (vivo/publish-to-topic! vc :local topic msg)))
+       (is (= msg (au/<? ch1)))
+       (is (= msg (au/<? ch2)))
+       (is (= true (unsub1!)))
+       (is (= true (unsub2!)))))))
 
-(deftest test-local-pub-sub-parameterized-w-res-map
+(deftest test-local-pub-sub-multiple-pubs-and-multiple-subs
   (au/test-async
    1000
    (au/go
      (let [vc (vivo/vivo-client)
-           ch (ca/chan)
-           cb #(ca/put! ch %)
-           resolution-map {'a-num 123}
-           sub-map '{foo [:local-msgs "my-num-" a-num "-msg"]}
-           msg-val "lalala"
-           sub-name "test123"
-           ret1 (vivo/subscribe! vc sub-name sub-map cb
-                                 (u/sym-map resolution-map))
-           _ (is (= {'foo nil} ret1))
-           ret2 (vivo/publish! vc :local-msgs "my-num-123-msg" msg-val)]
-       (is (= nil ret2))
-       (is (= {'foo msg-val} (au/<? ch)))
-       (is (= nil (vivo/unsubscribe! vc sub-name)))))))
+           ch1 (ca/chan)
+           ch2 (ca/chan)
+           cb1 #(ca/put! ch1 %)
+           cb2 #(ca/put! ch2 %)
+           topic "my-fav-topic"
+           msg1 "AAAAAAA"
+           msg2 "BBBBB 23432 XXXX"
+           unsub1! (vivo/subscribe-to-topic! vc :local topic cb1)
+           unsub2! (vivo/subscribe-to-topic! vc :local topic cb2)]
+       (is (ifn? unsub1!))
+       (is (ifn? unsub2!))
+       (is (= nil (vivo/publish-to-topic! vc :local topic msg1)))
+       (is (= msg1 (au/<? ch1)))
+       (is (= msg1 (au/<? ch2)))
+       (is (= nil (vivo/publish-to-topic! vc :local topic msg2)))
+       (is (= msg2 (au/<? ch1)))
+       (is (= msg2 (au/<? ch2)))
+       (is (= true (unsub1!)))
+       (is (= true (unsub2!)))))))
+
+;; TODO: Test bad arguments, cbs that throw, etc.

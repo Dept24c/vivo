@@ -2,7 +2,8 @@
   (:require
    [clojure.core.async :as ca]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
-   [com.dept24c.vivo.client.subscriptions :as subscriptions]
+   [com.dept24c.vivo.client.topic-subscriptions :as topic-subscriptions]
+   [com.dept24c.vivo.client.state-subscriptions :as state-subscriptions]
    [com.dept24c.vivo.commands :as commands]
    [com.dept24c.vivo.react :as react]
    [com.dept24c.vivo.utils :as u]
@@ -68,7 +69,7 @@
 
 (defn do-sub-updates!*
   [vc update-info msg-info cb* subs-update-ch <fp->schema sys-state-schema
-   *sys-db-info *local-state *sub-name->info *subject-id]
+   *sys-db-info *local-state *state-sub-name->info *subject-id]
   (ca/go
     (try
       (au/<? (u/<wait-for-conn-init vc))
@@ -106,7 +107,8 @@
                              (:db @*sys-db-info))]
                   (ca/put! subs-update-ch
                            (u/sym-map db local-state update-infos cb
-                                      msg-info *sub-name->info *subject-id)))
+                                      msg-info *state-sub-name->info
+                                      *subject-id)))
                 (if (< num-attempts max-commit-attempts)
                   (recur (inc num-attempts))
                   (cb (ex-info (str "Failed to commit updates after "
@@ -130,10 +132,12 @@
                        *fp->schema
                        *local-state
                        *next-instance-num
+                       *next-topic-sub-id
+                       *state-sub-name->info
                        *stopped?
                        *subject-id
-                       *sub-name->info
-                       *sys-db-info]
+                       *sys-db-info
+                       *topic-name->sub-id->cb]
   u/ISchemaStore
   (<fp->schema [this fp]
     (when-not (int? fp)
@@ -223,18 +227,26 @@
     (cc/shutdown capsule-client)
     (log/info "Vivo client stopped."))
 
-  (get-subscription-info [this sub-name]
-    (when-let [info (@*sub-name->info sub-name)]
+  (get-subscription-info [this state-sub-name]
+    (when-let [info (@*state-sub-name->info state-sub-name)]
       (select-keys info [:state :resolution-map])))
 
-  (subscribe! [this sub-name sub-map update-fn opts]
-    (subscriptions/subscribe!
-     sub-name sub-map update-fn opts *stopped? *sub-name->info *sys-db-info
-     *local-state *subject-id))
+  (subscribe-to-state! [this state-sub-name sub-map update-fn opts]
+    (state-subscriptions/subscribe-to-state!
+     state-sub-name sub-map update-fn opts *stopped? *state-sub-name->info
+     *sys-db-info *local-state *subject-id))
 
-  (unsubscribe! [this sub-name]
-    (swap! *sub-name->info dissoc sub-name)
+  (unsubscribe-from-state! [this state-sub-name]
+    (swap! *state-sub-name->info dissoc state-sub-name)
     nil)
+
+  (subscribe-to-topic! [this scope topic-name cb]
+    (topic-subscriptions/subscribe-to-topic!
+     scope topic-name cb *next-topic-sub-id *topic-name->sub-id->cb))
+
+  (publish-to-topic! [this scope topic-name msg]
+    (topic-subscriptions/publish-to-topic!
+     scope topic-name msg *topic-name->sub-id->cb))
 
   (<wait-for-conn-init [this]
     (au/go
@@ -258,7 +270,7 @@
       (do-sub-updates!* this update-info nil cb subs-update-ch
                         #(u/<fp->schema this %) sys-state-schema
                         *sys-db-info *local-state
-                        *sub-name->info *subject-id))
+                        *state-sub-name->info *subject-id))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -317,7 +329,7 @@
             (reset! *sys-db-info {:db-id new-db-id
                                   :db db})
             (ca/put! subs-update-ch (u/sym-map db local-state update-infos
-                                               *sub-name->info
+                                               *state-sub-name->info
                                                *subject-id))))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log/error (str "Exception in <handle-sys-state-changed: "
@@ -390,27 +402,7 @@
           :else
           (let [{:keys [fp bytes]} ret*
                 w-schema (au/<? (u/<fp->schema this fp))]
-            (l/deserialize ret-schema w-schema bytes))))))
-
-  (publish! [this msg-scope msg-name msg-val]
-    (when-not (u/msg-scopes msg-scope)
-      (throw (ex-info (str "`msg-scope` argument to `publish` must "
-                           "be one of " u/msg-scopes ". Got `"
-                           msg-scope "`.")
-                      (u/sym-map msg-scope msg-name msg-val))))
-    (when-not (string? msg-name)
-      (throw (ex-info (str "`msg-name` argument to `publish` must "
-                           "be a string. Got `" msg-scope "`.")
-                      (u/sym-map msg-scope msg-name msg-val))))
-    (when (= :sys-msgs msg-scope)
-      (throw (ex-info ":sys-msgs scope is not yet supported."
-                      (u/sym-map msg-scope msg-name msg-val))))
-    (let [msg-info (u/sym-map msg-scope msg-name msg-val)]
-      (do-sub-updates!* this nil msg-info nil subs-update-ch
-                        #(u/<fp->schema this %) sys-state-schema
-                        *sys-db-info *local-state
-                        *sub-name->info *subject-id))
-    nil))
+            (l/deserialize ret-schema w-schema bytes)))))))
 
 (defn <on-connect
   [opts-on-connect sys-state-source *conn-initialized? *sys-db-info *vc
@@ -503,8 +495,10 @@
         *fp->schema (atom {})
         *subject-id (atom nil)
         *vc (atom nil)
-        *sub-name->info (atom {})
+        *state-sub-name->info (atom {})
+        *topic-name->sub-id->cb (atom {})
         *next-instance-num (atom 0)
+        *next-topic-sub-id (atom 0)
         on-disconnect* #(when on-disconnect
                           (on-disconnect @*vc @*local-state))
         ;; TODO: Think about this buffer size and dropping behavior under load
@@ -518,7 +512,7 @@
                                 local-state @*local-state]
                             (ca/put! subs-update-ch
                                      (u/sym-map db local-state update-infos
-                                                *sub-name->info
+                                                *state-sub-name->info
                                                 *subject-id)))
                           nil)
         _ (when rpcs
@@ -541,12 +535,14 @@
                          *fp->schema
                          *local-state
                          *next-instance-num
+                         *next-topic-sub-id
+                         *state-sub-name->info
                          *stopped?
                          *subject-id
-                         *sub-name->info
-                         *sys-db-info)]
+                         *sys-db-info
+                         *topic-name->sub-id->cb)]
     (reset! *vc vc)
-    (subscriptions/start-subscription-update-loop! subs-update-ch)
+    (state-subscriptions/start-subscription-update-loop! subs-update-ch)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
                       (partial u/<handle-sys-state-changed vc))

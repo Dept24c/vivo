@@ -32,7 +32,7 @@
   ([opts]
    (client/vivo-client opts)))
 
-(defn subscribe!
+(defn subscribe-to-state!
   "Creates a Vivo subscription. When the state or events referred to by any
    of the paths in the `sub-map` changes, `update-fn` is called.
    Note that this is a low-level function that generally
@@ -45,16 +45,23 @@
      - `resolution-map`: map of symbols to values to be used in resolving
                          symbols in values of the sub-map"
   ([vc sub-name sub-map update-fn]
-   (subscribe! vc sub-name sub-map update-fn {}))
+   (subscribe-to-state! vc sub-name sub-map update-fn {}))
   ([vc sub-name sub-map update-fn opts]
-   (u/subscribe! vc sub-name sub-map update-fn opts)))
+   (u/subscribe-to-state! vc sub-name sub-map update-fn opts)))
 
-(defn unsubscribe!
+(defn unsubscribe-from-state!
   "Cancels a state-changes subscription and releases the related
    resources."
   [vc sub-name]
-  (u/unsubscribe! vc sub-name))
+  (u/unsubscribe-from-state! vc sub-name))
 
+(defn subscribe-to-topic!
+  [vc scope topic-name cb]
+  (u/subscribe-to-topic! vc scope topic-name cb))
+
+(defn publish-to-topic!
+  [vc scope topic-name msg]
+  (u/publish-to-topic! vc scope topic-name msg))
 
 (defn update-state!
   ([vc update-commands]
@@ -84,18 +91,6 @@
          cb #(ca/put! ch %)]
      (set-state! vc path arg cb)
      ch)))
-
-(defn publish!
-  "Publish a message to active subscribers. Returns nil.
-
-   Parameters:
-    - `vc`: Vivo client.
-    - `msg-scope`: Message scope. Either `:local-msgs` or `:sys-msgs`.
-    - `msg-name`: The name of the message (string).
-    - `msg-val`: The value of the message."
-
-  [vc msg-scope msg-name msg-val]
-  (u/publish! vc msg-scope msg-name msg-val))
 
 (defn logged-in? [vc]
   (u/logged-in? vc))
