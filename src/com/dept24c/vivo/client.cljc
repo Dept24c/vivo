@@ -86,6 +86,8 @@
                                 db (l/deserialize sys-state-schema
                                                   writer-schema bytes)
                                 local-db-id (:db-id @*sys-db-info)]
+                            (log/info (str "Updated state. New db-id: "
+                                           new-db-id))
                             (reset! *sys-db-info {:db-id new-db-id
                                                   :db db})
                             (u/sym-map update-infos db)))))]
@@ -321,13 +323,12 @@
               db (when (and writer-schema bytes)
                    (l/deserialize sys-state-schema writer-schema bytes))
               local-state @*local-state]
-          (when (or (nil? local-db-id)
-                    (block-ids/earlier? local-db-id new-db-id))
-            (reset! *sys-db-info {:db-id new-db-id
-                                  :db db})
-            (ca/put! subs-update-ch (u/sym-map db local-state update-infos
-                                               *state-sub-name->info
-                                               *subject-id))))
+          (log/info (str "Got :sys-state-changed msg. New db-id: " new-db-id))
+          (reset! *sys-db-info {:db-id new-db-id
+                                :db db})
+          (ca/put! subs-update-ch (u/sym-map db local-state update-infos
+                                             *state-sub-name->info
+                                             *subject-id)))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log/error (str "Exception in <handle-sys-state-changed: "
                           (u/ex-msg-and-stacktrace e)))))))

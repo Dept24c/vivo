@@ -117,7 +117,6 @@
                                                 (constantly nil))
            _ (is (= app-name1 ('app-name state-ret1)))
            db-id1 (au/<? (ac/<get-db-id-for-branch ac branch1))
-           _ (log/info (str "XXXX db-id1:" db-id1))
            _ (is (= true (au/<? (ac/<create-branch ac branch2 db-id1))))
            vc2 (vivo/vivo-client (assoc vc-opts :sys-state-source
                                         {:branch/name branch2}))
@@ -159,7 +158,6 @@
                                                 (constantly nil))
            _ (is (= app-name1 ('app-name state-ret1)))
            db-id1 (au/<? (ac/<get-db-id-for-branch ac branch1))
-           _ (log/info (str "XXXX db-id1:" db-id1))
            vc2 (vivo/vivo-client (assoc vc-opts :sys-state-source
                                         {:temp-branch/db-id db-id1}))
            _ (au/<? (u/<wait-for-conn-init vc2))

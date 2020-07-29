@@ -40,7 +40,7 @@
   (<fp->schema [this fp conn-id])
   (<get-all-branches [this])
   (<get-db-id [this branch])
-  (<get-db-info [this branch storage])
+  (<get-db-info [this branch])
   (<get-in [this db-id path])
   (<get-log [this branch limit])
   (<get-num-commits [this branch])
@@ -61,7 +61,7 @@
   (<update-db [this update-cmds msg subject-id branch])
   (<update-state [this arg metadata])
   (<scmds->cmds [this scmds conn-id])
-  (get-storage [this branch])
+  (get-storage [this branch-or-db-id])
   (publish-msg [this arg metadata])
   (set-rpc-handler! [this rpc-name-kw handler])
   (shutdown! [this]))
@@ -501,18 +501,19 @@
     (let [identifier* (if login-identifier-case-sensitive?
                         identifier
                         (str/lower-case identifier))
-          storage (get-storage vs branch)
-          db-info (au/<? (<get-db-info vs branch storage))
+          db-info (au/<? (<get-db-info vs branch))
           {id->sid-data-id :identifier-to-subject-id-data-id
            sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
           subject-id (when id->sid-data-id
-                       (au/<? (u/<get-in storage id->sid-data-id
-                                         u/string-map-schema
-                                         [identifier*] nil)))
+                       (let [src-storage (get-storage vs id->sid-data-id)]
+                         (au/<? (u/<get-in src-storage id->sid-data-id
+                                           u/string-map-schema
+                                           [identifier*] nil))))
           hashed-secret (when (and subject-id sid->hs-data-id)
-                          (au/<? (u/<get-in storage sid->hs-data-id
-                                            u/string-map-schema
-                                            [subject-id] nil)))]
+                          (let [src-storage (get-storage vs sid->hs-data-id)]
+                            (au/<? (u/<get-in src-storage sid->hs-data-id
+                                              u/string-map-schema
+                                              [subject-id] nil))))]
       (u/check-secret-len secret)
       (if-not (and hashed-secret
                    (bcrypt/check secret hashed-secret))
@@ -586,12 +587,13 @@
     (let [{:keys [conn-id]} metadata
           {:keys [*conn-id->info *subject-id->conn-ids]} vivo-server
           {:keys [branch]} (@*conn-id->info conn-id)
-          storage (get-storage vivo-server branch)
-          db-info (au/<? (<get-db-info vivo-server branch storage))
+          db-info (au/<? (<get-db-info vivo-server branch))
           {:keys [token-to-token-info-data-id]} db-info
           info (when token-to-token-info-data-id
-                 (au/<? (u/<get-in storage token-to-token-info-data-id
-                                   u/token-map-schema [token] nil)))
+                 (let [src-storage (get-storage vivo-server
+                                                token-to-token-info-data-id)]
+                   (au/<? (u/<get-in src-storage token-to-token-info-data-id
+                                     u/token-map-schema [token] nil))))
           {:keys [expiration-time-mins subject-id]} info
           now-mins (-> (u/current-time-ms)
                        (u/ms->mins))]
@@ -683,11 +685,13 @@
             change-info (au/<? modify-ch)]
         change-info)))
 
-  (<get-db-info [this branch storage]
+  (<get-db-info [this branch]
     (au/go
       (let [branch-reference (branch->reference branch)
-            db-id (au/<? (u/<get-data-id storage branch-reference))]
-        (au/<? (u/<get-in storage db-id u/db-info-schema nil nil)))))
+            dest-storage (get-storage this branch)
+            db-id (au/<? (u/<get-data-id dest-storage branch-reference))
+            src-storage (get-storage this db-id)]
+        (au/<? (u/<get-in src-storage db-id u/db-info-schema nil nil)))))
 
   (<add-subject [this arg metadata]
     (let [{:keys [identifier secret subject-id]
@@ -723,13 +727,13 @@
     (au/go
       (let [{:keys [conn-id]} metadata
             {:keys [branch subject-id]} (@*conn-id->info conn-id)
-            storage (get-storage this branch)
-            db-info (au/<? (<get-db-info this branch storage))
+            db-info (au/<? (<get-db-info this branch))
             id->sid-data-id (:identifier-to-subject-id-data-id db-info)
             identifier* (if login-identifier-case-sensitive?
                           identifier
                           (str/lower-case identifier))
-            id-subject-id (au/<? (u/<get-in storage id->sid-data-id
+            src-storage (get-storage this id->sid-data-id)
+            id-subject-id (au/<? (u/<get-in src-storage id->sid-data-id
                                             u/string-map-schema
                                             [identifier*] nil))
             my-identifier? (and subject-id
@@ -854,9 +858,9 @@
 
   (<get-in [this db-id path]
     (au/go
-      (-> (<get-state-and-expanded-path this db-id path)
-          (au/<?)
-          (first))))
+      (let [state-and-path (au/<? (<get-state-and-expanded-path
+                                   this db-id path))]
+        (first state-and-path))))
 
   (<get-state-and-expanded-path [this db-id path]
     (au/go
@@ -869,11 +873,12 @@
                              "`. Path must be nil or a sequence.")
                         {:path path})))
       (let [path (or path [:sys])
-            storage (get-storage this db-id)
-            data-id (au/<? (u/<get-in storage db-id u/db-info-schema
+            db-id-storage (get-storage this db-id)
+            data-id (au/<? (u/<get-in db-id-storage db-id u/db-info-schema
                                       [:data-id] nil))
-
-            <get-at-path #(u/<get-in storage data-id state-schema % :sys)
+            data-id-storage (get-storage this data-id)
+            <get-at-path #(u/<get-in
+                           data-id-storage data-id state-schema % :sys)
             last-path-k (last path)
             join? (u/has-join? path)
             term-kw? (u/terminal-kw-ops last-path-k)]
@@ -909,7 +914,7 @@
                 (loop [out []
                        i 0]
                   (let [filled-in-path (nth expanded-path i)
-                        v (au/<? (u/<get-in storage data-id state-schema
+                        v (au/<? (u/<get-in data-id-storage data-id state-schema
                                             filled-in-path :sys))
                         new-out (conj out v)
                         new-i (inc i)]
@@ -928,7 +933,7 @@
               (let [results (loop [out []
                                    i 0]
                               (let [filled-in-path (nth expanded-path i)
-                                    v (au/<? (u/<get-in storage data-id
+                                    v (au/<? (u/<get-in data-id-storage data-id
                                                         state-schema
                                                         filled-in-path :sys))
                                     new-out (conj out v)
@@ -995,10 +1000,10 @@
 
   (<get-subject-id-for-identifier [this identifier branch]
     (au/go
-      (let [storage (get-storage this branch)
-            db-info (au/<? (<get-db-info this branch storage))
-            id->sid-data-id (:identifier-to-subject-id-data-id db-info)]
-        (au/<? (u/<get-in storage id->sid-data-id
+      (let [db-info (au/<? (<get-db-info this branch))
+            id->sid-data-id (:identifier-to-subject-id-data-id db-info)
+            src-storage (get-storage this id->sid-data-id)]
+        (au/<? (u/<get-in src-storage id->sid-data-id
                           u/string-map-schema [identifier] nil)))))
 
   (<log-in* [this identifier secret minutes-valid conn-id branch]
@@ -1033,11 +1038,11 @@
     (au/go
       (let [{:keys [conn-id]} metadata
             {:keys [branch]} (@*conn-id->info conn-id)
-            storage (get-storage this branch)
-            db-info (au/<? (<get-db-info this branch storage))
+            db-info (au/<? (<get-db-info this branch))
             {:keys [token-to-token-info-data-id]} db-info
+            src-storage (get-storage this token-to-token-info-data-id)
             info (when token-to-token-info-data-id
-                   (au/<? (u/<get-in storage token-to-token-info-data-id
+                   (au/<? (u/<get-in src-storage token-to-token-info-data-id
                                      u/token-map-schema [token] nil)))]
         (if-not info
           false
