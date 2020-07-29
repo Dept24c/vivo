@@ -79,12 +79,7 @@
   (<delete-reference! [this reference])
   (<get-in [this data-id schema path prefix])
   (<get-in-reference [this reference schema path prefix])
-  (<update
-    [this data-id schema update-commands prefix]
-    [this data-id schema update-commands prefix tx-fns])
-  (<update-reference!
-    [this reference schema update-commands prefix]
-    [this reference schema update-commands prefix tx-fns]))
+  (<update-reference! [this reference schema update-commands prefix]))
 
 (defprotocol IDataBlockStorage
   (<allocate-data-block-id [this])
@@ -454,7 +449,10 @@
                           :sender :admin-client}
           :delete-branch {:arg branch-name-schema
                           :ret l/boolean-schema
-                          :sender :admin-client}}})
+                          :sender :admin-client}
+          :get-db-id-for-branch {:arg branch-name-schema
+                                 :ret db-id-schema
+                                 :sender :admin-client}}})
 
 ;;;;;;;;;;;;;;;;;;;; Helper fns ;;;;;;;;;;;;;;;;;;;;
 

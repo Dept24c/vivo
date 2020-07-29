@@ -9,6 +9,7 @@
 (defprotocol IAdminClient
   (<create-branch [this branch db-id])
   (<delete-branch [this branch])
+  (<get-db-id-for-branch [this branch])
   (shutdown! [this]))
 
 (defrecord AdminClient [capsule-client]
@@ -18,6 +19,9 @@
 
   (<delete-branch [this branch]
     (cc/<send-msg capsule-client :delete-branch branch))
+
+  (<get-db-id-for-branch [this branch]
+    (cc/<send-msg capsule-client :get-db-id-for-branch branch))
 
   (shutdown! [this]
     (cc/shutdown capsule-client)

@@ -4,7 +4,7 @@
   com.cognitect.aws/dynamodb {:mvn/version "799.2.679.0"}
   com.cognitect.aws/endpoints {:mvn/version "1.1.11.789"}
   crypto-password {:mvn/version "0.2.1"}
-  deercreeklabs/capsule {:mvn/version "0.4.27"}
+  deercreeklabs/capsule {:mvn/version "0.4.28"}
   deercreeklabs/stockroom {:mvn/version "0.3.5"}
   mvxcvi/puget {:mvn/version "1.3.0"}
   org.clojure/clojure {:mvn/version "1.10.1"}

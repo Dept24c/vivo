@@ -355,7 +355,7 @@
     (recur)))
 
 (defn subscribe-to-state!
-  [state-sub-name sub-map update-fn opts
+  [state-sub-name sub-map update-fn opts sys-state-source
    *stopped? *state-sub-name->info *sys-db-info *local-state *subject-id]
   (when-not (string? state-sub-name)
     (throw (ex-info

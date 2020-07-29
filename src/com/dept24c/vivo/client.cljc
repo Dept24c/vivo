@@ -86,11 +86,8 @@
                                 db (l/deserialize sys-state-schema
                                                   writer-schema bytes)
                                 local-db-id (:db-id @*sys-db-info)]
-                            (when (or (nil? local-db-id)
-                                      (block-ids/earlier? local-db-id
-                                                          new-db-id))
-                              (reset! *sys-db-info {:db-id new-db-id
-                                                    :db db}))
+                            (reset! *sys-db-info {:db-id new-db-id
+                                                  :db db})
                             (u/sym-map update-infos db)))))]
         (if (and (seq sys-cmds)
                  (or (not sys-ret)
@@ -233,8 +230,8 @@
 
   (subscribe-to-state! [this state-sub-name sub-map update-fn opts]
     (state-subscriptions/subscribe-to-state!
-     state-sub-name sub-map update-fn opts *stopped? *state-sub-name->info
-     *sys-db-info *local-state *subject-id))
+     state-sub-name sub-map update-fn opts sys-state-source
+     *stopped? *state-sub-name->info *sys-db-info *local-state *subject-id))
 
   (unsubscribe-from-state! [this state-sub-name]
     (swap! *state-sub-name->info dissoc state-sub-name)
@@ -406,31 +403,32 @@
 
 (defn <on-connect
   [opts-on-connect sys-state-source *conn-initialized? *sys-db-info *vc
-   capsule-client]
-  (ca/go
-    (try
-      (let [db-info (au/<? (cc/<send-msg capsule-client :set-state-source
-                                         sys-state-source))]
-        (if (= :vivo/unauthorized db-info)
-          (throw (ex-info (str "Failed to set state source. Got `"
-                               ":vivo/unauthorized`.")
-                          (u/sym-map db-info)))
-          (let [vc @*vc]
-            (reset! *conn-initialized? true)
-            (when-not (= (:db-id db-info) (:db-id @*sys-db-info))
-              (au/<? (u/<handle-sys-state-changed
-                      vc
-                      {:new-db-id (:db-id db-info)
-                       :new-serialized-db (:serialized-db db-info)
-                       :update-infos [{:norm-path [:sys]
-                                       :op :set}]}
-                      {})))
-            (when opts-on-connect
-              (opts-on-connect vc))
-            (log/info "Vivo client connection initialized."))))
-      (catch #?(:clj Exception :cljs js/Error) e
-        (log/error (str "Error in <on-connect: "
-                        (u/ex-msg-and-stacktrace e)))))))
+   *stopped? capsule-client]
+  (when-not @*stopped?
+    (ca/go
+      (try
+        (let [db-info (au/<? (cc/<send-msg capsule-client :set-state-source
+                                           sys-state-source))]
+          (if (= :vivo/unauthorized db-info)
+            (throw (ex-info (str "Failed to set state source. Got `"
+                                 ":vivo/unauthorized`.")
+                            (u/sym-map db-info)))
+            (let [vc @*vc]
+              (reset! *conn-initialized? true)
+              (when-not (= (:db-id db-info) (:db-id @*sys-db-info))
+                (au/<? (u/<handle-sys-state-changed
+                        vc
+                        {:new-db-id (:db-id db-info)
+                         :new-serialized-db (:serialized-db db-info)
+                         :update-infos [{:norm-path [:sys]
+                                         :op :set}]}
+                        {})))
+              (when opts-on-connect
+                (opts-on-connect vc))
+              (log/info "Vivo client connection initialized."))))
+        (catch #?(:clj Exception :cljs js/Error) e
+          (log/error (str "Error in <on-connect: "
+                          (u/ex-msg-and-stacktrace e))))))))
 
 (defn on-disconnect
   [on-disconnect* *conn-initialized? set-subject-id! capsule-client]
@@ -465,7 +463,8 @@
 
 (defn make-capsule-client
   [get-server-url opts-on-connect opts-on-disconnect sys-state-schema
-   sys-state-source *sys-db-info *vc *conn-initialized? set-subject-id!]
+   sys-state-source *sys-db-info *vc *conn-initialized? *stopped?
+   set-subject-id!]
   (when-not sys-state-schema
     (throw (ex-info (str "Missing `:sys-state-schema` option in vivo-client "
                          "constructor.")
@@ -473,7 +472,8 @@
   (let [get-credentials (constantly {:subject-id "vivo-client"
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect opts-on-connect sys-state-source
-                                   *conn-initialized? *sys-db-info *vc)
+                                   *conn-initialized? *sys-db-info *vc
+                                   *stopped?)
               :on-disconnect (partial on-disconnect opts-on-disconnect
                                       *conn-initialized? set-subject-id!)}]
     (cc/client get-server-url get-credentials
@@ -523,7 +523,8 @@
                          (make-capsule-client
                           get-server-url on-connect on-disconnect*
                           sys-state-schema sys-state-source
-                          *sys-db-info *vc *conn-initialized? set-subject-id!))
+                          *sys-db-info *vc *conn-initialized? *stopped?
+                          set-subject-id!))
         vc (->VivoClient capsule-client
                          path->schema-cache
                          rpcs
