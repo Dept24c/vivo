@@ -34,6 +34,7 @@
   (<add-subject* [this identifier secret subject-id branch conn-id])
   (<add-subject-identifier [this arg metadata])
   (<change-secret [this arg metadata])
+  (<change-secret* [this branch subject-id old-secret new-secret])
   (<create-branch [this arg metadata])
   (<delete-branch [this branch metadata])
   (<fp->schema [this fp conn-id])
@@ -57,6 +58,7 @@
   (<rpc [this arg metadata])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
+  (<update-db [this update-cmds msg subject-id branch])
   (<update-state [this arg metadata])
   (<scmds->cmds [this scmds conn-id])
   (get-storage [this branch])
@@ -742,30 +744,35 @@
                                subject-id branch conn-id))
             true)))))
 
-  (<change-secret [this arg metadata]
+  (<change-secret* [this branch subject-id old-secret new-secret]
     (au/go
-      (let [{:keys [old-secret new-secret]} arg
-            {:keys [conn-id]} metadata
-            {:keys [branch subject-id]} (@*conn-id->info conn-id)
-            _ (u/check-secret-len old-secret)
-            _ (u/check-secret-len new-secret)
-            branch-reference (branch->reference branch)
+      (u/check-secret-len old-secret)
+      (u/check-secret-len new-secret)
+      (let [branch-reference (branch->reference branch)
             storage (get-storage this branch)
             db-id (au/<? (u/<get-data-id storage branch-reference))
             db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
             {sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
-            hashed-old-secret (when subject-id
+            hashed-old-secret (when (and subject-id old-secret)
                                 (au/<? (u/<get-in storage sid->hs-data-id
                                                   u/string-map-schema
-                                                  [subject-id] nil)))]
-        (if-not (and hashed-old-secret
-                     (bcrypt/check old-secret hashed-old-secret))
+                                                  [subject-id] nil)))
+            old-secret-ok? (if-not hashed-old-secret
+                             true
+                             (bcrypt/check old-secret hashed-old-secret))]
+        (if-not old-secret-ok?
           false
           (let [hashed-new-secret (bcrypt/encrypt new-secret work-factor)]
             (au/<? (<modify-db this (partial <change-secret-update-fn
                                              hashed-new-secret)
-                               "Change secret" subject-id branch conn-id))
+                               "Change secret" subject-id branch nil))
             true)))))
+
+  (<change-secret [this arg metadata]
+    (let [{:keys [old-secret new-secret]} arg
+          {:keys [conn-id]} metadata
+          {:keys [branch subject-id]} (@*conn-id->info conn-id)]
+      (<change-secret* this branch subject-id old-secret new-secret)))
 
   (<create-branch [this arg metadata]
     (au/go
@@ -1135,6 +1142,11 @@
                 (if last?
                   new-out
                   (recur (nth scmds new-i) new-i new-out)))))))))
+
+  (<update-db [this update-cmds msg subject-id branch]
+    (<modify-db this (partial <update-state-update-fn
+                              state-schema update-cmds)
+                "Update db" subject-id branch nil))
 
   (<update-state [this arg metadata]
     (<do-update-state this arg metadata authorization-fn redaction-fn
