@@ -792,9 +792,16 @@
             temp-src? (and db-id (block-ids/temp-block-id? db-id))
             branch-reference (branch->reference branch)
             _ (when (and db-id
-                         (not (au/<? (u/<get-in src-storage db-id
-                                                u/db-info-schema
-                                                [:data-id] nil))))
+                         (not
+                          (try
+                            (au/<? (u/<get-in src-storage db-id
+                                              u/db-info-schema
+                                              [:data-id] nil))
+                            (catch ExceptionInfo e
+                              (if (re-find #"not match given writer schema"
+                                           (ex-message e))
+                                false
+                                (throw e))))))
                 (throw (ex-info (str "Source db-id `" db-id "` does not exist.")
                                 arg)))
             _ (when (and temp-src? (not temp-dest?))
