@@ -67,8 +67,8 @@
   #?(:cljs (object? v)
      :clj (throw (ex-info "js-object? is not supported in clj." {}))))
 
-(defn do-sub-updates!*
-  [vc update-info msg-info cb* subs-update-ch <fp->schema sys-state-schema
+(defn do-state-updates!*
+  [vc update-info msg-info cb* state-update-ch <fp->schema sys-state-schema
    *sys-db-info *local-state *state-sub-name->info *subject-id]
   (ca/go
     (try
@@ -104,7 +104,7 @@
                                            (:update-infos local-ret))
                       db (or (:db sys-ret)
                              (:db @*sys-db-info))]
-                  (ca/put! subs-update-ch
+                  (ca/put! state-update-ch
                            (u/sym-map db local-state update-infos cb
                                       msg-info *state-sub-name->info
                                       *subject-id)))
@@ -124,7 +124,7 @@
                        path->schema-cache
                        rpcs
                        set-subject-id!
-                       subs-update-ch
+                       state-update-ch
                        sys-state-schema
                        sys-state-source
                        *conn-initialized?
@@ -266,10 +266,10 @@
         (cb (ex-info "The update-cmds parameter must be a sequence."
                      (u/sym-map update-cmds)))))
     (let [update-info (make-update-info update-cmds)]
-      (do-sub-updates!* this update-info nil cb subs-update-ch
-                        #(u/<fp->schema this %) sys-state-schema
-                        *sys-db-info *local-state
-                        *state-sub-name->info *subject-id))
+      (do-state-updates!* this update-info nil cb state-update-ch
+                          #(u/<fp->schema this %) sys-state-schema
+                          *sys-db-info *local-state
+                          *state-sub-name->info *subject-id))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -326,9 +326,9 @@
           (log/info (str "Got :sys-state-changed msg. New db-id: " new-db-id))
           (reset! *sys-db-info {:db-id new-db-id
                                 :db db})
-          (ca/put! subs-update-ch (u/sym-map db local-state update-infos
-                                             *state-sub-name->info
-                                             *subject-id)))
+          (ca/put! state-update-ch (u/sym-map db local-state update-infos
+                                              *state-sub-name->info
+                                              *subject-id)))
         (catch #?(:cljs js/Error :clj Throwable) e
           (log/error (str "Exception in <handle-sys-state-changed: "
                           (u/ex-msg-and-stacktrace e)))))))
@@ -504,14 +504,14 @@
                           (on-disconnect @*vc @*local-state))
         ;; TODO: Think about this buffer size and dropping behavior under load
         ;; Perhaps disconnect and reconnect later if overloaded?
-        subs-update-ch (ca/chan (ca/sliding-buffer 1000))
+        state-update-ch (ca/chan (ca/sliding-buffer 1000))
         set-subject-id! (fn [subject-id]
                           (reset! *subject-id subject-id)
                           (let [update-infos [{:norm-path [:vivo/subject-id]
                                                :op :set}]
                                 db (:db @*sys-db-info)
                                 local-state @*local-state]
-                            (ca/put! subs-update-ch
+                            (ca/put! state-update-ch
                                      (u/sym-map db local-state update-infos
                                                 *state-sub-name->info
                                                 *subject-id)))
@@ -530,7 +530,7 @@
                          path->schema-cache
                          rpcs
                          set-subject-id!
-                         subs-update-ch
+                         state-update-ch
                          sys-state-schema
                          sys-state-source
                          *conn-initialized?
@@ -544,7 +544,7 @@
                          *sys-db-info
                          *topic-name->sub-id->cb)]
     (reset! *vc vc)
-    (state-subscriptions/start-subscription-update-loop! subs-update-ch)
+    (state-subscriptions/start-subscription-update-loop! state-update-ch)
     (when get-server-url
       (cc/set-handler capsule-client :sys-state-changed
                       (partial u/<handle-sys-state-changed vc))
