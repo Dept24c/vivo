@@ -134,7 +134,7 @@
          (finally
            (vivo/shutdown! vc)))))))
 
-(deftest test-sequence-join
+(deftest ^:this test-sequence-join
   (au/test-async
    10000
    (ca/go
@@ -328,17 +328,17 @@
    (ca/go
      (let [vc (vivo/vivo-client vc-opts)]
        (try
-         (let [sid (au/<? (vivo/<add-subject! vc tu/test-identifier
+         (let [ret (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
-               _ (is (= tu/test-subject-id sid))
+               _ (is (= tu/test-subject-id (:subject-id ret)))
                login-1-ret (au/<? (vivo/<log-in! vc tu/test-identifier
                                                  tu/test-secret))
                _ (is (= tu/test-subject-id (:subject-id login-1-ret)))
                new-secret "new-secret!!"
                change-ret (au/<? (vivo/<change-secret! vc tu/test-secret
                                                        new-secret))
-               _ (is (= true change-ret))
+               _ (is (string? change-ret))
                logout-ret (au/<? (vivo/<log-out! vc))
                _ (is (= true logout-ret))
                token-login-ret (au/<? (vivo/<log-in-w-token!
@@ -356,48 +356,6 @@
          (finally
            (vivo/shutdown! vc)))))))
 
-(deftest test-add-remove-identifier
-  (au/test-async
-   10000
-   (ca/go
-     (let [vc (vivo/vivo-client vc-opts)]
-       (try
-         (let [new-identifier "me@emailhaven.com"
-               sid (au/<? (vivo/<add-subject! vc tu/test-identifier
-                                              tu/test-secret
-                                              tu/test-subject-id))
-               _ (is (= tu/test-subject-id sid))
-               add-1-ret (au/<? (vivo/<add-subject-identifier!
-                                 vc new-identifier))
-               _ (is (= false add-1-ret)) ;; Not logged in yet
-               remove-1-ret (au/<? (vivo/<remove-subject-identifier!
-                                    vc new-identifier))
-               _ (is (= false remove-1-ret)) ;; Not logged in yet
-               login-1-ret (au/<? (vivo/<log-in! vc tu/test-identifier
-                                                 tu/test-secret))
-               _ (is (= tu/test-subject-id (:subject-id login-1-ret)))
-               add-2-ret (au/<? (vivo/<add-subject-identifier!
-                                 vc new-identifier))
-               _ (is (= true add-2-ret))
-               remove-2-ret (au/<? (vivo/<remove-subject-identifier!
-                                    vc tu/test-identifier))
-               _ (is (= true remove-2-ret))
-               logout-ret (au/<? (vivo/<log-out! vc))
-               _ (is (= true logout-ret))
-               ;; Using old identifier fails
-               login-2-ret (au/<? (vivo/<log-in! vc tu/test-identifier
-                                                 tu/test-secret))
-               _ (is (= false login-2-ret))
-               ;; Using new identifier works
-               login-3-ret (au/<? (vivo/<log-in! vc new-identifier
-                                                 tu/test-secret))]
-           (is (string? (:token login-3-ret)))
-           (is (= tu/test-subject-id (:subject-id login-3-ret))))
-         (catch #?(:clj Exception :cljs js/Error) e
-           (is (= :unexpected e)))
-         (finally
-           (vivo/shutdown! vc)))))))
-
 (deftest test-authentication-and-authorization
   (au/test-async
    10000
@@ -408,10 +366,11 @@
          (let [login-ret1 (au/<? (vivo/<log-in! vc tu/test-identifier
                                                 tu/test-secret))
                _ (is (= false login-ret1))
-               sid (au/<? (vivo/<add-subject! vc tu/test-identifier
+               ret (au/<? (vivo/<add-subject! vc tu/test-identifier
                                               tu/test-secret
                                               tu/test-subject-id))
-               _ (is (string? sid))
+               _ (is (= tu/test-subject-id (:subject-id ret)))
+               _ (is (string? (:db-id ret)))
                app-name "test-app"
                ret (au/<? (vivo/<set-state! vc [:sys :app-name] app-name))
                _ (is (= true ret))
@@ -436,7 +395,9 @@
                _ (is (string? token))
                token-login-2-ret (au/<? (vivo/<log-in-w-token!
                                          vc token))
-               _ (is (= (u/sym-map subject-id token) token-login-2-ret))
+               _ (is (= subject-id (:subject-id token-login-2-ret)))
+               _ (is (= token (:token token-login-2-ret)))
+               _ (is (string? (:db-id token-login-2-ret)))
                _ (is (= 2 (au/<? (vivo/<rpc vc :authed/inc 1 10000))))
                _ (vivo/unsubscribe-from-state! vc "test")
                logout-ret (au/<? (vivo/<log-out! vc))
@@ -445,7 +406,9 @@
                                        vc token))
                _ (is (= false token-login-ret))])
          (catch #?(:clj Exception :cljs js/Error) e
-           (is (= :unexpected e)))
+           (is (= :unexpected e))
+           (log/error (str "Exception in test:\n"
+                           (u/ex-msg-and-stacktrace e))))
          (finally
            (vivo/shutdown! vc)
            (vivo/shutdown! vc2)))))))

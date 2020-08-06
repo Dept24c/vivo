@@ -53,8 +53,9 @@
   (<log-in-w-token [this arg metadata])
   (<log-out [this arg metadata])
   (<log-out-w-token [this token metadata])
-  (<modify-db [this <update-fn msg subject-id branch conn-id])
+  (<modify-db! [this <update-fn msg subject-id branch conn-id])
   (<remove-subject-identifier [this identifier metadata])
+  (<handle-request-db-changed-msg [this arg metadata])
   (<rpc [this arg metadata])
   (<set-state-source [this arg metadata])
   (<store-schema-pcf [this arg metadata])
@@ -350,7 +351,34 @@
       (au/<? (u/<delete-reference! storage branch-reference))
       true)))
 
-(defn <modify-db*
+(defn notify-conns!
+  [state-update? update-infos conn-id conn-ids db-id prev-db-id whole-state
+   state-schema redaction-fn vc-ep *conn-id->info]
+  ;; For update-state, notify all conns except the originator,
+  ;; who gets the information sent to them directly.
+  ;; This allows local+sys updates to be atomic.
+  (let [conn-ids* (if state-update?
+                    (disj (set conn-ids) conn-id)
+                    conn-ids)]
+    (ca/thread
+      (try
+        (doseq [conn-id* conn-ids*]
+          (let [{:keys [subject-id]} (@*conn-id->info conn-id*)
+                new-state (when whole-state
+                            (redaction-fn subject-id whole-state))
+                fp (l/fingerprint64 state-schema)
+                bytes (when whole-state
+                        (l/serialize state-schema new-state))
+                serialized-state (when whole-state
+                                   (u/sym-map fp bytes))
+                info (u/sym-map db-id prev-db-id serialized-state
+                                subject-id update-infos)]
+            (ep/send-msg vc-ep conn-id* :db-changed info)))
+        (catch Exception e
+          (log/error (str "Error in notify-conns!:\n"
+                          (u/ex-msg-and-stacktrace e))))))))
+
+(defn <modify-db!*
   [branch conn-id subject-id <update-fn msg redaction-fn
    state-schema vc-ep temp-storage perm-storage *branch->info *conn-id->info]
   (au/go
@@ -389,26 +417,16 @@
                                                  nil branch temp-storage
                                                  perm-storage))
               new-db-id (:new-data-id update-ret)
-              whole-db (:state uf-ret)]
+              whole-state (:state uf-ret)]
           (if (au/<? (u/<compare-and-set! dest-storage branch-reference
                                           l/string-schema
                                           prev-db-id
                                           new-db-id))
             (do
-              (when state-update?
-                ;; Notify all conns except the originator, who gets the
-                ;; information sent to them directly.
-                ;; This allows local+sys updates to be atomic.
-                (doseq [conn-id* (disj (set conn-ids) conn-id)]
-                  (let [subject-id* (:subject-id (@*conn-id->info conn-id*))
-                        new-db (redaction-fn subject-id* whole-db)
-                        fp (l/fingerprint64 state-schema)
-                        bytes (l/serialize state-schema new-db)
-                        new-serialized-db (u/sym-map fp bytes)
-                        info (u/sym-map new-db-id new-serialized-db
-                                        update-infos)]
-                    (ep/send-msg vc-ep conn-id* :sys-state-changed info))))
-              (u/sym-map new-db-id prev-db-id whole-db update-infos))
+              (notify-conns! state-update? update-infos conn-id conn-ids
+                             new-db-id prev-db-id whole-state state-schema
+                             redaction-fn vc-ep *conn-id->info)
+              (u/sym-map new-db-id prev-db-id whole-state update-infos))
             (if (zero? num-tries-left)
               (throw
                (ex-info (str "Failed to commit to branch `" branch-reference
@@ -427,15 +445,15 @@
         (if-let [info (.poll q)]
           (let [{:keys [cb branch conn-id subject-id <update-fn msg]} info]
             (try
-              (cb (au/<? (<modify-db* branch conn-id subject-id <update-fn msg
-                                      redaction-fn state-schema vc-ep
-                                      temp-storage perm-storage *branch->info
-                                      *conn-id->info)))
+              (cb (au/<? (<modify-db!* branch conn-id subject-id <update-fn msg
+                                       redaction-fn state-schema vc-ep
+                                       temp-storage perm-storage *branch->info
+                                       *conn-id->info)))
               (catch Exception e
                 (cb e))))
           (ca/<! (ca/timeout 5)))
         (catch Exception e
-          (log/error (str "Unexpected error in txn-loop: "
+          (log/error (str "Unexpected error in txn-loop:\n"
                           (u/ex-msg-and-stacktrace e))))))))
 
 (defn <ks-at-path [kw <get-at-path p full-path]
@@ -498,6 +516,7 @@
   [vs conn-id branch identifier secret login-identifier-case-sensitive?
    login-lifetime-mins *conn-id->info *subject-id->conn-ids]
   (au/go
+    (u/check-secret-len secret)
     (let [identifier* (if login-identifier-case-sensitive?
                         identifier
                         (str/lower-case identifier))
@@ -514,25 +533,27 @@
                             (au/<? (u/<get-in src-storage sid->hs-data-id
                                               u/string-map-schema
                                               [subject-id] nil))))]
-      (u/check-secret-len secret)
+
       (if-not (and hashed-secret
                    (bcrypt/check secret hashed-secret))
         {:subject-id nil
-         :token nil
-         :was-successful false}
+         :token nil}
         (let [token (generate-token)
               expiration-time-mins (+ (u/ms->mins (u/current-time-ms))
                                       login-lifetime-mins)
               token-info (u/sym-map expiration-time-mins subject-id)
-              was-successful true]
-          (when conn-id
-            (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
-            (swap! *subject-id->conn-ids update subject-id
-                   (fn [conn-ids]
-                     (conj (or conn-ids #{}) conn-id))))
-          (au/<? (<modify-db vs (partial <log-in-update-fn token token-info)
-                             "Log in" subject-id branch conn-id))
-          (u/sym-map subject-id token was-successful))))))
+              _ (when conn-id
+                  (swap! *conn-id->info update conn-id
+                         assoc :subject-id subject-id)
+                  (swap! *subject-id->conn-ids update subject-id
+                         (fn [conn-ids]
+                           (conj (or conn-ids #{}) conn-id))))
+              ret (au/<? (<modify-db! vs (partial <log-in-update-fn token
+                                                  token-info)
+                                      "Log in" subject-id branch conn-id))]
+          {:db-id (:new-db-id ret)
+           :subject-id subject-id
+           :token token})))))
 
 (defn <do-add-subject
   [vs identifier secret subject-id branch conn-id work-factor
@@ -542,12 +563,37 @@
     (let [hashed-secret (bcrypt/encrypt secret work-factor)
           identifier* (if login-identifier-case-sensitive?
                         identifier
-                        (str/lower-case identifier))]
-      (au/<? (<modify-db vs (partial <add-subject-update-fn subject-id
-                                     identifier* hashed-secret)
-                         (str "Add subject " subject-id)
-                         subject-id branch conn-id))
-      subject-id)))
+                        (str/lower-case identifier))
+          ret (au/<? (<modify-db! vs (partial <add-subject-update-fn subject-id
+                                              identifier* hashed-secret)
+                                  (str "Add subject " subject-id)
+                                  subject-id branch conn-id))]
+      {:db-id (:new-db-id ret)
+       :subject-id subject-id})))
+
+(defn <do-change-secret! [vs branch subject-id old-secret new-secret]
+  (au/go
+    (u/check-secret-len old-secret)
+    (u/check-secret-len new-secret)
+    (let [branch-reference (branch->reference branch)
+          storage (get-storage vs branch)
+          db-id (au/<? (u/<get-data-id storage branch-reference))
+          db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
+          {sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
+          hashed-old-secret (when (and subject-id old-secret)
+                              (au/<? (u/<get-in storage sid->hs-data-id
+                                                u/string-map-schema
+                                                [subject-id] nil)))
+          old-secret-ok? (if-not hashed-old-secret
+                           true
+                           (bcrypt/check old-secret hashed-old-secret))]
+      (if-not old-secret-ok?
+        false
+        (let [hashed-new-secret (bcrypt/encrypt new-secret work-factor)]
+          (-> (au/<? (<modify-db! vs (partial <change-secret-update-fn
+                                              hashed-new-secret)
+                                  "Change secret" subject-id branch nil))
+              :new-db-id))))))
 
 (defn <do-update-state
   [vs arg metadata authorization-fn redaction-fn state-schema *conn-id->info]
@@ -571,16 +617,19 @@
                               :else (recur new-i)))))]
       (if-not all-authed?
         :vivo/unauthorized
-        (let [ret (au/<? (<modify-db vs
-                                     (partial <update-state-update-fn
-                                              state-schema update-cmds)
-                                     "Update state" subject-id branch conn-id))
-              {:keys [new-db-id whole-db update-infos]} ret
-              new-db (redaction-fn subject-id whole-db)
+        (let [ret (au/<? (<modify-db! vs
+                                      (partial <update-state-update-fn
+                                               state-schema update-cmds)
+                                      "Update state" subject-id branch conn-id))
+              {:keys [new-db-id prev-db-id whole-state update-infos]} ret
+              state (redaction-fn subject-id whole-state)
               fp (l/fingerprint64 state-schema)
-              bytes (l/serialize state-schema new-db)
-              new-serialized-db (u/sym-map fp bytes)]
-          (u/sym-map new-db-id new-serialized-db update-infos))))))
+              bytes (l/serialize state-schema state)
+              serialized-state (u/sym-map fp bytes)]
+          {:db-id new-db-id
+           :prev-db-id prev-db-id
+           :serialized-state serialized-state
+           :update-infos update-infos})))))
 
 (defn <log-in-w-token* [vivo-server token metadata]
   (au/go
@@ -588,7 +637,7 @@
           {:keys [*conn-id->info *subject-id->conn-ids]} vivo-server
           {:keys [branch]} (@*conn-id->info conn-id)
           db-info (au/<? (<get-db-info vivo-server branch))
-          {:keys [token-to-token-info-data-id]} db-info
+          {:keys [token-to-token-info-data-id db-id]} db-info
           info (when token-to-token-info-data-id
                  (let [src-storage (get-storage vivo-server
                                                 token-to-token-info-data-id)]
@@ -599,18 +648,19 @@
                        (u/ms->mins))]
       (when info
         (if (>= now-mins expiration-time-mins)
-          (do
-            (au/<? (<modify-db vivo-server
-                               (partial <delete-token-update-fn token)
-                               "Delete expired token"
-                               subject-id branch conn-id))
-            nil)
+          (let [ret (au/<? (<modify-db! vivo-server
+                                        (partial <delete-token-update-fn token)
+                                        "Delete expired token"
+                                        subject-id branch conn-id))]
+            {:db-id (:new-db-id ret)
+             :subject-id nil
+             :token nil})
           (do
             (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
             (swap! *subject-id->conn-ids update subject-id
                    (fn [conn-ids]
                      (conj (or conn-ids #{}) conn-id)))
-            subject-id))))))
+            (u/sym-map db-id subject-id token)))))))
 
 (defn <set-state-source* [vivo-server source metadata]
   (au/go
@@ -633,23 +683,15 @@
                              vivo-server {:branch branch*
                                           :db-id (:temp-branch/db-id source)}
                              metadata))
-                     branch*))
-          db-id (au/<? (<get-db-id vivo-server branch))
-          db (au/<? (<get-in vivo-server db-id [:sys]))]
-      (if (= :vivo/unauthorized db)
-        :vivo/unauthorized
-        (let [fp (au/<? (u/<schema->fp perm-storage state-schema))
-              serialized-db (when db
-                              {:fp fp
-                               :bytes (l/serialize state-schema db)})]
-          (swap! *conn-id->info update conn-id assoc
-                 :branch branch :temp-branch? (not perm-branch))
-          (swap! *branch->info update branch
-                 (fn [{:keys [conn-ids] :as info}]
-                   (if conn-ids
-                     (update info :conn-ids conj conn-id)
-                     (assoc info :conn-ids #{conn-id}))))
-          (u/sym-map db-id serialized-db))))))
+                     branch*))]
+      (swap! *conn-id->info update conn-id assoc
+             :branch branch :temp-branch? (not perm-branch))
+      (swap! *branch->info update branch
+             (fn [{:keys [conn-ids] :as info}]
+               (if conn-ids
+                 (update info :conn-ids conj conn-id)
+                 (assoc info :conn-ids #{conn-id}))))
+      true)))
 
 (defn publish-msg* [vc-ep *conn-id->info arg metadata]
   (let [{:keys [conn-id]} metadata
@@ -676,7 +718,7 @@
                        *branch->info
                        *rpc->handler]
   IVivoServer
-  (<modify-db [this <update-fn msg subject-id branch conn-id]
+  (<modify-db! [this <update-fn msg subject-id branch conn-id]
     (au/go
       (let [modify-ch (ca/chan)
             cb #(ca/put! modify-ch %)
@@ -691,7 +733,9 @@
             dest-storage (get-storage this branch)
             db-id (au/<? (u/<get-data-id dest-storage branch-reference))
             src-storage (get-storage this db-id)]
-        (au/<? (u/<get-in src-storage db-id u/db-info-schema nil nil)))))
+        (-> (u/<get-in src-storage db-id u/db-info-schema nil nil)
+            (au/<?)
+            (assoc :db-id db-id)))))
 
   (<add-subject [this arg metadata]
     (let [{:keys [identifier secret subject-id]
@@ -715,13 +759,12 @@
                           (str/lower-case identifier))]
         (if-not subject-id
           false ;; Must be logged in
-          (do
-            (au/<? (<modify-db this
-                               (partial <add-subject-identifier-update-fn
-                                        identifier*)
-                               (str "Add subject indentifier `" identifier*)
-                               subject-id branch conn-id))
-            true)))))
+          (-> (au/<? (<modify-db! this
+                                  (partial <add-subject-identifier-update-fn
+                                           identifier*)
+                                  (str "Add subject indentifier `" identifier*)
+                                  subject-id branch conn-id))
+              :new-db-id)))))
 
   (<remove-subject-identifier [this identifier metadata]
     (au/go
@@ -740,37 +783,16 @@
                                 (= subject-id id-subject-id))]
         (if-not my-identifier?
           false
-          (do
-            (au/<? (<modify-db this
-                               (partial <remove-subject-identifier-update-fn
-                                        identifier*)
-                               (str "Remove subject indentifier `" identifier*)
-                               subject-id branch conn-id))
-            true)))))
+          (-> (<modify-db! this
+                           (partial <remove-subject-identifier-update-fn
+                                    identifier*)
+                           (str "Remove subject indentifier `" identifier*)
+                           subject-id branch conn-id)
+              (au/<?)
+              (:new-db-id))))))
 
   (<change-secret* [this branch subject-id old-secret new-secret]
-    (au/go
-      (u/check-secret-len old-secret)
-      (u/check-secret-len new-secret)
-      (let [branch-reference (branch->reference branch)
-            storage (get-storage this branch)
-            db-id (au/<? (u/<get-data-id storage branch-reference))
-            db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
-            {sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
-            hashed-old-secret (when (and subject-id old-secret)
-                                (au/<? (u/<get-in storage sid->hs-data-id
-                                                  u/string-map-schema
-                                                  [subject-id] nil)))
-            old-secret-ok? (if-not hashed-old-secret
-                             true
-                             (bcrypt/check old-secret hashed-old-secret))]
-        (if-not old-secret-ok?
-          false
-          (let [hashed-new-secret (bcrypt/encrypt new-secret work-factor)]
-            (au/<? (<modify-db this (partial <change-secret-update-fn
-                                             hashed-new-secret)
-                               "Change secret" subject-id branch nil))
-            true)))))
+    (<do-change-secret! this branch subject-id old-secret new-secret))
 
   (<change-secret [this arg metadata]
     (let [{:keys [old-secret new-secret]} arg
@@ -982,6 +1004,9 @@
           0))))
 
   (<get-state [this arg metadata]
+    ;; TODO: Figure this out for non-locally-cached state lookups
+    ;; Figure out how to unify authorization-fn and redaction-fn
+    #_
     (au/go
       (let [{:keys [path db-id]} arg
             {:keys [conn-id]} metadata
@@ -1032,13 +1057,8 @@
       (let [{:keys [conn-id]} metadata
             {:keys [subject-id branch]} (@*conn-id->info conn-id)
             conn-ids (@*subject-id->conn-ids subject-id)]
-        (au/<? (<modify-db this <log-out-update-fn "Log out"
-                           subject-id branch conn-id))
-        (ca/go
-          ;; Wait for `true` response to be rcvd before closing conns
-          (ca/<! (ca/timeout 5000))
-          (doseq [conn-id conn-ids]
-            (ep/close-conn vc-ep conn-id)))
+        (au/<? (<modify-db! this <log-out-update-fn "Log out"
+                            subject-id branch conn-id))
         true)))
 
   (<log-out-w-token [this token metadata]
@@ -1059,19 +1079,13 @@
                              (u/ms->mins))]
             (if (>= now-mins expiration-time-mins)
               (do
-                (au/<? (<modify-db this (partial <delete-token-update-fn token)
-                                   "Delete expired token"
-                                   subject-id branch conn-id))
+                (au/<? (<modify-db! this (partial <delete-token-update-fn token)
+                                    "Delete logged-out token"
+                                    subject-id branch conn-id))
                 false)
               (do
-                (au/<? (<modify-db this <log-out-update-fn "Log out"
-                                   subject-id branch conn-id))
-                ;; Wait for `true` response to be rcvd by clients
-                ;; before closing conns
-                (au/<? (ca/timeout 5000))
-                (doseq [conn-id conn-ids]
-                  (log/info (str "Closing conn " conn-id))
-                  (ep/close-conn vc-ep conn-id))
+                (au/<? (<modify-db! this <log-out-update-fn "Log out"
+                                    subject-id branch conn-id))
                 true)))))))
 
   (<set-state-source [this source metadata]
@@ -1125,6 +1139,24 @@
             {:fp (au/<? (u/<schema->fp perm-storage ret-schema))
              :bytes (l/serialize ret-schema ret)})))))
 
+  (<handle-request-db-changed-msg [this arg metadata]
+    (au/go
+      (let [{:keys [conn-id]} metadata
+            {:keys [subject-id branch]} (@*conn-id->info conn-id)
+            db-id (au/<? (<get-db-id this branch))
+            [whole-state xp] (au/<? (<get-state-and-expanded-path
+                                     this db-id [:sys]))
+            new-state (when whole-state
+                        (redaction-fn subject-id whole-state))
+            fp (l/fingerprint64 state-schema)
+            bytes (when new-state
+                    (l/serialize state-schema new-state))
+            serialized-state (u/sym-map fp bytes)
+            info (-> (u/sym-map db-id serialized-state subject-id)
+                     (assoc :prev-db-id db-id)
+                     (assoc :update-infos []))]
+        (ep/send-msg vc-ep conn-id :db-changed info))))
+
   (<scmds->cmds [this scmds conn-id]
     (au/go
       (if-not (seq scmds)
@@ -1156,9 +1188,9 @@
                   (recur (nth scmds new-i) new-i new-out)))))))))
 
   (<update-db [this update-cmds msg subject-id branch]
-    (<modify-db this (partial <update-state-update-fn
-                              state-schema update-cmds)
-                "Update db" subject-id branch nil))
+    (<modify-db! this (partial <update-state-update-fn
+                               state-schema update-cmds)
+                 "Update db" subject-id branch nil))
 
   (<update-state [this arg metadata]
     (<do-update-state this arg metadata authorization-fn redaction-fn
@@ -1270,6 +1302,8 @@
                   (partial publish-msg vivo-server))
   (ep/set-handler vc-ep :remove-subject-identifier
                   (partial <remove-subject-identifier vivo-server))
+  (ep/set-handler vc-ep :request-db-changed-msg
+                  (partial <handle-request-db-changed-msg vivo-server))
   (ep/set-handler vc-ep :rpc (partial <rpc vivo-server))
   (ep/set-handler vc-ep :set-state-source
                   (partial <set-state-source vivo-server))
@@ -1342,6 +1376,7 @@
                                   *subject-id->conn-ids
                                   *branch->info
                                   *rpc->handler)]
+    (au/<?? (<store-schema-pcf vivo-server (l/pcf state-schema) nil))
     (start-modify-db-loop modify-q redaction-fn state-schema vc-ep temp-storage
                           perm-storage *branch->info *conn-id->info)
     (set-handlers! vivo-server vc-ep admin-ep)

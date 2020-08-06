@@ -298,7 +298,8 @@
                   independent-pairs ordered-dependent-pairs db local-state
                   *subject-id)
             {:keys [state expanded-paths]} sxps]
-        (make-applied-update-fn* state-sub-name state expanded-paths *state-sub-name->info))
+        (make-applied-update-fn* state-sub-name state expanded-paths
+                                 *state-sub-name->info))
       #(ca/go
          (try
            ;; TODO: Implement. Follow synchronous patterns.
@@ -313,7 +314,8 @@
    (fn [acc state-sub-name]
      (let [{:keys [react?]} (@*state-sub-name->info state-sub-name)
            update-fn* (make-applied-update-fn state-sub-name db local-state
-                                              *state-sub-name->info *subject-id)]
+                                              *state-sub-name->info
+                                              *subject-id)]
        (cond
          (not update-fn*)
          acc
@@ -338,10 +340,10 @@
      #(doseq [rf react-update-fns]
         (rf)))))
 
-(defn start-subscription-update-loop! [subs-update-ch]
+(defn start-subscription-update-loop! [subscription-state-update-ch]
   (ca/go-loop []
     (try
-      (let [info (au/<? subs-update-ch)
+      (let [info (au/<? subscription-state-update-ch)
             {:keys [db local-state update-infos
                     cb *state-sub-name->info *subject-id]} info]
         (-> (get-state-sub-names-to-update update-infos *state-sub-name->info)
@@ -355,8 +357,8 @@
     (recur)))
 
 (defn subscribe-to-state!
-  [state-sub-name sub-map update-fn opts sys-state-source
-   *stopped? *state-sub-name->info *sys-db-info *local-state *subject-id]
+  [state-sub-name sub-map update-fn opts *stopped? *state-sub-name->info
+   *sys-db-info *local-state *subject-id]
   (when-not (string? state-sub-name)
     (throw (ex-info
             (str "The `state-sub-name` argument to `subscribe!` "

@@ -96,13 +96,13 @@
   (u/logged-in? vc))
 
 (defn <log-in!
-  "If successful, returns a map with :subject-id and :token keys,
+  "If successful, returns a map with :subject-id, :token, and :db-id keys,
    otherwise returns false."
   [vc identifier secret]
   (u/<log-in! vc identifier secret))
 
 (defn <log-in-w-token!
-  "If successful, returns a map with :subject-id and :token keys,
+  "If successful, returns a map with :subject-id, :token, and :db-id keys,
    otherwise returns false."
   [vc token]
   (u/<log-in-w-token! vc token))

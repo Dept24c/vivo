@@ -54,7 +54,7 @@
   (<add-subject-identifier! [this identifier])
   (<change-secret! [this old-secret new-secret])
   (<deserialize-value [this path ret])
-  (<handle-sys-state-changed [this arg metadata])
+  (<handle-db-changed [this arg metadata])
   (<get-subject-id-for-identifier [this identifier])
   (get-subscription-info [this sub-name])
   (<log-in! [this identifier secret])
@@ -65,6 +65,9 @@
   (next-instance-num! [this])
   (<remove-subject-identifier! [this identifier])
   (<rpc [this rpc-name-kw arg timeout-ms])
+  (<send-msg
+    [this msg-name msg]
+    [this msg-name msg timeout-ms])
   (shutdown! [this])
   (subscribe-to-state! [this sub-name sub-map update-fn opts])
   (unsubscribe-from-state! [this sub-name])
@@ -309,30 +312,32 @@
   [:norm-path path-schema]
   [:op op-schema])
 
-(l/def-record-schema sys-state-change-schema
-  [:new-db-id db-id-schema]
-  [:new-serialized-db serialized-value-schema]
+(l/def-record-schema db-change-schema
+  [:db-id db-id-schema]
+  [:prev-db-id db-id-schema]
+  [:serialized-state serialized-value-schema]
+  [:subject-id subject-id-schema]
   [:update-infos (l/array-schema update-info-schema)])
 
-(l/def-record-schema sys-state-info-schema
-  [:db-id db-id-schema]
-  [:serialized-db serialized-value-schema])
-
 (def update-state-ret-schema
-  (l/union-schema [l/null-schema unauthorized-schema sys-state-change-schema]))
+  (l/union-schema [unauthorized-schema db-change-schema]))
 
 (l/def-record-schema log-in-arg-schema
   [:identifier identifier-schema]
   [:secret secret-schema])
 
 (l/def-record-schema log-in-ret-schema
-  [:subject-id (l/maybe subject-id-schema)]
-  [:token (l/maybe token-schema)]
-  [:was-successful l/boolean-schema])
+  [:db-id db-id-schema]
+  [:subject-id subject-id-schema]
+  [:token (l/maybe token-schema)])
 
 (l/def-record-schema add-subject-arg-schema
   [:identifier identifier-schema]
   [:secret secret-schema]
+  [:subject-id subject-id-schema])
+
+(l/def-record-schema add-subject-ret-schema
+  [:db-id db-id-schema]
   [:subject-id subject-id-schema])
 
 (l/def-record-schema token-info-schema
@@ -388,22 +393,22 @@
 (def client-server-protocol
   {:roles [:client :server]
    :msgs {:add-subject {:arg add-subject-arg-schema
-                        :ret subject-id-schema
+                        :ret add-subject-ret-schema
                         :sender :client}
           :add-subject-identifier {:arg l/string-schema
-                                   :ret l/boolean-schema
+                                   :ret (l/union-schema [l/boolean-schema
+                                                         db-id-schema])
                                    :sender :client}
           :change-secret {:arg change-secret-arg-schema
-                          :ret l/boolean-schema
+                          :ret db-id-schema
                           :sender :client}
+          :db-changed {:arg db-change-schema
+                       :sender :server}
           :get-schema-pcf {:arg l/long-schema
                            :ret (l/maybe l/string-schema)
                            :sender :either}
-          :store-schema-pcf {:arg l/string-schema
-                             :ret l/boolean-schema
-                             :sender :client}
           :get-state {:arg get-state-arg-schema
-                      :ret (l/maybe get-state-ret-schema)
+                      :ret get-state-ret-schema
                       :sender :client}
           :get-subject-id-for-identifier {:arg l/string-schema
                                           :ret (l/maybe subject-id-schema)
@@ -412,7 +417,7 @@
                    :ret log-in-ret-schema
                    :sender :client}
           :log-in-w-token {:arg token-schema
-                           :ret (l/maybe subject-id-schema)
+                           :ret log-in-ret-schema
                            :sender :client}
           :log-out {:arg l/null-schema
                     :ret l/boolean-schema
@@ -424,18 +429,21 @@
                         :ret l/boolean-schema
                         :sender :either}
           :remove-subject-identifier {:arg identifier-schema
-                                      :ret l/boolean-schema
+                                      :ret (l/union-schema [l/boolean-schema
+                                                            db-id-schema])
                                       :sender :client}
+          :request-db-changed-msg {:arg l/null-schema
+                                   :ret l/null-schema
+                                   :sender :client}
           :rpc {:arg rpc-arg-schema
                 :ret rpc-ret-schema
                 :sender :client}
           :set-state-source {:arg state-source-schema
-                             :ret (l/union-schema
-                                   [sys-state-info-schema
-                                    unauthorized-schema])
+                             :ret l/boolean-schema
                              :sender :client}
-          :sys-state-changed {:arg sys-state-change-schema
-                              :sender :server}
+          :store-schema-pcf {:arg l/string-schema
+                             :ret l/boolean-schema
+                             :sender :client}
           ;; We need to return the state change from :update-state so
           ;; sys+local updates remain atomic
           :update-state {:arg serializable-update-commands-schema
