@@ -353,20 +353,20 @@
 
 (defn notify-conns!
   [state-update? update-infos conn-id conn-ids db-id prev-db-id whole-state
-   state-schema redaction-fn vc-ep *conn-id->info]
+   state-schema redaction-fn vc-ep perm-storage *conn-id->info]
   ;; For update-state, notify all conns except the originator,
   ;; who gets the information sent to them directly.
   ;; This allows local+sys updates to be atomic.
   (let [conn-ids* (if state-update?
                     (disj (set conn-ids) conn-id)
                     conn-ids)]
-    (ca/thread
+    (ca/go
       (try
         (doseq [conn-id* conn-ids*]
           (let [{:keys [subject-id]} (@*conn-id->info conn-id*)
                 new-state (when whole-state
                             (redaction-fn subject-id whole-state))
-                fp (l/fingerprint64 state-schema)
+                fp (au/<? (u/<schema->fp perm-storage state-schema))
                 bytes (when whole-state
                         (l/serialize state-schema new-state))
                 serialized-state (when whole-state
@@ -425,7 +425,7 @@
             (do
               (notify-conns! state-update? update-infos conn-id conn-ids
                              new-db-id prev-db-id whole-state state-schema
-                             redaction-fn vc-ep *conn-id->info)
+                             redaction-fn vc-ep perm-storage *conn-id->info)
               (u/sym-map new-db-id prev-db-id whole-state update-infos))
             (if (zero? num-tries-left)
               (throw
@@ -596,7 +596,8 @@
               :new-db-id))))))
 
 (defn <do-update-state
-  [vs arg metadata authorization-fn redaction-fn state-schema *conn-id->info]
+  [vs arg metadata authorization-fn redaction-fn state-schema perm-storage
+   *conn-id->info]
   (au/go
     (let [{:keys [conn-id]} metadata
           {:keys [subject-id branch]} (@*conn-id->info conn-id)
@@ -623,7 +624,7 @@
                                       "Update state" subject-id branch conn-id))
               {:keys [new-db-id prev-db-id whole-state update-infos]} ret
               state (redaction-fn subject-id whole-state)
-              fp (l/fingerprint64 state-schema)
+              fp (au/<? (u/<schema->fp perm-storage state-schema))
               bytes (l/serialize state-schema state)
               serialized-state (u/sym-map fp bytes)]
           {:db-id new-db-id
@@ -1148,7 +1149,7 @@
                                      this db-id [:sys]))
             new-state (when whole-state
                         (redaction-fn subject-id whole-state))
-            fp (l/fingerprint64 state-schema)
+            fp (au/<? (u/<schema->fp perm-storage state-schema))
             bytes (when new-state
                     (l/serialize state-schema new-state))
             serialized-state (u/sym-map fp bytes)
@@ -1194,7 +1195,7 @@
 
   (<update-state [this arg metadata]
     (<do-update-state this arg metadata authorization-fn redaction-fn
-                      state-schema *conn-id->info))
+                      state-schema perm-storage *conn-id->info))
 
   (<get-schema-pcf [this fp metadata]
     (au/go
