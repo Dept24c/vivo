@@ -69,8 +69,8 @@
      :clj (throw (ex-info "js-object? is not supported in clj." {}))))
 
 (defn do-state-updates!*
-  [vc update-info msg-info cb* subscription-state-update-ch <fp->schema
-   sys-state-schema *sys-db-info *local-state *state-sub-name->info *subject-id]
+  [vc update-info cb* subscription-state-update-ch <fp->schema
+   sys-state-schema subject-id *sys-db-info *local-state *state-sub-name->info ]
   (ca/go
     (try
       (let [{:keys [sys-cmds local-cmds]} update-info
@@ -79,8 +79,8 @@
                       (when-let [ret (au/<? (u/<update-sys-state vc sys-cmds))]
                         (if (= :vivo/unauthorized ret)
                           ret
-                          (let [{:keys [db-id prev-db-id serialized-state
-                                        subject-id update-infos]} ret
+                          (let [{:keys [db-id prev-db-id
+                                        serialized-state update-infos]} ret
                                 {:keys [fp bytes]} serialized-state
                                 writer-schema (au/<? (<fp->schema fp))
                                 db (l/deserialize sys-state-schema
@@ -111,9 +111,8 @@
                       db (or (:db sys-ret)
                              (:db @*sys-db-info))]
                   (ca/put! subscription-state-update-ch
-                           (u/sym-map db local-state update-infos cb
-                                      msg-info *state-sub-name->info
-                                      *subject-id)))
+                           (u/sym-map db local-state subject-id
+                                      update-infos cb *state-sub-name->info)))
                 (if (< num-attempts max-commit-attempts)
                   (recur (inc num-attempts))
                   (cb (ex-info (str "Failed to commit updates after "
@@ -139,9 +138,9 @@
                 (ca/<! (ca/timeout 100))
                 (recur (dec tries-remaining)))))))
 
-(defn <do-login!*
-  [capsule-client identifier secret token wait-for-init? *token *stopped?
-   *conn-initialized?]
+(defn <do-login!
+  [capsule-client identifier secret token wait-for-init? set-subject-id!
+   *token *stopped? *conn-initialized?]
   (when secret
     (u/check-secret-len secret))
   (au/go
@@ -152,11 +151,62 @@
                                      :secret secret}]
                            [:log-in-w-token token])
           ret (au/<? (cc/<send-msg capsule-client msg-name arg))]
-      (if (:subject-id ret)
+      (if-let [token (:token ret)] ; Successful login
         (do
           (reset! *token (:token ret))
           ret)
         false))))
+
+(defn <do-logout!
+  [capsule-client token set-subject-id! *token]
+  (au/go
+    (reset! *token nil)
+    (set-subject-id! nil) ; Do this explicitly in case we aren't connected
+    (au/<? (if token
+             (cc/<send-msg capsule-client :log-out-w-token token)
+             (cc/<send-msg capsule-client :log-out nil)))
+    ;; Don't need to request a :db-changed msg here because :log-out will
+    ;; generate one if we are connected. If we aren't connected,
+    ;; the request would fail anyway.
+    ))
+
+(defn <handle-db-changed*
+  [arg metadata local-state local-db-id local-subject-id <fp->schema
+   sys-state-schema subscription-state-update-ch *conn-initialized?
+   *sys-db-info *state-sub-name->info *subject-id]
+  (ca/go
+    (try
+      (let [{:keys [db-id prev-db-id serialized-state subject-id]} arg
+            {:keys [fp bytes]} serialized-state
+            writer-schema (when fp
+                            (au/<? (<fp->schema fp)))
+            missed-update? (not= local-db-id prev-db-id)
+            subject-id-changed? (not= local-subject-id subject-id)
+            update-infos (cond-> (:update-infos arg)
+                           missed-update?
+                           (conj {:norm-path [:sys]
+                                  :op :set})
+
+                           subject-id-changed?
+                           (conj {:norm-path [:vivo/subject-id]
+                                  :op :set}))
+            db (when (and writer-schema bytes)
+                 (l/deserialize sys-state-schema writer-schema bytes))
+            cb (fn [_]
+                 (reset! *conn-initialized? true))]
+        (log/info (str "Got :db-changed msg. New db-id: " db-id))
+        ;; If db is nil, it means it didn't change from previous
+        (swap! *sys-db-info (fn [old]
+                              (cond-> (assoc old :db-id db-id)
+                                db (assoc :db db))))
+        (when subject-id-changed?
+          (reset! *subject-id subject-id))
+        (ca/put! subscription-state-update-ch
+                 (u/sym-map db local-state update-infos cb
+                            *state-sub-name->info subject-id)))
+      (catch #?(:cljs js/Error :clj Throwable) e
+        (log/error (str "Exception in <handle-db-changed: "
+                        (u/ex-msg-and-stacktrace e)))))))
 
 (defrecord VivoClient [capsule-client
                        path->schema-cache
@@ -223,18 +273,18 @@
               (l/deserialize value-sch writer-sch (:bytes ret))))))))
 
   (<log-in! [this identifier secret]
-    (<do-login!* capsule-client identifier secret nil true *token *stopped?
-                 *conn-initialized?))
+    (<do-login! capsule-client identifier secret nil true set-subject-id! *token
+                *stopped? *conn-initialized?))
 
   (<log-in-w-token! [this token]
-    (<do-login!* capsule-client nil nil token true *token *stopped?
-                 *conn-initialized?))
+    (<do-login! capsule-client nil nil token true set-subject-id! *token
+                *stopped? *conn-initialized?))
 
   (<log-out! [this]
-    (u/<send-msg this :log-out nil))
+    (<do-logout! capsule-client nil set-subject-id! *token))
 
   (<log-out-w-token! [this token]
-    (u/<send-msg this :log-out-w-token token))
+    (<do-logout! capsule-client token set-subject-id! *token))
 
   (logged-in? [this]
     (boolean @*subject-id))
@@ -250,8 +300,8 @@
 
   (subscribe-to-state! [this state-sub-name sub-map update-fn opts]
     (state-subscriptions/subscribe-to-state!
-     state-sub-name sub-map update-fn opts *stopped? *state-sub-name->info
-     *sys-db-info *local-state *subject-id))
+     state-sub-name sub-map update-fn opts @*sys-db-info @*local-state
+     @*subject-id *stopped? *state-sub-name->info))
 
   (unsubscribe-from-state! [this state-sub-name]
     (swap! *state-sub-name->info dissoc state-sub-name)
@@ -274,10 +324,10 @@
         (cb (ex-info "The update-cmds parameter must be a sequence."
                      (u/sym-map update-cmds)))))
     (let [update-info (make-update-info update-cmds)]
-      (do-state-updates!* this update-info nil cb subscription-state-update-ch
+      (do-state-updates!* this update-info cb subscription-state-update-ch
                           #(u/<fp->schema this %) sys-state-schema
-                          *sys-db-info *local-state
-                          *state-sub-name->info *subject-id))
+                          @*subject-id *sys-db-info *local-state
+                          *state-sub-name->info))
     nil)
 
   (<update-sys-state [this sys-cmds]
@@ -320,39 +370,10 @@
               [i scmd]))))))
 
   (<handle-db-changed [this arg metadata]
-    (ca/go
-      (try
-        (let [{:keys [db-id prev-db-id serialized-state subject-id]} arg
-              {:keys [fp bytes]} serialized-state
-              writer-schema (when fp
-                              (au/<? (u/<fp->schema this fp)))
-              local-db-id (:db-id @*sys-db-info)
-              ;; If we missed any db updates, or if subject-id has changed,
-              ;; we update all subscriptions
-              update-infos (if (or (not= local-db-id prev-db-id)
-                                   (not= @*subject-id subject-id))
-                             [{:norm-path [:sys]
-                               :op :set}]
-                             (:update-infos arg))
-              db (when (and writer-schema bytes)
-                   (l/deserialize sys-state-schema writer-schema bytes))
-              local-state @*local-state
-              cb (fn [_]
-                   (reset! *conn-initialized? true))]
-          (log/info (str "Got :db-changed msg. New db-id: " db-id))
-          (reset! *subject-id subject-id)
-          (when (nil? subject-id)
-            (reset! *token nil))
-          ;; If db is nil, it means it didn't change from previous
-          (swap! *sys-db-info (fn [old]
-                                (cond-> (assoc old :db-id db-id)
-                                  db (assoc :db db))))
-          (ca/put! subscription-state-update-ch
-                   (u/sym-map db local-state update-infos cb
-                              *state-sub-name->info *subject-id)))
-        (catch #?(:cljs js/Error :clj Throwable) e
-          (log/error (str "Exception in <handle-db-changed: "
-                          (u/ex-msg-and-stacktrace e)))))))
+    (<handle-db-changed* arg metadata @*local-state (:db-id @*sys-db-info)
+                         @*subject-id #(u/<fp->schema this %) sys-state-schema
+                         subscription-state-update-ch *conn-initialized?
+                         *sys-db-info *state-sub-name->info *subject-id))
 
   (<send-msg [this msg-name msg]
     (u/<send-msg this msg-name msg default-send-msg-timeout-ms))
@@ -427,7 +448,7 @@
             (l/deserialize ret-schema w-schema bytes)))))))
 
 (defn <on-connect
-  [opts-on-connect sys-state-source *conn-initialized? *sys-db-info *vc
+  [opts-on-connect sys-state-source set-subject-id! *conn-initialized? *vc
    *stopped? *token capsule-client]
   (when-not @*stopped?
     (ca/go
@@ -436,8 +457,9 @@
         (let [vc @*vc]
           ;; Either of these generate a :request-db-changed-msg.
           (if-let [token @*token]
-            (au/<? (<do-login!* capsule-client nil nil token false *token
-                                *stopped? *conn-initialized?))
+            (au/<? (<do-login! capsule-client nil nil token false
+                               set-subject-id! *token *stopped?
+                               *conn-initialized?))
             (au/<? (cc/<send-msg capsule-client :request-db-changed-msg nil)))
           (au/<? (u/<wait-for-conn-init vc))
           (when opts-on-connect
@@ -491,12 +513,25 @@
   (let [get-credentials (constantly {:subject-id "vivo-client"
                                      :subject-secret ""})
         opts {:on-connect (partial <on-connect opts-on-connect sys-state-source
-                                   *conn-initialized? *sys-db-info *vc
+                                   set-subject-id! *conn-initialized? *vc
                                    *stopped? *token)
               :on-disconnect (partial on-disconnect opts-on-disconnect
                                       *conn-initialized? set-subject-id!)}]
     (cc/client get-server-url get-credentials
                u/client-server-protocol :client opts)))
+
+(defn set-handlers! [vc capsule-client *fp->schema]
+  (cc/set-handler capsule-client :db-changed
+                  (partial u/<handle-db-changed vc))
+  (cc/set-handler capsule-client :get-schema-pcf
+                  (fn [fp metadata]
+                    (if-let [schema (@*fp->schema fp)]
+                      (l/pcf schema)
+                      (do
+                        (log/error
+                         (str "Could not find PCF for fingerprint `"
+                              fp "`."))
+                        nil)))))
 
 (defn vivo-client [opts]
   (let [{:keys [get-server-url
@@ -532,8 +567,8 @@
                                 local-state @*local-state]
                             (ca/put! subscription-state-update-ch
                                      (u/sym-map db local-state update-infos
-                                                *state-sub-name->info
-                                                *subject-id)))
+                                                subject-id
+                                                *state-sub-name->info)))
                           nil)
         _ (when rpcs
             (u/check-rpcs rpcs))
@@ -567,15 +602,5 @@
     (state-subscriptions/start-subscription-update-loop!
      subscription-state-update-ch)
     (when get-server-url
-      (cc/set-handler capsule-client :db-changed
-                      (partial u/<handle-db-changed vc))
-      (cc/set-handler capsule-client :get-schema-pcf
-                      (fn [fp metadata]
-                        (if-let [schema (@*fp->schema fp)]
-                          (l/pcf schema)
-                          (do
-                            (log/error
-                             (str "Could not find PCF for fingerprint `"
-                                  fp "`."))
-                            nil)))))
+      (set-handlers! vc capsule-client *fp->schema))
     vc))

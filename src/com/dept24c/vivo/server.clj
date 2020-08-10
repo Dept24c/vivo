@@ -514,7 +514,7 @@
 
 (defn <do-login
   [vs conn-id branch identifier secret login-identifier-case-sensitive?
-   login-lifetime-mins *conn-id->info *subject-id->conn-ids]
+   login-lifetime-mins *conn-id->info *branch->info]
   (au/go
     (u/check-secret-len secret)
     (let [identifier* (if login-identifier-case-sensitive?
@@ -545,7 +545,10 @@
               _ (when conn-id
                   (swap! *conn-id->info update conn-id
                          assoc :subject-id subject-id)
-                  (swap! *subject-id->conn-ids update subject-id
+                  (swap! *branch->info
+                         update branch
+                         update :subject-id->conn-ids
+                         update subject-id
                          (fn [conn-ids]
                            (conj (or conn-ids #{}) conn-id))))
               ret (au/<? (<modify-db! vs (partial <log-in-update-fn token
@@ -554,6 +557,24 @@
           {:db-id (:new-db-id ret)
            :subject-id subject-id
            :token token})))))
+
+(defn <log-out-subject!
+  [vs subject-id branch *branch->info *conn-id->info]
+  (au/go
+    (let [conn-ids (some-> (@*branch->info branch)
+                           (:subject-id->conn-ids)
+                           (get subject-id))]
+      (swap! *branch->info
+             update branch
+             update :subject-id->conn-ids
+             dissoc subject-id)
+      (doseq [conn-id conn-ids]
+        (swap! *conn-id->info
+               update conn-id
+               dissoc :subject-id)
+        (au/<? (<modify-db! vs <log-out-update-fn "Log out"
+                            subject-id branch nil)))
+      true)))
 
 (defn <do-add-subject
   [vs identifier secret subject-id branch conn-id work-factor
@@ -635,7 +656,7 @@
 (defn <log-in-w-token* [vivo-server token metadata]
   (au/go
     (let [{:keys [conn-id]} metadata
-          {:keys [*conn-id->info *subject-id->conn-ids]} vivo-server
+          {:keys [*conn-id->info *branch->info]} vivo-server
           {:keys [branch]} (@*conn-id->info conn-id)
           db-info (au/<? (<get-db-info vivo-server branch))
           {:keys [token-to-token-info-data-id db-id]} db-info
@@ -658,7 +679,10 @@
              :token nil})
           (do
             (swap! *conn-id->info update conn-id assoc :subject-id subject-id)
-            (swap! *subject-id->conn-ids update subject-id
+            (swap! *branch->info
+                   update branch
+                   update :subject-id->conn-ids
+                   update subject-id
                    (fn [conn-ids]
                      (conj (or conn-ids #{}) conn-id)))
             (u/sym-map db-id subject-id token)))))))
@@ -715,7 +739,6 @@
                        stop-server
                        temp-storage
                        *conn-id->info
-                       *subject-id->conn-ids
                        *branch->info
                        *rpc->handler]
   IVivoServer
@@ -1042,7 +1065,7 @@
   (<log-in* [this identifier secret minutes-valid conn-id branch]
     (<do-login this conn-id branch identifier secret
                login-identifier-case-sensitive? minutes-valid
-               *conn-id->info *subject-id->conn-ids))
+               *conn-id->info *branch->info))
 
   (<log-in [this arg metadata]
     (let [{:keys [identifier secret]} arg
@@ -1054,13 +1077,9 @@
     (<log-in-w-token* this token metadata))
 
   (<log-out [this arg metadata]
-    (au/go
-      (let [{:keys [conn-id]} metadata
-            {:keys [subject-id branch]} (@*conn-id->info conn-id)
-            conn-ids (@*subject-id->conn-ids subject-id)]
-        (au/<? (<modify-db! this <log-out-update-fn "Log out"
-                            subject-id branch conn-id))
-        true)))
+    (let [{:keys [conn-id]} metadata
+          {:keys [subject-id branch]} (@*conn-id->info conn-id)]
+      (<log-out-subject! this subject-id branch *branch->info *conn-id->info)))
 
   (<log-out-w-token [this token metadata]
     (au/go
@@ -1074,20 +1093,9 @@
                                      u/token-map-schema [token] nil)))]
         (if-not info
           false
-          (let [{:keys [subject-id expiration-time-mins]} info
-                conn-ids (@*subject-id->conn-ids subject-id)
-                now-mins (-> (u/current-time-ms)
-                             (u/ms->mins))]
-            (if (>= now-mins expiration-time-mins)
-              (do
-                (au/<? (<modify-db! this (partial <delete-token-update-fn token)
-                                    "Delete logged-out token"
-                                    subject-id branch conn-id))
-                false)
-              (do
-                (au/<? (<modify-db! this <log-out-update-fn "Log out"
-                                    subject-id branch conn-id))
-                true)))))))
+          (let [{:keys [subject-id]} info]
+            (au/<? (<log-out-subject! this subject-id branch
+                                      *branch->info *conn-id->info)))))))
 
   (<set-state-source [this source metadata]
     (<set-state-source* this source metadata))
@@ -1257,22 +1265,18 @@
     (u/check-rpcs rpcs)))
 
 (defn on-disconnect
-  [*conn-id->info *subject-id->conn-ids *branch->info temp-storage
-   {:keys [conn-id] :as conn-info}]
+  [*conn-id->info *branch->info temp-storage {:keys [conn-id] :as conn-info}]
   (ca/go
     (try
       (let [{:keys [branch subject-id temp-branch?]} (@*conn-id->info conn-id)]
         (swap! *conn-id->info dissoc conn-id)
-        (swap! *branch->info update branch update :conn-ids disj conn-id)
-        (swap! *subject-id->conn-ids
-               (fn [m]
-                 (let [new-conn-ids (disj (m subject-id) conn-id)]
-                   (if (seq new-conn-ids)
-                     (assoc m subject-id new-conn-ids)
-                     (dissoc m subject-id)))))
+        (swap! *branch->info update branch
+               (fn [info]
+                 (-> info
+                     (update :conn-ids disj conn-id)
+                     (update :subject-id->conn-ids dissoc subject-id))))
         (when temp-branch?
-          (au/<? (<delete-branch* branch temp-storage)))
-        (log/info (str "Client disconnected (conn-info: " conn-info ").")))
+          (au/<? (<delete-branch* branch temp-storage))))
       (catch Throwable e
         (log/error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
                         (u/ex-msg-and-stacktrace e)))))))
@@ -1346,11 +1350,10 @@
         modify-q (ConcurrentLinkedQueue.)
         path->schema-cache (sr/stockroom 1000)
         *conn-id->info (atom {})
-        *subject-id->conn-ids (atom {})
         *branch->info (atom {})
         *rpc->handler (atom {})
         vc-ep-opts {:on-disconnect (partial on-disconnect *conn-id->info
-                                            *subject-id->conn-ids *branch->info
+                                            *branch->info
                                             temp-storage)}
         vc-ep (ep/endpoint "vivo-client" (constantly true)
                            u/client-server-protocol :server vc-ep-opts)
@@ -1374,7 +1377,6 @@
                                   stop-server
                                   temp-storage
                                   *conn-id->info
-                                  *subject-id->conn-ids
                                   *branch->info
                                   *rpc->handler)]
     (au/<?? (<store-schema-pcf vivo-server (l/pcf state-schema) nil))

@@ -993,7 +993,7 @@
          (is (= :unexpected e)))))))
 
 (deftest test-get-synchronous-state-and-expanded-paths
-  (let [*subject-id (atom nil)
+  (let [subject-id nil
         independent-pairs [['page [:local :page]]
                            ['subject-id [:vivo/subject-id]]]
         ordered-dependent-pairs []
@@ -1001,7 +1001,7 @@
         local-state {:page :frobnozzle}
         ret (state-subscriptions/get-synchronous-state-and-expanded-paths
              independent-pairs ordered-dependent-pairs
-             db local-state *subject-id)
+             db local-state subject-id)
         {:keys [state expanded-paths]} ret
         expected-state {'page :frobnozzle
                         'subject-id nil}
@@ -1009,14 +1009,13 @@
                                  [:vivo/subject-id]]
         _ (is (= expected-state state))
         _ (is (= expected-expanded-paths expanded-paths))
-        _ (reset! *subject-id "AAAA")
-        ret (state-subscriptions/get-synchronous-state-and-expanded-paths
-             independent-pairs ordered-dependent-pairs
-             db local-state *subject-id)
-        {:keys [state expanded-paths]} ret
-        expected-state {'page :frobnozzle
-                        'subject-id "AAAA"}
-        expected-expanded-paths [[:local :page]
-                                 [:vivo/subject-id]]
-        _ (is (= expected-state state))
-        _ (is (= expected-expanded-paths expanded-paths))]))
+        subject-id2 "AAAA"
+        ret2 (state-subscriptions/get-synchronous-state-and-expanded-paths
+              independent-pairs ordered-dependent-pairs
+              db local-state subject-id2)
+        expected-state2 {'page :frobnozzle
+                         'subject-id "AAAA"}
+        expected-expanded-paths2 [[:local :page]
+                                  [:vivo/subject-id]]
+        _ (is (= expected-state2 (:state ret2)))
+        _ (is (= expected-expanded-paths2 (:expanded-paths ret2)))]))

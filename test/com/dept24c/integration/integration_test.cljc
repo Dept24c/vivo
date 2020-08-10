@@ -134,7 +134,7 @@
          (finally
            (vivo/shutdown! vc)))))))
 
-(deftest ^:this test-sequence-join
+(deftest test-sequence-join
   (au/test-async
    10000
    (ca/go

@@ -159,7 +159,7 @@
          :value seqs})))
     (apply concat seqs)))
 
-(defn get-value-and-expanded-paths [state path prefix *subject-id]
+(defn get-value-and-expanded-paths [state path prefix subject-id]
   ;; TODO: Optimize this. Only traverse the path once.
   (let [last-path-k (last path)
         join? (u/has-join? path)
@@ -173,7 +173,7 @@
       [nil [path]]
 
       (= [:vivo/subject-id] path)
-      [@*subject-id [path]]
+      [subject-id [path]]
 
       (and (not terminal-kw?) (not join?))
       (let [{:keys [norm-path val]} (commands/get-in-state state path prefix)]
@@ -200,7 +200,7 @@
                  i 0]
             (let [path* (nth xpaths i)
                   ret (get-value-and-expanded-paths
-                       state path* prefix *subject-id)
+                       state path* prefix subject-id)
                   new-out (conj out (first ret))
                   new-i (inc i)]
               (if (not= num-results new-i)
@@ -219,7 +219,7 @@
                                i 0]
                           (let [path* (nth xpaths i)
                                 ret (get-value-and-expanded-paths
-                                     state path* prefix *subject-id)
+                                     state path* prefix subject-id)
                                 new-out (conj out (first ret))
                                 new-i (inc i)]
                             (if (not= num-results new-i)
@@ -259,7 +259,7 @@
           true pairs))
 
 (defn get-synchronous-state-and-expanded-paths
-  [independent-pairs ordered-dependent-pairs db local-state *subject-id]
+  [independent-pairs ordered-dependent-pairs db local-state subject-id]
   (let [reducer* (fn [resolve-path? acc [sym path]]
                    (if-not (in-db-cache? path)
                      (reduced {:state :vivo/unknown})
@@ -267,7 +267,7 @@
                                                resolve-path?)
                            {:keys [state-src resolved-path head]} info
                            [v xps] (get-value-and-expanded-paths
-                                    state-src resolved-path head *subject-id)]
+                                    state-src resolved-path head subject-id)]
                        (-> acc
                            (update :state assoc sym v)
                            (update :expanded-paths concat xps)))))
@@ -289,14 +289,14 @@
           (update-fn new-state))))))
 
 (defn make-applied-update-fn
-  [state-sub-name db local-state *state-sub-name->info *subject-id]
+  [state-sub-name db local-state *state-sub-name->info subject-id]
   (let [sub-info (@*state-sub-name->info state-sub-name)
         {:keys [independent-pairs ordered-dependent-pairs update-fn]} sub-info]
     (if (and (cached? independent-pairs)
              (cached? ordered-dependent-pairs))
       (let [sxps (get-synchronous-state-and-expanded-paths
                   independent-pairs ordered-dependent-pairs db local-state
-                  *subject-id)
+                  subject-id)
             {:keys [state expanded-paths]} sxps]
         (make-applied-update-fn* state-sub-name state expanded-paths
                                  *state-sub-name->info))
@@ -309,13 +309,13 @@
                              (u/ex-msg-and-stacktrace e)))))))))
 
 (defn get-update-fn-info
-  [state-sub-names db local-state *state-sub-name->info *subject-id]
+  [state-sub-names db local-state *state-sub-name->info subject-id]
   (reduce
    (fn [acc state-sub-name]
      (let [{:keys [react?]} (@*state-sub-name->info state-sub-name)
            update-fn* (make-applied-update-fn state-sub-name db local-state
                                               *state-sub-name->info
-                                              *subject-id)]
+                                              subject-id)]
        (cond
          (not update-fn*)
          acc
@@ -330,9 +330,9 @@
    state-sub-names))
 
 (defn update-subs!
-  [state-sub-names db local-state *state-sub-name->info *subject-id]
+  [state-sub-names db local-state *state-sub-name->info subject-id]
   (let [update-fn-info (get-update-fn-info state-sub-names db local-state
-                                           *state-sub-name->info *subject-id)
+                                           *state-sub-name->info subject-id)
         {:keys [react-update-fns non-react-update-fns]} update-fn-info]
     (doseq [f non-react-update-fns]
       (f))
@@ -344,11 +344,11 @@
   (ca/go-loop []
     (try
       (let [info (au/<? subscription-state-update-ch)
-            {:keys [db local-state update-infos
-                    cb *state-sub-name->info *subject-id]} info]
+            {:keys [db local-state subject-id update-infos
+                    cb *state-sub-name->info]} info]
         (-> (get-state-sub-names-to-update update-infos *state-sub-name->info)
             (order-by-lineage *state-sub-name->info)
-            (update-subs! db local-state *state-sub-name->info *subject-id))
+            (update-subs! db local-state *state-sub-name->info subject-id))
         (when cb
           (cb true)))
       (catch #?(:cljs js/Error :clj Exception) e
@@ -357,8 +357,8 @@
     (recur)))
 
 (defn subscribe-to-state!
-  [state-sub-name sub-map update-fn opts *stopped? *state-sub-name->info
-   *sys-db-info *local-state *subject-id]
+  [state-sub-name sub-map update-fn opts sys-db-info local-state subject-id
+   *stopped? *state-sub-name->info]
   (when-not (string? state-sub-name)
     (throw (ex-info
             (str "The `state-sub-name` argument to `subscribe!` "
@@ -369,13 +369,12 @@
           map-info (u/sub-map->map-info sub-map resolution-map)
           {:keys [independent-pairs ordered-dependent-pairs]} map-info
           parents (set (:parents opts))
-          db (:db @*sys-db-info)
-          local-state @*local-state]
+          db (:db sys-db-info)]
       (if (and (cached? independent-pairs)
                (cached? ordered-dependent-pairs))
         (let [sxps (get-synchronous-state-and-expanded-paths
                     independent-pairs ordered-dependent-pairs db local-state
-                    *subject-id)
+                    subject-id)
               {:keys [expanded-paths]} sxps
               state (select-keys (:state sxps) (keys sub-map))
               info (u/sym-map independent-pairs ordered-dependent-pairs
@@ -384,6 +383,6 @@
           state)
         (do ;; TODO: Implement
           #_(let [f (make-applied-update-fn state-sub-name db local-state
-                                            *state-sub-name->info *subject-id)]
+                                            *state-sub-name->info subject-id)]
               (f)
               :vivo/unknown)))))) ;; async update will happen later via update-fn
