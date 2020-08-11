@@ -150,12 +150,14 @@
                            [:log-in {:identifier identifier
                                      :secret secret}]
                            [:log-in-w-token token])
-          ret (au/<? (cc/<send-msg capsule-client msg-name arg))]
-      (if-let [token (:token ret)] ; Successful login
+          ret (au/<? (cc/<send-msg capsule-client msg-name arg))
+          {:keys [token subject-id]} ret]
+      (if-not subject-id
+        false
         (do
-          (reset! *token (:token ret))
-          ret)
-        false))))
+          (set-subject-id! subject-id)
+          (reset! *token token)
+          ret)))))
 
 (defn <do-logout!
   [capsule-client token set-subject-id! *token]
@@ -180,7 +182,7 @@
             {:keys [fp bytes]} serialized-state
             writer-schema (when fp
                             (au/<? (<fp->schema fp)))
-            missed-update? (not= local-db-id prev-db-id)
+            missed-update? (and (not= local-db-id prev-db-id))
             subject-id-changed? (not= local-subject-id subject-id)
             update-infos (cond-> (:update-infos arg)
                            missed-update?
@@ -194,10 +196,12 @@
                  (l/deserialize sys-state-schema writer-schema bytes))
             cb (fn [_]
                  (reset! *conn-initialized? true))]
-        (log/info (str "Got :db-changed msg. New db-id: " db-id))
-        ;; If db is nil, it means it didn't change from previous
+        (log/info (str "Got :db-changed msg.\n"
+                       (u/pprint-str
+                        (u/sym-map db-id subject-id))))
         (swap! *sys-db-info (fn [old]
                               (cond-> (assoc old :db-id db-id)
+                                ;; If db is nil, it means it didn't change
                                 db (assoc :db db))))
         (when subject-id-changed?
           (reset! *subject-id subject-id))

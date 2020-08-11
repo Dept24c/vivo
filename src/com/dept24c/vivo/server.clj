@@ -328,7 +328,7 @@
           {:keys [new-data-id update-infos state]} ret]
       {:dbi (assoc dbi :data-id new-data-id)
        :update-infos update-infos
-       :state-update? true
+       :update-state-rpc? true
        :state state})))
 
 (defn <delete-branch* [branch storage]
@@ -352,12 +352,12 @@
       true)))
 
 (defn notify-conns!
-  [state-update? update-infos conn-id conn-ids db-id prev-db-id whole-state
+  [update-state-rpc? update-infos conn-id conn-ids db-id prev-db-id whole-state
    state-schema redaction-fn vc-ep perm-storage *conn-id->info]
   ;; For update-state, notify all conns except the originator,
   ;; who gets the information sent to them directly.
   ;; This allows local+sys updates to be atomic.
-  (let [conn-ids* (if state-update?
+  (let [conn-ids* (if update-state-rpc?
                     (disj (set conn-ids) conn-id)
                     conn-ids)]
     (ca/go
@@ -401,7 +401,7 @@
               {:keys [num-prev-dbs data-id]} prev-dbi
               uf-ret (au/<? (<update-fn prev-dbi subject-id branch temp-storage
                                         perm-storage))
-              {:keys [dbi update-infos state-update?]} uf-ret
+              {:keys [dbi update-infos update-state-rpc?]} uf-ret
               new-dbi (assoc dbi
                              :msg msg
                              :timestamp-ms (u/current-time-ms)
@@ -423,7 +423,7 @@
                                           prev-db-id
                                           new-db-id))
             (do
-              (notify-conns! state-update? update-infos conn-id conn-ids
+              (notify-conns! update-state-rpc? update-infos conn-id conn-ids
                              new-db-id prev-db-id whole-state state-schema
                              redaction-fn vc-ep perm-storage *conn-id->info)
               (u/sym-map new-db-id prev-db-id whole-state update-infos))
@@ -653,7 +653,9 @@
            :serialized-state serialized-state
            :update-infos update-infos})))))
 
-(defn <log-in-w-token* [vivo-server token metadata]
+(defn <log-in-w-token*
+  [vivo-server state-schema redaction-fn vc-ep perm-storage token metadata
+   *conn-id->info]
   (au/go
     (let [{:keys [conn-id]} metadata
           {:keys [*conn-id->info *branch->info]} vivo-server
@@ -685,7 +687,19 @@
                    update subject-id
                    (fn [conn-ids]
                      (conj (or conn-ids #{}) conn-id)))
-            (u/sym-map db-id subject-id token)))))))
+            ;; When subject-id changes but not the db, we need to send a new db
+            ;; with the results of the redaction-fn. db-id doesn't change.
+            (let [update-infos [{:norm-path [:sys]
+                                 :op :set}
+                                {:norm-path [:vivo/subject-id]
+                                 :op :set}]
+                  db-id (au/<? (<get-db-id vivo-server branch))
+                  whole-state (first (au/<? (<get-state-and-expanded-path
+                                             vivo-server db-id [:sys])))]
+              (notify-conns! false update-infos conn-id [conn-id]
+                             db-id db-id whole-state state-schema
+                             redaction-fn vc-ep perm-storage *conn-id->info)
+              (u/sym-map db-id subject-id token))))))))
 
 (defn <set-state-source* [vivo-server source metadata]
   (au/go
@@ -1074,7 +1088,8 @@
       (<log-in* this identifier secret login-lifetime-mins conn-id branch)))
 
   (<log-in-w-token [this token metadata]
-    (<log-in-w-token* this token metadata))
+    (<log-in-w-token* this state-schema redaction-fn vc-ep perm-storage
+                      token metadata *conn-id->info))
 
   (<log-out [this arg metadata]
     (let [{:keys [conn-id]} metadata
