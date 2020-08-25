@@ -75,7 +75,6 @@
   (publish-to-topic! [this scope topic-name msg])
   (<update-cmd->serializable-update-cmd [this i cmds])
   (update-state! [this update-cmds cb])
-  (<update-sys-state [this update-commands])
   (<wait-for-conn-init [this]))
 
 (defprotocol IDataStorage

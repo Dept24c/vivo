@@ -60,69 +60,104 @@
            :update-infos []}
           cmds))
 
-(defn atom? [x]
-  #?(:clj (instance? clojure.lang.IAtom x)
-     :cljs (satisfies? IAtom x)))
+(defn update-cmds-match? [ucs1 ucs2]
+  (if (not= (count ucs1) (count ucs2))
+    false
+    (reduce (fn [acc i]
+              (let [uc1 (nth ucs1 i)
+                    uc2 (nth ucs2 i)]
+                (if (= (dissoc uc1 :value) (dissoc uc2 :value))
+                  acc
+                  (reduced false))))
+            true (range (count ucs1)))))
 
-(defn js-object? [v]
-  #?(:cljs (object? v)
-     :clj (throw (ex-info "js-object? is not supported in clj." {}))))
+(defn do-sys-updates!
+  [capsule-client sys-cmds local-sys-update-infos sys-state-schema
+   <fp->schema <update-cmd->suc <update-sys-state! update-subs! *sys-db-info]
+  (ca/go
+    (try
+      (when-not capsule-client
+        (throw (ex-info (str "Can't update :sys state because the "
+                             ":get-server-url option was not provided when the "
+                             "vivo-client was created.")
+                        {})))
+      (catch #?(:cljs js/Error :clj Throwable) e
+        (log/error (u/ex-msg-and-stacktrace e))))
+    (let [ch (ca/merge (map-indexed <update-cmd->suc sys-cmds))
+          ;; Use i->v map to preserve original command order
+          sucs-map (au/<? (ca/reduce (fn [acc v]
+                                       (if (instance? #?(:cljs js/Error
+                                                         :clj Throwable) v)
+                                         (reduced v)
+                                         (let [[i suc] v]
+                                           (assoc acc i suc))))
+                                     {} ch))
+          _ (when (instance? #?(:cljs js/Error :clj Throwable) sucs-map)
+              (throw sucs-map))
+          sucs (keep sucs-map (range (count sys-cmds)))
+          ret (au/<? (<update-sys-state! sucs))
+          {:keys [db-id prev-db-id serialized-state update-infos]} ret]
+      (if (update-cmds-match? local-sys-update-infos update-infos)
+        (swap! *sys-db-info assoc :db-id db-id)
+        (let [{:keys [fp bytes]} serialized-state
+              writer-schema (au/<? (<fp->schema fp))
+              db (l/deserialize sys-state-schema writer-schema bytes)]
+          (reset! *sys-db-info (u/sym-map db db-id))
+          (update-subs! db update-infos))))))
 
+;; TODO: Handle failed sys update (offline data may obviate this need)
 (defn do-state-updates!*
   [vc update-info cb* subscription-state-update-ch <fp->schema
    sys-state-schema subject-id *sys-db-info *local-state *state-sub-name->info ]
-  (ca/go
-    (try
-      (let [{:keys [sys-cmds local-cmds]} update-info
-            cb (or cb* (constantly nil))
-            sys-ret (when (seq sys-cmds)
-                      (when-let [ret (au/<? (u/<update-sys-state vc sys-cmds))]
-                        (if (= :vivo/unauthorized ret)
-                          ret
-                          (let [{:keys [db-id prev-db-id
-                                        serialized-state update-infos]} ret
-                                {:keys [fp bytes]} serialized-state
-                                writer-schema (au/<? (<fp->schema fp))
-                                db (l/deserialize sys-state-schema
-                                                  writer-schema bytes)
-                                local-db-id (:db-id @*sys-db-info)
-                                ;; If we missed any updates, we update all
-                                ;; subscriptions
-                                update-infos* (if (= local-db-id prev-db-id)
-                                                update-infos
-                                                [{:norm-path [:sys]
-                                                  :op :set}])]
-                            (log/info (str "Updated state. New db-id: "
-                                           db-id))
-                            (reset! *sys-db-info (u/sym-map db-id db))
-                            {:update-infos update-infos
-                             :db db}))))]
-        (if (and (seq sys-cmds)
-                 (or (not sys-ret)
-                     (= :vivo/unauthorized sys-ret)))
-          (cb sys-ret) ;; Don't do local/sub updates if sys updates failed
-          (loop [num-attempts 1]
-            (let [cur-local-state @*local-state
-                  local-ret (eval-cmds cur-local-state local-cmds :local)
-                  local-state (:state local-ret)]
-              (if (compare-and-set! *local-state cur-local-state local-state)
-                (let [update-infos (concat (:update-infos sys-ret)
-                                           (:update-infos local-ret))
-                      db (or (:db sys-ret)
-                             (:db @*sys-db-info))]
-                  (ca/put! subscription-state-update-ch
-                           (u/sym-map db local-state subject-id
-                                      update-infos cb *state-sub-name->info)))
-                (if (< num-attempts max-commit-attempts)
-                  (recur (inc num-attempts))
-                  (cb (ex-info (str "Failed to commit updates after "
-                                    num-attempts " attempts.")
-                               (u/sym-map max-commit-attempts
-                                          sys-cmds local-cmds)))))))))
-      (catch #?(:cljs js/Error :clj Throwable) e
-        (log/error (u/ex-msg-and-stacktrace e))
-        (when cb*
-          (cb* e)))))
+  (let [{:keys [sys-cmds local-cmds]} update-info
+        cb (or cb* (constantly nil))
+        sys-ret (when (seq sys-cmds)
+                  (let [sys-ret (eval-cmds (:db @*sys-db-info)
+                                           sys-cmds :sys)
+                        {:keys [state update-infos]} sys-ret
+                        <update-cmd->suc (partial
+                                          u/<update-cmd->serializable-update-cmd
+                                          vc)
+                        <update-sys-state! #(u/<send-msg vc :update-state %)
+                        update-subs! (fn [db* update-infos*]
+                                       (ca/put! subscription-state-update-ch
+                                                {:db db*
+                                                 :local-state @*local-state
+                                                 :subject-id subject-id
+                                                 :update-infos update-infos*
+                                                 :cb (constantly nil)
+                                                 :*state-sub-name->info
+                                                 *state-sub-name->info}))]
+                    (do-sys-updates! (:capsule-client vc) sys-cmds update-infos
+                                     sys-state-schema <fp->schema
+                                     <update-cmd->suc <update-sys-state!
+                                     update-subs! *sys-db-info)
+                    {:db state
+                     :update-infos update-infos}))]
+    (if (and (seq sys-cmds)
+             (or (not sys-ret)
+                 (= :vivo/unauthorized sys-ret)))
+      (cb sys-ret) ;; Don't do local/sub updates if sys updates failed
+      (loop [num-attempts 1]
+        (let [cur-local-state @*local-state
+              local-ret (eval-cmds cur-local-state local-cmds :local)
+              local-state (:state local-ret)]
+          (if (compare-and-set! *local-state cur-local-state local-state)
+            (let [update-infos (concat (:update-infos sys-ret)
+                                       (:update-infos local-ret))
+                  db (or (:db sys-ret)
+                         (:db @*sys-db-info))]
+              (swap! *sys-db-info assoc :db db)
+              (ca/put! subscription-state-update-ch
+                       (u/sym-map db local-state subject-id
+                                  update-infos cb *state-sub-name->info)))
+            (if (< num-attempts max-commit-attempts)
+              (recur (inc num-attempts))
+              (cb (ex-info (str "Failed to commit updates after "
+                                num-attempts " attempts.")
+                           (u/sym-map max-commit-attempts
+                                      sys-cmds local-cmds)))))))))
+
   nil)
 
 (defn <wait-for-conn-init* [*stopped? *conn-initialized?]
@@ -197,8 +232,7 @@
             cb (fn [_]
                  (reset! *conn-initialized? true))]
         (log/info (str "Got :db-changed msg.\n"
-                       (u/pprint-str
-                        (u/sym-map db-id subject-id))))
+                       (u/pprint-str (u/sym-map db-id subject-id))))
         (swap! *sys-db-info (fn [old]
                               (cond-> (assoc old :db-id db-id)
                                 ;; If db is nil, it means it didn't change
@@ -334,29 +368,6 @@
                           *state-sub-name->info))
     nil)
 
-  (<update-sys-state [this sys-cmds]
-    (au/go
-      (when-not capsule-client
-        (throw
-         (ex-info (str "Can't update :sys state because the :get-server-url "
-                       "option was not provided when the vivo-client was "
-                       "created.") {})))
-      (let [ch (ca/merge
-                (map-indexed
-                 #(u/<update-cmd->serializable-update-cmd this %1 %2)
-                 sys-cmds))
-            ;; Use i->v map to preserve original command order
-            sucs-map (au/<? (ca/reduce (fn [acc v]
-                                         (if (instance? #?(:cljs js/Error
-                                                           :clj Throwable) v)
-                                           (reduced v)
-                                           (let [[i suc] v]
-                                             (assoc acc i suc))))
-                                       {} ch))
-            _ (when (instance? #?(:cljs js/Error :clj Throwable) sucs-map)
-                (throw sucs-map))
-            sucs (keep sucs-map (range (count sys-cmds)))]
-        (au/<? (u/<send-msg this :update-state sucs)))))
 
   (<update-cmd->serializable-update-cmd [this i cmd]
     (au/go
