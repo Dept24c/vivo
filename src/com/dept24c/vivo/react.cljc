@@ -106,7 +106,7 @@
 ;;;; Custom Hooks
 
 (defn use-vivo-state
-  "React hook for Vivo.
+  "React hook for Vivo state subscriptions.
    Note that the component-name parameter must be unique for each invocation."
   ([vc sub-map component-name]
    (use-vivo-state vc sub-map component-name {} []))
@@ -133,6 +133,16 @@
             (do
               (u/unsubscribe-from-state! vc component-name)
               (subscribe*!))))))))
+
+(defn use-topic-subscription
+  "React hook for Vivo topic subscriptions."
+  [vc scope topic-name cb]
+  #?(:cljs
+     (let [unsub! (u/subscribe-to-topic! vc scope topic-name cb)
+           cleanup-effect (fn []
+                            unsub!)]
+       (use-effect cleanup-effect #js [])
+       unsub!)))
 
 ;;;;;;;;;;;;;;;;;;;; Macro runtime helpers ;;;;;;;;;;;;;;;;;;;;
 ;; Emitted code calls these fns
