@@ -149,8 +149,9 @@
 
 (defn do-concat [state path prefix]
   (let [seqs (:val (commands/get-in-state state path prefix))]
-    (when (or (not (sequential? seqs))
-              (not (sequential? (first seqs))))
+    (when (and (not (nil? seqs))
+               (or (not (sequential? seqs))
+                   (not (sequential? (first seqs)))))
       (throw
        (ex-info
         (str "`:vivo/concat` terminates path, but there "

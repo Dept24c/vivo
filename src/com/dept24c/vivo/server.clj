@@ -500,8 +500,9 @@
 (defn <do-concat [<get-at-path p full-path]
   (au/go
     (let [seqs (au/<? (<get-at-path p))]
-      (when (or (not (sequential? seqs))
-                (not (sequential? (first seqs))))
+      (when (and (not (nil? seqs))
+                 (or (not (sequential? seqs))
+                     (not (sequential? (first seqs)))))
         (throw
          (ex-info
           (str "`:vivo/concat` terminates path, but there "
