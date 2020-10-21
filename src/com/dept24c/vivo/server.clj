@@ -18,6 +18,7 @@
    [deercreeklabs.capsule.logging :as log]
    [deercreeklabs.capsule.server :as cs]
    [deercreeklabs.lancaster :as l]
+   [deercreeklabs.tube.connection :as tc]
    [deercreeklabs.stockroom :as sr])
   (:import
    (clojure.lang ExceptionInfo)
@@ -1281,21 +1282,23 @@
     (u/check-rpcs rpcs)))
 
 (defn on-disconnect
-  [*conn-id->info *branch->info temp-storage {:keys [conn-id] :as conn-info}]
+  [*conn-id->info *branch->info temp-storage tube-conn code reason conn-count]
   (ca/go
-    (try
-      (let [{:keys [branch subject-id temp-branch?]} (@*conn-id->info conn-id)]
-        (swap! *conn-id->info dissoc conn-id)
-        (swap! *branch->info update branch
-               (fn [info]
-                 (-> info
-                     (update :conn-ids disj conn-id)
-                     (update :subject-id->conn-ids dissoc subject-id))))
-        (when temp-branch?
-          (au/<? (<delete-branch* branch temp-storage))))
-      (catch Throwable e
-        (log/error (str "Error in on-disconnect (conn-info: " conn-info ")\n"
-                        (u/ex-msg-and-stacktrace e)))))))
+    (let [conn-id (when tube-conn (tc/get-conn-id tube-conn))]
+      (try
+        (let [conn-info (@*conn-id->info conn-id)
+              {:keys [branch subject-id temp-branch?]} conn-info]
+          (swap! *conn-id->info dissoc conn-id)
+          (swap! *branch->info update branch
+                 (fn [info]
+                   (-> info
+                       (update :conn-ids disj conn-id)
+                       (update :subject-id->conn-ids dissoc subject-id))))
+          (when temp-branch?
+            (au/<? (<delete-branch* branch temp-storage))))
+        (catch Throwable e
+          (log/error (str "Error in on-disconnect (conn-id: " conn-id ")\n"
+                          (u/ex-msg-and-stacktrace e))))))))
 
 (defn <get-subject-id-for-identifier* [vivo-server identifier metadata]
   (let [{:keys [branch]} (@(:*conn-id->info vivo-server) (:conn-id metadata))]
