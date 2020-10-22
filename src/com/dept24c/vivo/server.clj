@@ -294,8 +294,7 @@
                                    u/subject-id-to-tokens-schema
                                    [subject-id]
                                    nil))
-          new-tokens (-> (set tokens)
-                         (disj token))
+          new-tokens (remove #(= token %) tokens)
           new-dbi (assoc dbi
                          :token-to-token-info-data-id
                          (:new-data-id
