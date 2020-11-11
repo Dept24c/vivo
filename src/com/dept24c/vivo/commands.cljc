@@ -1,7 +1,8 @@
 (ns com.dept24c.vivo.commands
   (:require
    [com.dept24c.vivo.utils :as u]
-   [deercreeklabs.async-utils :as au]))
+   [deercreeklabs.async-utils :as au]
+   [deercreeklabs.capsule.logging :as log]))
 
 (defn throw-bad-path-key [path k]
   (let [disp-k (or k "nil")]
@@ -84,8 +85,14 @@
   (let [parent-path (butlast path)
         k (last path)
         {:keys [norm-path val]} (get-in-state state parent-path prefix)
-        [new-parent path-k] (if (map? val)
+        [new-parent path-k] (cond
+                              (nil? val)
+                              [nil k]
+
+                              (map? val)
                               [(dissoc val k) k]
+
+                              :else
                               (let [norm-i (if (nat-int? k)
                                              k
                                              (+ (count val) k))
@@ -98,8 +105,14 @@
         state-path (if prefix
                      (rest norm-path)
                      norm-path)
-        new-state (if (empty? state-path)
+        new-state (cond
+                    (nil? new-parent)
+                    state
+
+                    (empty? state-path)
                     new-parent
+
+                    :else
                     (assoc-in state state-path new-parent))]
     {:state new-state
      :update-info {:norm-path (conj norm-path path-k)
