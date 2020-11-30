@@ -279,7 +279,7 @@
 
 (l/def-record-schema serialized-value-schema
   [:fp :required fp-schema]
-  [:bytes :required l/bytes-schema])
+  [:bytes l/bytes-schema])
 
 (l/def-record-schema serializable-update-command-schema
   [:path path-schema]
