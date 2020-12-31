@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-clj -M:dev:run-test-server
+clj -M:clj:dev:run-test-server

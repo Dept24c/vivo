@@ -1,2 +1,2 @@
 #!/usr/bin/env bash
-clj -M:test:dev -m kaocha.runner "$@"
+clj -M:clj:test:dev -m kaocha.runner "$@"
