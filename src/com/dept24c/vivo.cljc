@@ -11,7 +11,6 @@
 
 #?(:clj
    (defn vivo-server
-     "Returns a no-arg fn that stops the server."
      [config]
      (server/vivo-server config)))
 

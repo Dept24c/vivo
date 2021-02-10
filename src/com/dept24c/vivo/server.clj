@@ -916,8 +916,7 @@
                                   temp-storage u/all-branches-reference
                                   u/all-branches-schema nil nil))
             all-branches (concat perm-branches temp-branches)]
-        (when (seq all-branches)
-          all-branches))))
+        (seq all-branches))))
 
   (<get-db-id [this branch]
     (let [storage (get-storage this branch)

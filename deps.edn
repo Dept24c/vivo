@@ -1,10 +1,10 @@
 {:deps
  {binaryage/oops {:mvn/version "0.7.0"}
-  com.cognitect.aws/api {:mvn/version "0.8.484"}
+  com.cognitect.aws/api {:mvn/version "0.8.498"}
   com.cognitect.aws/dynamodb {:mvn/version "810.2.801.0"}
-  com.cognitect.aws/endpoints {:mvn/version "1.1.11.926"}
+  com.cognitect.aws/endpoints {:mvn/version "1.1.11.946"}
   crypto-password/crypto-password {:mvn/version "0.2.1"}
-  deercreeklabs/capsule {:mvn/version "0.4.33"}
+  deercreeklabs/capsule {:mvn/version "0.4.34"}
   deercreeklabs/stockroom {:mvn/version "0.3.5"}
   mvxcvi/puget {:mvn/version "1.3.1"}
   org.slf4j/slf4j-nop {:mvn/version "RELEASE"}
@@ -16,17 +16,17 @@
              "clojars" {:url "https://repo.clojars.org/"}}
 
  :aliases
- {:cider-clj {:extra-deps {cider/cider-nrepl {:mvn/version "0.25.5"}}
+ {:cider-clj {:extra-deps {cider/cider-nrepl {:mvn/version "0.25.8"}}
               :main-opts ["-m" "nrepl.cmdline" "--middleware"
                           "[cider.nrepl/cider-middleware]"]}
 
-  :cider-cljs {:extra-deps {cider/cider-nrepl {:mvn/version "0.25.5"}
+  :cider-cljs {:extra-deps {cider/cider-nrepl {:mvn/version "0.25.8"}
                             cider/piggieback {:mvn/version "0.5.2"}}
                :main-opts
                ["-m" "nrepl.cmdline" "--middleware"
                 "[cider.nrepl/cider-middleware,cider.piggieback/wrap-cljs-repl]"]}
 
-  :clj {:extra-deps {org.clojure/clojure {:mvn/version "1.10.1"}}}
+  :clj {:extra-deps {org.clojure/clojure {:mvn/version "1.10.2"}}}
 
   :cljs {:extra-deps {org.clojure/clojurescript {:mvn/version "1.10.773"}}}
 
