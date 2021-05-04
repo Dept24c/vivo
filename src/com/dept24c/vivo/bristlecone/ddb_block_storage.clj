@@ -48,8 +48,9 @@
                                               "ResourceNotFoundException")
                                (str/includes? (:__type ret)
                                               "ValidationException")))
-                (-> ret :Attributes :v :N Long/parseLong
-                    block-ids/block-num->block-id)
+                (when-let [ret-att-v-n (-> ret :Attributes :v :N)]
+                  (-> ret-att-v-n Long/parseLong
+                      block-ids/block-num->block-id))
                 (let [arg {:op :PutItem
                            :request {:TableName table-name
                                      :Item {"k" {:S last-block-num-key}
