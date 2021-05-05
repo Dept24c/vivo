@@ -390,7 +390,8 @@
                          perm-storage)]
       ;; Use loop to stay in go block
       (loop [num-tries-left (dec num-tries)]
-        (let [prev-db-id (au/<? (u/<get-data-id dest-storage branch-reference))
+        (let [prev-db-id (when (and dest-storage branch-reference)
+                             (au/<? (u/<get-data-id dest-storage branch-reference)))
               src-storage (cond
                             (nil? prev-db-id) nil
                             (str/starts-with? prev-db-id "-") temp-storage
@@ -599,7 +600,8 @@
     (u/check-secret-len new-secret)
     (let [branch-reference (branch->reference branch)
           storage (get-storage vs branch)
-          db-id (au/<? (u/<get-data-id storage branch-reference))
+          db-id (when (and storage branch-reference)
+                    (au/<? (u/<get-data-id storage branch-reference)))
           db-info (au/<? (u/<get-in storage db-id u/db-info-schema nil nil))
           {sid->hs-data-id :subject-id-to-hashed-secret-data-id} db-info
           hashed-old-secret (when (and subject-id old-secret)
@@ -923,7 +925,8 @@
   (<get-db-id [this branch]
     (let [storage (get-storage this branch)
           branch-reference (branch->reference branch)]
-      (u/<get-data-id storage branch-reference)))
+      (when (and storage branch-reference)
+          (u/<get-data-id storage branch-reference))))
 
   (<get-in [this db-id path]
     (au/go
