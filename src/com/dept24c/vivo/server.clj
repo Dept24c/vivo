@@ -765,16 +765,18 @@
             _ (.add ^ConcurrentLinkedQueue modify-q update-info)
             change-info (au/<? modify-ch)]
         change-info)))
-
+  
   (<get-db-info [this branch]
     (au/go
       (let [branch-reference (branch->reference branch)
             dest-storage (get-storage this branch)
-            db-id (au/<? (u/<get-data-id dest-storage branch-reference))
+            db-id (when (and dest-storage branch-reference)
+                      (au/<? (u/<get-data-id dest-storage branch-reference)))
             src-storage (get-storage this db-id)]
-        (-> (u/<get-in src-storage db-id u/db-info-schema nil nil)
-            (au/<?)
-            (assoc :db-id db-id)))))
+        (when (and src-storage db-id)
+            (some-> (u/<get-in src-storage db-id u/db-info-schema nil nil)
+                    (au/<?)
+                    (assoc :db-id db-id))))))
 
   (<add-subject [this arg metadata]
     (let [{:keys [identifier secret subject-id]
