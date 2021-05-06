@@ -49,7 +49,7 @@
                                (str/includes? (:__type ret)
                                               "ValidationException")))
                 (-> ret :Attributes :v :N Long/parseLong
-                    block-ids/block-num->block-id)
+                        block-ids/block-num->block-id)
                 (let [arg {:op :PutItem
                            :request {:TableName table-name
                                      :Item {"k" {:S last-block-num-key}
