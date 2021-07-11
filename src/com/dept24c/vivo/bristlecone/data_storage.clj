@@ -2,6 +2,8 @@
   (:require
    [clojure.core.async :as ca]
    [clojure.string :as str]
+   [cognitect.aws.client.api :as aws]
+   [cognitect.aws.client.api.async :as aws-async]
    [com.dept24c.vivo.bristlecone.block-ids :as block-ids]
    [com.dept24c.vivo.bristlecone.data-block-storage :as dbs]
    [com.dept24c.vivo.bristlecone.tx-fns :as tx-fns]
@@ -11,18 +13,58 @@
    [deercreeklabs.baracus :as ba]
    [deercreeklabs.capsule.logging :as log]
    [deercreeklabs.lancaster :as l]
-   [deercreeklabs.stockroom :as sr]))
+   [deercreeklabs.stockroom :as sr])
+  (:import
+   (java.util UUID)))
 
 (defprotocol IDataStorageInternals
   (<read-data [this db-id schema])
-  (<write-data [this schema state]))
+  (<write-data [this schema state s3?]))
 
 (l/def-record-schema state-store-info-schema
   [:schema-fp :required l/long-schema]
   [:block-ids (l/array-schema l/string-schema)]
-  [:inline-bytes l/bytes-schema])
+  [:inline-bytes l/bytes-schema]
+  [:s3-key l/string-schema])
 
-(defrecord DataStorage [data-block-storage sub-map->op-cache]
+(def s3-client (aws/client {:api :s3}))
+(aws/validate-requests s3-client true)
+(def s3-cache (sr/stockroom 10))
+
+(defn <read-bytes-from-s3 [bucket k]
+  (au/go
+    (let [s3-arg {:op :GetObject
+                  :request {:Bucket bucket
+                            :Key k}}
+          ret (au/<? (aws-async/invoke s3-client s3-arg))]
+      (if (:cognitect.anomalies/category ret)
+        (throw (ex-info (str ret)
+                        (u/sym-map s3-arg bucket k ret)))
+        (let [ba (ba/byte-array (:ContentLength ret))]
+          (.read (:Body ret) ba)
+          ba)))))
+
+(defn <write-bytes-to-s3 [bucket k ba]
+  (ca/go
+    (try
+      (let [s3-arg {:op :PutObject
+                    :request {:ACL "private"
+                              :Body ba
+                              :Bucket bucket
+                              :CacheControl "max-age=31622400"
+                              :ContentType "application/octet-stream"
+                              :Key k}}
+            ret (au/<? (aws-async/invoke s3-client s3-arg))]
+        (if (:cognitect.anomalies/category ret)
+          (throw (ex-info (str ret)
+                          (u/sym-map s3-arg bucket k ret)))
+          true))
+      (catch Exception e
+        (log/error (u/ex-msg-and-stacktrace e))))))
+
+(defrecord DataStorage [data-block-storage
+                        sub-map->op-cache
+                        s3-data-storage-bucket]
   u/ISchemaStore
   (<schema->fp [this schema]
     (u/<schema->fp data-block-storage schema))
@@ -35,10 +77,19 @@
     (au/go
       (when-let [info (au/<? (u/<read-data-block data-block-storage db-id
                                                  state-store-info-schema))]
-        (let [{:keys [schema-fp block-ids inline-bytes]} info
+        (let [{:keys [schema-fp block-ids inline-bytes s3-key]} info
               writer-schema (au/<? (u/<fp->schema this schema-fp))]
-          (if inline-bytes
+          (cond
+            (and s3-data-storage-bucket s3-key)
+            (let [ba (or (sr/get s3-cache [s3-data-storage-bucket s3-key])
+                         (au/<? (<read-bytes-from-s3 s3-data-storage-bucket
+                                                     s3-key)))]
+              (l/deserialize schema writer-schema ba))
+
+            inline-bytes
             (l/deserialize schema writer-schema inline-bytes)
+
+            :else
             ;; Use loop to stay in go block
             (let [bytes (loop [i 0
                                blocks []]
@@ -53,17 +104,28 @@
                               (recur new-i new-blocks))))]
               (l/deserialize schema writer-schema bytes)))))))
 
-  (<write-data [this schema state]
+  (<write-data [this schema data s3?]
     (au/go
-      (let [edn-schema (l/edn schema)
-            encoded (l/serialize schema state)
+      (let [encoded (l/serialize schema data)
             info-id (au/<? (u/<allocate-data-block-id data-block-storage))
             info {:schema-fp (au/<? (u/<schema->fp this schema))}
             block-size (- u/max-data-block-bytes 50)]
-        (if (< (count encoded) block-size)
+        (cond
+          (and s3? s3-data-storage-bucket)
+          (let [s3-key (.toString ^UUID (UUID/randomUUID))]
+            (sr/put! s3-cache [s3-data-storage-bucket s3-key] encoded)
+            ;; Don't wait for s3
+            (<write-bytes-to-s3 s3-data-storage-bucket s3-key encoded)
+            (au/<? (u/<write-data-block data-block-storage info-id
+                                        state-store-info-schema
+                                        (assoc info :s3-key s3-key))))
+
+          (< (count encoded) block-size)
           (au/<? (u/<write-data-block data-block-storage info-id
                                       state-store-info-schema
                                       (assoc info :inline-bytes encoded)))
+
+          :else
           (let [num-blocks (inc (quot (count encoded) block-size))
                 ;; Use loop to stay in go block
                 ids (loop [i 0
@@ -121,12 +183,13 @@
                           (let [ret (commands/eval-cmd state cmd prefix)]
                             (-> acc
                                 (assoc :state (:state ret))
-                                (update :update-infos conj (:update-info ret)))))
+                                (update :update-infos conj
+                                        (:update-info ret)))))
                         {:state old-state
                          :update-infos []}
                         update-commands)
                 {:keys [update-infos state]} uc-ret
-                new-data-id (au/<? (<write-data this schema state))]
+                new-data-id (au/<? (<write-data this schema state false))]
             (if (au/<? (u/<compare-and-set! this reference l/string-schema
                                             data-id new-data-id))
               new-data-id
@@ -154,6 +217,8 @@
     (u/check-reference reference)
     (u/<get-data-id data-block-storage reference)))
 
-(defn data-storage [data-block-storage]
+(defn data-storage [data-block-storage s3-data-storage-bucket]
   (let [sub-map->op-cache (sr/stockroom 500)]
-    (->DataStorage data-block-storage sub-map->op-cache)))
+    (->DataStorage data-block-storage
+                   sub-map->op-cache
+                   s3-data-storage-bucket)))

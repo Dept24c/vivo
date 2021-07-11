@@ -72,8 +72,7 @@
             true (range (count ucs1)))))
 
 (defn do-sys-updates!
-  [capsule-client sys-cmds local-sys-update-infos sys-state-schema
-   <fp->schema <update-cmd->suc <update-sys-state! update-subs! *sys-db-info]
+  [capsule-client sys-cmds <update-cmd->suc <update-sys-state!]
   (ca/go
     (try
       (when-not capsule-client
@@ -81,29 +80,21 @@
                              ":get-server-url option was not provided when the "
                              "vivo-client was created.")
                         {})))
+      (let [ch (ca/merge (map-indexed <update-cmd->suc sys-cmds))
+            ;; Use i->v map to preserve original command order
+            sucs-map (au/<? (ca/reduce (fn [acc v]
+                                         (if (instance? #?(:cljs js/Error
+                                                           :clj Throwable) v)
+                                           (reduced v)
+                                           (let [[i suc] v]
+                                             (assoc acc i suc))))
+                                       {} ch))
+            _ (when (instance? #?(:cljs js/Error :clj Throwable) sucs-map)
+                (throw sucs-map))
+            sucs (keep sucs-map (range (count sys-cmds)))]
+        (au/<? (<update-sys-state! sucs)))
       (catch #?(:cljs js/Error :clj Throwable) e
-        (log/error (u/ex-msg-and-stacktrace e))))
-    (let [ch (ca/merge (map-indexed <update-cmd->suc sys-cmds))
-          ;; Use i->v map to preserve original command order
-          sucs-map (au/<? (ca/reduce (fn [acc v]
-                                       (if (instance? #?(:cljs js/Error
-                                                         :clj Throwable) v)
-                                         (reduced v)
-                                         (let [[i suc] v]
-                                           (assoc acc i suc))))
-                                     {} ch))
-          _ (when (instance? #?(:cljs js/Error :clj Throwable) sucs-map)
-              (throw sucs-map))
-          sucs (keep sucs-map (range (count sys-cmds)))
-          ret (au/<? (<update-sys-state! sucs))
-          {:keys [db-id prev-db-id serialized-state update-infos]} ret]
-      (if (update-cmds-match? local-sys-update-infos update-infos)
-        (swap! *sys-db-info assoc :db-id db-id)
-        (let [{:keys [fp bytes]} serialized-state
-              writer-schema (au/<? (<fp->schema fp))
-              db (l/deserialize sys-state-schema writer-schema bytes)]
-          (reset! *sys-db-info (u/sym-map db db-id))
-          (update-subs! db update-infos))))))
+        (log/error (u/ex-msg-and-stacktrace e))))))
 
 ;; TODO: Handle failed sys update (offline data may obviate this need)
 (defn do-state-updates!*
@@ -112,26 +103,15 @@
   (let [{:keys [sys-cmds local-cmds]} update-info
         cb (or cb* (constantly nil))
         sys-ret (when (seq sys-cmds)
-                  (let [sys-ret (eval-cmds (:db @*sys-db-info)
-                                           sys-cmds :sys)
-                        {:keys [state update-infos]} sys-ret
+                  (let [eval-ret (eval-cmds (:db @*sys-db-info)
+                                            sys-cmds :sys)
+                        {:keys [state update-infos]} eval-ret
                         <update-cmd->suc (partial
                                           u/<update-cmd->serializable-update-cmd
                                           vc)
-                        <update-sys-state! #(u/<send-msg vc :update-state %)
-                        update-subs! (fn [db* update-infos*]
-                                       (ca/put! subscription-state-update-ch
-                                                {:db db*
-                                                 :local-state @*local-state
-                                                 :subject-id subject-id
-                                                 :update-infos update-infos*
-                                                 :cb (constantly nil)
-                                                 :*state-sub-name->info
-                                                 *state-sub-name->info}))]
-                    (do-sys-updates! (:capsule-client vc) sys-cmds update-infos
-                                     sys-state-schema <fp->schema
-                                     <update-cmd->suc <update-sys-state!
-                                     update-subs! *sys-db-info)
+                        <update-sys-state! #(u/<send-msg vc :update-state %)]
+                    (do-sys-updates! (:capsule-client vc) sys-cmds
+                                     <update-cmd->suc <update-sys-state!)
                     {:db state
                      :update-infos update-infos}))]
     (if (and (seq sys-cmds)

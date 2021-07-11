@@ -110,7 +110,8 @@
                   update-commands)
           {:keys [update-infos state]} uc-ret
           new-data-id (au/<?
-                       (data-storage/<write-data dest-storage schema state))]
+                       (data-storage/<write-data dest-storage schema state
+                                                 (= :sys prefix)))]
       (u/sym-map new-data-id update-infos state))))
 
 (defn <add-subject-update-fn
@@ -767,18 +768,18 @@
             _ (.add ^ConcurrentLinkedQueue modify-q update-info)
             change-info (au/<? modify-ch)]
         change-info)))
-  
+
   (<get-db-info [this branch]
     (au/go
       (let [branch-reference (branch->reference branch)
             dest-storage (get-storage this branch)
             db-id (when (and dest-storage branch-reference)
-                      (au/<? (u/<get-data-id dest-storage branch-reference)))
+                    (au/<? (u/<get-data-id dest-storage branch-reference)))
             src-storage (get-storage this db-id)]
         (when (and src-storage db-id)
-            (some-> (u/<get-in src-storage db-id u/db-info-schema nil nil)
-                    (au/<?)
-                    (assoc :db-id db-id))))))
+          (some-> (u/<get-in src-storage db-id u/db-info-schema nil nil)
+                  (au/<?)
+                  (assoc :db-id db-id))))))
 
   (<add-subject [this arg metadata]
     (let [{:keys [identifier secret subject-id]
@@ -926,7 +927,7 @@
     (let [storage (get-storage this branch)
           branch-reference (branch->reference branch)]
       (when (and storage branch-reference)
-          (u/<get-data-id storage branch-reference))))
+        (u/<get-data-id storage branch-reference))))
 
   (<get-in [this db-id path]
     (au/go
@@ -1359,16 +1360,19 @@
                 redaction-fn
                 repository-name
                 rpcs
+                s3-data-storage-bucket
                 state-schema]} config*
         perm-storage (data-storage/data-storage
                       (data-block-storage/data-block-storage
                        (if disable-ddb?
                          (mem-block-storage/mem-block-storage false)
                          (au/<?? (ddb-block-storage/<ddb-block-storage
-                                  repository-name)))))
+                                  repository-name))))
+                      s3-data-storage-bucket)
         temp-storage (data-storage/data-storage
                       (data-block-storage/data-block-storage
-                       (mem-block-storage/mem-block-storage true)))
+                       (mem-block-storage/mem-block-storage true))
+                      nil)
         modify-q (ConcurrentLinkedQueue.)
         path->schema-cache (sr/stockroom 1000)
         *conn-id->info (atom {})
