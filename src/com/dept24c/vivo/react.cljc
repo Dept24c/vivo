@@ -114,35 +114,30 @@
    (use-vivo-state vc sub-map component-name resolution-map []))
   ([vc sub-map component-name resolution-map parents]
    #?(:cljs
-      (let [[_ render!] (use-state nil)
-            subscribe*! #(let [opts {:parents parents
-                                     :react? true
-                                     :resolution-map resolution-map}
-                               update-fn (fn [new-state]
-                                           (render! (u/current-time-ms)))]
-                           (u/subscribe-to-state! vc component-name sub-map
-                                                  update-fn opts))
-            cleanup-effect (fn []
-                             #(u/unsubscribe-from-state! vc component-name))
-            sub-info (u/get-subscription-info vc component-name)]
-        (use-effect cleanup-effect #js [])
-        (if (not sub-info)
-          (subscribe*!)
-          (if (= resolution-map (:resolution-map sub-info))
-            (:state sub-info)
-            (do
-              (u/unsubscribe-from-state! vc component-name)
-              (subscribe*!))))))))
+      (let [[state set-state!] (use-state nil)
+            subscribe*! (fn []
+                          (let [opts {:parents parents
+                                      :react? true
+                                      :resolution-map resolution-map}
+                                update-fn (fn [new-state]
+                                            (set-state! new-state))]
+                            (-> (u/subscribe-to-state! vc component-name
+                                                       sub-map update-fn opts)
+                                (set-state!))
+                            #(u/unsubscribe-from-state! vc component-name)))]
+        ; todo: update the dependencies vector which trigger re-subscribe!
+        (use-effect subscribe*! #js [])
+        state))))
 
 (defn use-topic-subscription
   "React hook for Vivo topic subscriptions."
-  [vc scope topic-name cb]
-  #?(:cljs
-     (let [unsub! (u/subscribe-to-topic! vc scope topic-name cb)
-           cleanup-effect (fn []
-                            unsub!)]
-       (use-effect cleanup-effect #js [])
-       unsub!)))
+  ([vc scope topic-name cb]
+   #?(:cljs
+      (use-effect #(u/subscribe-to-topic! vc scope topic-name cb))))
+  ([vc scope topic-name cb dependencies]
+   #?(:cljs
+      (use-effect #(u/subscribe-to-topic! vc scope topic-name cb)
+                  dependencies))))
 
 ;;;;;;;;;;;;;;;;;;;; Macro runtime helpers ;;;;;;;;;;;;;;;;;;;;
 ;; Emitted code calls these fns
