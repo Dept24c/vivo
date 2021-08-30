@@ -73,6 +73,18 @@
   #?(:cljs
      (ocall React :useCallback f deps)))
 
+(defn use-context [context]
+  #?(:cljs
+     (ocall React :useContext context)))
+
+(defn create-context
+  ([]
+   #?(:cljs
+      (React/createContext)))
+  ([default-value]
+   #?(:cljs
+      (React/createContext default-value))))
+
 (defn with-key [element k]
   "Adds the given React key to element."
   #?(:cljs
