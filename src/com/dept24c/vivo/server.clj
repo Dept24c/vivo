@@ -119,7 +119,8 @@
    temp-storage perm-storage]
   (au/go
     (let [{:keys [identifier-to-subject-id-data-id
-                  subject-id-to-hashed-secret-data-id]} dbi
+                  subject-id-to-hashed-secret-data-id
+                  subject-id-to-tokens-data-id]} dbi
           new-dbi (assoc dbi
                          :subject-id-to-hashed-secret-data-id
                          (:new-data-id
@@ -138,7 +139,16 @@
                                   [{:path [identifier]
                                     :op :set
                                     :arg requested-subject-id}]
-                                  nil branch temp-storage perm-storage))))]
+                                  nil branch temp-storage perm-storage)))
+                         :subject-id-to-tokens-data-id
+                         (:new-data-id
+                          (au/<?? (<update-storage
+                                   subject-id-to-tokens-data-id
+                                   u/subject-id-to-tokens-schema
+                                   [{:path [requested-subject-id]
+                                     :op :set
+                                     :arg []}]
+                                   nil branch temp-storage perm-storage))))]
       {:dbi new-dbi
        :update-infos []})))
 
