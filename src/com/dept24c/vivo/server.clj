@@ -211,19 +211,19 @@
           ;; Use loop here to stay in go block
           new-dbi (loop [new-dbi dbi*
                          [token & more] tokens]
-                    (let [new-dbi* (assoc new-dbi
-                                          :token-to-token-info-data-id
-                                          (:new-data-id
-                                           (au/<? (<update-storage
-                                                   token-to-token-info-data-id
-                                                   u/token-map-schema
-                                                   [{:path [token]
-                                                     :op :remove}]
-                                                   nil branch temp-storage
-                                                   perm-storage))))]
-                      (if (seq more)
-                        (recur new-dbi* more)
-                        new-dbi*)))]
+                    (if token
+                      (let [new-dbi* (assoc new-dbi
+                                            :token-to-token-info-data-id
+                                            (:new-data-id
+                                             (au/<? (<update-storage
+                                                     token-to-token-info-data-id
+                                                     u/token-map-schema
+                                                     [{:path [token]
+                                                       :op :remove}]
+                                                     nil branch temp-storage
+                                                     perm-storage))))]
+                        (recur new-dbi* more))
+                      new-dbi))]
       {:dbi new-dbi
        :update-infos []})))
 
