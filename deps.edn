@@ -5,7 +5,9 @@
   com.cognitect.aws/endpoints {:mvn/version "1.1.12.37"}
   com.cognitect.aws/s3        {:mvn/version "811.2.934.0"}
   crypto-password/crypto-password {:mvn/version "0.3.0"}
-  deercreeklabs/capsule {:mvn/version "0.4.40"}
+  deercreeklabs/lancaster {:mvn/version "0.9.13"}
+  deercreeklabs/capsule {:mvn/version "0.4.40"
+                         :exclusions [deercreeklabs/lancaster]}
   deercreeklabs/stockroom {:mvn/version "0.3.6"}
   mvxcvi/puget {:mvn/version "1.3.1"}
   org.slf4j/slf4j-nop {:mvn/version "RELEASE"}
